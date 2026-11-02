@@ -2,14 +2,10 @@ from pathlib import Path
 from uuid import UUID
 
 import structlog
-from telethon import TelegramClient
-from telethon.tl.functions.channels import CreateForumTopicRequest, EditForumTopicRequest
-from telethon.tl.types import Updates
 
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import EffortLevel, ExecutionMode, TopicKind
-from antigravity_core.domain.exceptions import AntigravityError
-from antigravity_core.domain.models import ForumTopic
+from antigravity_core.domain.models import ForumTopic, ForumTopicGateway
 from antigravity_core.infrastructure.agy_runtime.worker import is_effort_supported_for_model
 from antigravity_core.infrastructure.agy_runtime.worker_pool import AgyWorkerPool
 from antigravity_core.infrastructure.database.repositories import (
@@ -27,14 +23,14 @@ class TopicLifecycleService:
 
     def __init__(
         self,
-        client: TelegramClient,
+        forum_gateway: ForumTopicGateway,
         static_config: StaticConfig,
         worker_pool: AgyWorkerPool,
         settings_repo: SettingsRepository,
         topic_repo: TopicRepository,
         account_repo: AccountRepository,
     ) -> None:
-        self._client = client
+        self._forum_gateway = forum_gateway
         self._cfg = static_config
         self._pool = worker_pool
         self._settings_repo = settings_repo
@@ -54,13 +50,7 @@ class TopicLifecycleService:
         resolved_workspace = str(Path(workspace_path).expanduser().resolve())
         Path(resolved_workspace).mkdir(parents=True, exist_ok=True)
 
-        updates = await self._client(
-            CreateForumTopicRequest(
-                channel=self._cfg.telegram.forum_chat_id,
-                title=title,
-            )
-        )
-        topic_id = self._extract_created_topic_id(updates)
+        topic_id = await self._forum_gateway.create_forum_topic(title=title)
 
         effective_mode = execution_mode if execution_mode is not None else settings.default_execution_mode
         effective_effort = (
@@ -83,14 +73,6 @@ class TopicLifecycleService:
         )
         logger.info("Created new Telegram Forum topic", topic_id=topic_id, title=title)
         return topic
-
-    @staticmethod
-    def _extract_created_topic_id(updates: Updates) -> int:
-        for upd in getattr(updates, "updates", []):
-            msg = getattr(upd, "message", None)
-            if msg is not None and hasattr(msg, "id"):
-                return int(msg.id)
-        raise AntigravityError("Failed to extract created topic_id from CreateForumTopicRequest response.")
 
     async def reset_topic_session(self, topic_id: int) -> ForumTopic:
         """Implements /new without deleting any Telegram messages: evicts warm worker and clears active UUID."""
@@ -135,18 +117,15 @@ class TopicLifecycleService:
         lex = get_lexicon(settings.ui_language)
         await self._pool.evict_topic_worker(topic_id)
 
+        max_len = self._cfg.limits.topic_title_max_chars
         archived_title = (
             topic.title
             if topic.title.startswith("🗄")
             else f"{lex.topic_archive_prefix}{topic.title}"
-        )[:120]
+        )[:max_len]
 
-        await self._client(
-            EditForumTopicRequest(
-                channel=self._cfg.telegram.forum_chat_id,
-                topic_id=topic_id,
-                title=archived_title,
-                closed=True,
-            )
+        await self._forum_gateway.close_and_rename_forum_topic(
+            topic_id=topic_id,
+            new_title=archived_title,
         )
         return await self._topic_repo.archive_topic(topic_id, archived_title)

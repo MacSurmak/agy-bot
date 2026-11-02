@@ -3,7 +3,12 @@ from uuid import UUID
 
 import structlog
 
-from antigravity_core.domain.exceptions import DatabaseIntegrityError, QuotaExhaustedError
+from antigravity_core.config.dynamic_settings import DynamicSettings
+from antigravity_core.domain.exceptions import (
+    AgyProcessError,
+    DatabaseIntegrityError,
+    QuotaExhaustedError,
+)
 from antigravity_core.domain.models import ForumTopic, GoogleAccount, TurnResult
 from antigravity_core.infrastructure.agy_runtime.cli_inspector import AgyCliInspector
 from antigravity_core.infrastructure.agy_runtime.worker import ProgressCallback
@@ -110,14 +115,9 @@ class TurnOrchestrator:
         topic: ForumTopic,
         account: GoogleAccount,
         prompt: str,
-        settings: object,
+        settings: DynamicSettings,
         on_progress: ProgressCallback,
     ) -> TurnResult:
-        from antigravity_core.config.dynamic_settings import DynamicSettings
-
-        if not isinstance(settings, DynamicSettings):
-            raise TypeError("Expected DynamicSettings instance.")
-
         async def _on_init(conv_id: UUID) -> None:
             await self._topic_repo.set_active_conversation(topic.topic_id, conv_id)
             await self._session_repo.ensure_session_initialized(
@@ -167,7 +167,7 @@ class TurnOrchestrator:
                 await self._account_repo.update_quota_snapshot(candidate.id, quota_info)
                 if int(quota_info.get("min_remaining_pct", 100)) >= threshold_pct:
                     return candidate
-            except Exception as exc:
+            except AgyProcessError as exc:
                 logger.warning(
                     "Failover candidate quota probe failed",
                     candidate_slug=candidate.slug,

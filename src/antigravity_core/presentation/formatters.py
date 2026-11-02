@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from antigravity_core.config.dynamic_settings import DynamicSettings
+from antigravity_core.config.static_config import LimitsStaticConfig
 from antigravity_core.domain.enums import ExecutionMode, StepState, TurnStatus
 from antigravity_core.domain.models import (
     ForumTopic,
@@ -10,21 +11,23 @@ from antigravity_core.domain.models import (
     TopicSession,
     TurnProgressEvent,
     TurnResult,
+    WorkerTopicSnapshot,
 )
-from antigravity_core.infrastructure.agy_runtime.worker_pool import WorkerTopicSnapshot
 from antigravity_core.lexicon.schema import UiLexicon
 
 
 def render_topic_header_card(
     lex: UiLexicon,
+    limits: LimitsStaticConfig,
     topic: ForumTopic,
     account: GoogleAccount,
     active_session: TopicSession | None,
     is_worker_warm: bool,
     worker_ttl_sec: int,
 ) -> str:
+    short_len = limits.uuid_short_chars
     if active_session is not None:
-        conv_short = str(active_session.conversation_id)[:8]
+        conv_short = str(active_session.conversation_id)[:short_len]
         tok_k = active_session.cumulative_tokens / 1000.0
         session_str = lex.topic_card_session_with_stats.format(
             conv_short=conv_short,
@@ -33,7 +36,7 @@ def render_topic_header_card(
         )
     elif topic.active_conversation_id is not None:
         session_str = lex.topic_card_session_uuid_only.format(
-            conv_short=str(topic.active_conversation_id)[:8]
+            conv_short=str(topic.active_conversation_id)[:short_len]
         )
     else:
         session_str = lex.topic_card_session_clean
@@ -84,11 +87,14 @@ def render_new_session_divider(lex: UiLexicon, topic: ForumTopic) -> str:
 
 def render_live_progress(
     lex: UiLexicon,
+    limits: LimitsStaticConfig,
     event: TurnProgressEvent,
     elapsed_sec: float,
     model_slug: str,
     account_slug: str,
 ) -> str:
+    short_len = limits.uuid_short_chars
+    tools_lim = limits.live_tools_display_limit
     lines: list[str] = [
         lex.live_progress_header.format(
             model_slug=model_slug,
@@ -104,13 +110,13 @@ def render_live_progress(
                 lex.live_progress_subagent_item.format(
                     role=sub.role,
                     type_name=sub.type_name,
-                    conv_short=sub.conversation_id[:8],
+                    conv_short=sub.conversation_id[:short_len],
                 )
             )
 
     if event.active_tools:
         lines.append(lex.live_progress_tools_header)
-        for tool in event.active_tools[-6:]:
+        for tool in event.active_tools[-tools_lim:]:
             icon = (
                 lex.live_progress_tool_done_icon
                 if tool.state == StepState.DONE
@@ -136,18 +142,24 @@ def render_live_progress(
             )
 
     if event.thinking_snippet:
-        snippet = event.thinking_snippet.strip()[-280:]
+        think_lim = limits.thinking_snippet_max_chars
+        snippet = event.thinking_snippet.strip()[-think_lim:]
         lines.append(lex.live_progress_thinking.format(snippet=snippet))
 
     if event.text_accumulated.strip():
-        preview = event.text_accumulated.strip()[-600:]
+        draft_lim = limits.draft_preview_max_chars
+        preview = event.text_accumulated.strip()[-draft_lim:]
         lines.append(lex.live_progress_draft.format(preview=preview))
 
     return "\n".join(lines)
 
 
 def render_turn_footer(
-    lex: UiLexicon, result: TurnResult, model_slug: str, account_slug: str
+    lex: UiLexicon,
+    limits: LimitsStaticConfig,
+    result: TurnResult,
+    model_slug: str,
+    account_slug: str,
 ) -> str:
     tok_k = result.turn_delta_tokens / 1000.0
     cum_k = result.cumulative_usage.total_tokens / 1000.0
@@ -167,15 +179,17 @@ def render_turn_footer(
             to_slug=result.account_switched_to,
         )
     if result.status != TurnStatus.SUCCESS and result.error_message:
+        err_lim = limits.error_summary_max_chars
         footer += lex.turn_footer_error_status.format(
             status=result.status.value,
-            error=result.error_message[:300],
+            error=result.error_message[:err_lim],
         )
     return footer
 
 
 def render_control_panel_dashboard(
     lex: UiLexicon,
+    limits: LimitsStaticConfig,
     accounts: list[GoogleAccount],
     hosts: list[RemoteHost],
     mount_statuses: dict[str, bool],
@@ -256,11 +270,13 @@ def render_control_panel_dashboard(
             )
         )
 
+    short_len = limits.uuid_short_chars
+    tasks_lim = limits.dashboard_tasks_display_limit
     lines.append(lex.dashboard_tasks_header.format(count=len(tasks)))
-    for t in tasks[:5]:
+    for t in tasks[:tasks_lim]:
         lines.append(
             lex.dashboard_task_item.format(
-                short_id=str(t.id)[:8],
+                short_id=str(t.id)[:short_len],
                 topic_id=t.topic_id,
                 schedule_kind=t.schedule_kind.value,
                 trigger_spec=t.trigger_spec,
@@ -303,7 +319,10 @@ def split_message_chunks(text: str, max_chars: int) -> list[str]:
 
 
 def list_workspace_directories(
-    lex: UiLexicon, workspaces_root: Path, remotes_root: Path
+    lex: UiLexicon,
+    limits: LimitsStaticConfig,
+    workspaces_root: Path,
+    remotes_root: Path,
 ) -> list[tuple[str, str]]:
     """Returns pairs of (label, absolute_path) for quick workspace selection."""
     choices: list[tuple[str, str]] = [
@@ -328,4 +347,4 @@ def list_workspace_directories(
                         str(host_dir.resolve()),
                     )
                 )
-    return choices[:12]
+    return choices[: limits.workspace_dirs_display_limit]

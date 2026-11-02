@@ -20,7 +20,6 @@ build-backend = "setuptools.build_meta"
 name = "antigravity-telegram-core"
 version = "1.0.0"
 description = "24/7 Telegram MTProto Command Center & Orchestrator for Google Antigravity CLI (agy)"
-readme = "00_master_architecture_and_specification.md"
 requires-python = ">=3.14"
 dependencies = [
     "telethon>=1.45.0",

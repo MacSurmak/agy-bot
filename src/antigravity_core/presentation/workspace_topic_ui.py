@@ -1,14 +1,15 @@
-import contextlib
 import time
 from uuid import UUID
 
 import structlog
 from telethon import TelegramClient, events
+from telethon.errors import RPCError
 
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.application.turn_orchestrator import TurnOrchestrator
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import EffortLevel, TopicKind
+from antigravity_core.domain.exceptions import AgyProcessError
 from antigravity_core.domain.models import ForumTopic, TurnProgressEvent
 from antigravity_core.infrastructure.agy_runtime.cli_inspector import AgyCliInspector
 from antigravity_core.infrastructure.agy_runtime.worker_pool import AgyWorkerPool
@@ -109,6 +110,7 @@ class WorkspaceTopicUI:
 
         card_text = render_topic_header_card(
             lex=lex,
+            limits=self._cfg.limits,
             topic=topic,
             account=account,
             active_session=active_session,
@@ -126,8 +128,12 @@ class WorkspaceTopicUI:
                     buttons=buttons,
                 )
                 return
-            except Exception:
-                pass
+            except RPCError as exc:
+                logger.debug(
+                    "Pinned card message edit skipped or expired; sending fresh card",
+                    topic_id=topic_id,
+                    error=str(exc),
+                )
 
         sent = await self._client.send_message(
             entity=self._cfg.telegram.forum_chat_id,
@@ -136,12 +142,14 @@ class WorkspaceTopicUI:
             buttons=buttons,
         )
         await self._topic_repo.set_pinned_card_msg_id(topic_id, sent.id)
-        with contextlib.suppress(Exception):
+        try:
             await self._client.pin_message(
                 entity=self._cfg.telegram.forum_chat_id,
                 message=sent.id,
                 notify=False,
             )
+        except RPCError as exc:
+            logger.warning("Could not pin topic card message", topic_id=topic_id, error=str(exc))
 
     async def handle_slash_command(self, topic_id: int, raw_text: str) -> bool:
         settings = await self._settings_repo.load_settings()
@@ -205,16 +213,19 @@ class WorkspaceTopicUI:
             last_edit_ts = now
             live_text = render_live_progress(
                 lex=lex,
+                limits=self._cfg.limits,
                 event=progress,
                 elapsed_sec=now - start_ts,
                 model_slug=topic.model_slug,
                 account_slug=account.slug,
             )
-            with contextlib.suppress(Exception):
+            try:
                 await status_msg.edit(
                     live_text,
                     buttons=build_live_progress_keyboard(lex, topic_id),
                 )
+            except RPCError as exc:
+                logger.debug("Live progress message edit skipped", topic_id=topic_id, error=str(exc))
 
         try:
             result = await self._orchestrator.execute_topic_turn(
@@ -224,18 +235,23 @@ class WorkspaceTopicUI:
             )
         except Exception as exc:
             logger.error("Turn execution failed", topic_id=topic_id, error=str(exc))
-            with contextlib.suppress(Exception):
+            try:
                 await status_msg.edit(lex.ws_turn_error_msg.format(error=exc), buttons=None)
+            except RPCError as edit_exc:
+                logger.warning("Failed to update status message with turn error", error=str(edit_exc))
             return
 
-        with contextlib.suppress(Exception):
+        try:
             await status_msg.delete()
+        except RPCError as exc:
+            logger.debug("Could not delete live progress status message", error=str(exc))
 
         updated_topic = await self._topic_repo.get_topic_strict(topic_id)
         updated_account = await self._account_repo.get_by_id(updated_topic.assigned_account_id)
 
         footer = render_turn_footer(
             lex=lex,
+            limits=self._cfg.limits,
             result=result,
             model_slug=updated_topic.model_slug,
             account_slug=updated_account.slug,
@@ -313,12 +329,19 @@ class WorkspaceTopicUI:
 
         if action == "history":
             topic = await self._topic_repo.get_topic_strict(topic_id)
-            sessions = await self._session_repo.list_topic_sessions(topic_id, limit=8)
+            sessions = await self._session_repo.list_topic_sessions(
+                topic_id,
+                limit=self._cfg.limits.sessions_history_display_limit,
+            )
             await event.respond(
                 lex.ws_select_past_session_prompt,
                 reply_to=topic_id,
                 buttons=build_session_history_keyboard(
-                    lex, topic_id, sessions, topic.active_conversation_id
+                    lex,
+                    self._cfg.limits,
+                    topic_id,
+                    sessions,
+                    topic.active_conversation_id,
                 ),
             )
             await event.answer()
@@ -339,18 +362,23 @@ class WorkspaceTopicUI:
             account = await self._account_repo.get_by_id(topic.assigned_account_id)
             try:
                 models = await self._inspector.list_available_models(account)
-            except Exception:
-                models = [
-                    "gemini-4-argon-high",
-                    "gemini-4-argon-medium",
-                    "gemini-3.8-flash-high",
-                    "claude-sonnet-4-6",
-                    "claude-opus-4-6-thinking",
-                ]
+            except AgyProcessError as exc:
+                await event.respond(
+                    lex.ws_turn_error_msg.format(error=exc),
+                    reply_to=topic_id,
+                )
+                await event.answer()
+                return
             await event.respond(
                 lex.ws_select_model_prompt,
                 reply_to=topic_id,
-                buttons=build_model_picker_keyboard(lex, topic_id, models, topic.model_slug),
+                buttons=build_model_picker_keyboard(
+                    lex,
+                    self._cfg.limits,
+                    topic_id,
+                    models,
+                    topic.model_slug,
+                ),
             )
             await event.answer()
             return
@@ -400,6 +428,7 @@ class WorkspaceTopicUI:
         if action == "dirs":
             choices = list_workspace_directories(
                 lex,
+                self._cfg.limits,
                 self._cfg.paths.workspaces_root_dir,
                 self._cfg.paths.remotes_mount_dir,
             )
@@ -415,6 +444,7 @@ class WorkspaceTopicUI:
             idx = int(parts[3])
             choices = list_workspace_directories(
                 lex,
+                self._cfg.limits,
                 self._cfg.paths.workspaces_root_dir,
                 self._cfg.paths.remotes_mount_dir,
             )

@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from antigravity_core.infrastructure.database.repositories import SettingsRepository
 from antigravity_core.lexicon import get_lexicon
@@ -11,7 +11,7 @@ class BatchedItem:
     message_id: int
     sender_id: int
     text_segment: str
-    downloaded_files: list[str] = field(default_factory=list)
+    downloaded_files: list[str]
 
 
 @dataclass(slots=True)
@@ -19,7 +19,7 @@ class _TopicBatchBuffer:
     topic_id: int
     items: list[BatchedItem]
     first_item_monotonic: float
-    debounce_task: asyncio.Task[None] | None = None
+    debounce_task: asyncio.Task[None] | None
 
 
 FlushCallback = Callable[[int, int, str], Awaitable[None]]

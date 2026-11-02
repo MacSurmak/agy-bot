@@ -2,6 +2,7 @@ from uuid import UUID
 
 from telethon.tl.custom import Button
 
+from antigravity_core.config.static_config import LimitsStaticConfig
 from antigravity_core.domain.enums import EffortLevel, ExecutionMode
 from antigravity_core.domain.models import (
     ForumTopic,
@@ -77,11 +78,11 @@ def build_default_account_picker_keyboard(
 
 
 def build_tasks_management_keyboard(
-    lex: UiLexicon, tasks: list[ScheduledTask]
+    lex: UiLexicon, limits: LimitsStaticConfig, tasks: list[ScheduledTask]
 ) -> list[list[Button]]:
     rows: list[list[Button]] = []
-    for task in tasks[:10]:
-        short_id = str(task.id)[:8]
+    for task in tasks[: limits.tasks_menu_display_limit]:
+        short_id = str(task.id)[: limits.uuid_short_chars]
         rows.append(
             [
                 Button.inline(
@@ -163,10 +164,14 @@ def build_turn_response_keyboard(lex: UiLexicon, topic: ForumTopic) -> list[list
 
 
 def build_model_picker_keyboard(
-    lex: UiLexicon, topic_id: int, models: list[str], current_model: str
+    lex: UiLexicon,
+    limits: LimitsStaticConfig,
+    topic_id: int,
+    models: list[str],
+    current_model: str,
 ) -> list[list[Button]]:
     rows: list[list[Button]] = []
-    for slug in models[:10]:
+    for slug in models[: limits.models_menu_display_limit]:
         mark = "✅ " if slug == current_model else ""
         rows.append(
             [
@@ -189,12 +194,16 @@ def build_model_picker_keyboard(
 
 
 def build_session_history_keyboard(
-    lex: UiLexicon, topic_id: int, sessions: list[TopicSession], active_id: UUID | None
+    lex: UiLexicon,
+    limits: LimitsStaticConfig,
+    topic_id: int,
+    sessions: list[TopicSession],
+    active_id: UUID | None,
 ) -> list[list[Button]]:
     rows: list[list[Button]] = []
-    for sess in sessions[:8]:
+    for sess in sessions[: limits.sessions_history_display_limit]:
         mark = "🟢 " if sess.conversation_id == active_id else ""
-        short = str(sess.conversation_id)[:8]
+        short = str(sess.conversation_id)[: limits.uuid_short_chars]
         tok_k = sess.cumulative_tokens / 1000.0
         rows.append(
             [

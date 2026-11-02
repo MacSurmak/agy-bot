@@ -32,7 +32,10 @@ from antigravity_core.infrastructure.database.repositories import (
     TopicRepository,
 )
 from antigravity_core.infrastructure.keyring.dbus_profile_mgr import KeyringProfileManager
-from antigravity_core.infrastructure.media.mtproto_media import MediaService
+from antigravity_core.infrastructure.media.mtproto_media import (
+    MediaService,
+    TelethonForumGateway,
+)
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
 from antigravity_core.presentation.control_panel_ui import ControlPanelUI
 from antigravity_core.presentation.router import TelegramEventRouter
@@ -123,8 +126,9 @@ async def run_service(static_config: StaticConfig) -> None:
         account_repo=account_repo,
         session_repo=session_repo,
     )
+    forum_gateway = TelethonForumGateway(client=client, static_config=static_config)
     topic_lifecycle = TopicLifecycleService(
-        client=client,
+        forum_gateway=forum_gateway,
         static_config=static_config,
         worker_pool=worker_pool,
         settings_repo=settings_repo,
@@ -146,6 +150,7 @@ async def run_service(static_config: StaticConfig) -> None:
     )
 
     scheduler_service = TemporalSchedulerService(
+        static_config=static_config,
         schedule_repo=schedule_repo,
         settings_repo=settings_repo,
         topic_repo=topic_repo,
@@ -220,9 +225,13 @@ async def run_service(static_config: StaticConfig) -> None:
 
 
 def run() -> None:
-    config_env = os.environ.get("ANTIGRAVITY_CONFIG", "/srv/antigravity/app/config.yaml")
-    config_path = Path(config_env)
     try:
+        config_env = os.environ.get("ANTIGRAVITY_CONFIG", "").strip()
+        if not config_env:
+            raise StartupValidationError(
+                "Environment variable ANTIGRAVITY_CONFIG must be explicitly set to the path of config.yaml."
+            )
+        config_path = Path(config_env)
         static_cfg = load_static_config(config_path)
         configure_structlog(static_cfg.paths.log_file_path)
         asyncio.run(run_service(static_cfg))

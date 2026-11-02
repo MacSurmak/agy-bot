@@ -8,6 +8,7 @@ from uuid import UUID
 
 import structlog
 from telethon import TelegramClient, events
+from telethon.errors import RPCError
 
 from antigravity_core.application.scheduler_service import TemporalSchedulerService
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
@@ -44,8 +45,8 @@ logger = structlog.get_logger(__name__)
 @dataclass(slots=True)
 class _ControlPanelInteractiveState:
     mode: str
-    setting_key: str | None = None
-    pending_oauth: PendingOAuthSession | None = None
+    setting_key: str | None
+    pending_oauth: PendingOAuthSession | None
 
 
 class ControlPanelUI:
@@ -103,7 +104,8 @@ class ControlPanelUI:
                     buttons=buttons,
                 )
                 return
-            except Exception:
+            except RPCError as exc:
+                logger.debug("Could not edit existing dashboard message; sending new", error=str(exc))
                 self._dashboard_msg_id = None
 
         msg = await self._client.send_message(
@@ -135,6 +137,7 @@ class ControlPanelUI:
 
         return lex, render_control_panel_dashboard(
             lex=lex,
+            limits=self._cfg.limits,
             accounts=accounts,
             hosts=hosts,
             mount_statuses=mount_statuses,
@@ -214,7 +217,11 @@ class ControlPanelUI:
             return
 
         if data_str == "cp:register_new_acc":
-            self._state = _ControlPanelInteractiveState(mode="await_new_account")
+            self._state = _ControlPanelInteractiveState(
+                mode="await_new_account",
+                setting_key=None,
+                pending_oauth=None,
+            )
             await event.respond(lex.cp_register_new_acc_prompt)
             await event.answer()
             return
@@ -233,6 +240,7 @@ class ControlPanelUI:
 
             self._state = _ControlPanelInteractiveState(
                 mode="await_oauth_code",
+                setting_key=None,
                 pending_oauth=pending,
             )
             await event.respond(
@@ -276,7 +284,11 @@ class ControlPanelUI:
             return
 
         if data_str == "cp:new_topic":
-            self._state = _ControlPanelInteractiveState(mode="await_new_topic")
+            self._state = _ControlPanelInteractiveState(
+                mode="await_new_topic",
+                setting_key=None,
+                pending_oauth=None,
+            )
             await event.respond(
                 lex.cp_new_topic_prompt.format(
                     workspaces_root_dir=self._cfg.paths.workspaces_root_dir
@@ -289,7 +301,7 @@ class ControlPanelUI:
             tasks = await self._scheduler.list_tasks(topic_id=None)
             await event.edit(
                 lex.cp_tasks_menu_prompt.format(count=len(tasks)),
-                buttons=build_tasks_management_keyboard(lex, tasks),
+                buttons=build_tasks_management_keyboard(lex, self._cfg.limits, tasks),
             )
             return
 
@@ -299,7 +311,7 @@ class ControlPanelUI:
             tasks = await self._scheduler.list_tasks(topic_id=None)
             await event.edit(
                 lex.cp_tasks_menu_updated.format(count=len(tasks)),
-                buttons=build_tasks_management_keyboard(lex, tasks),
+                buttons=build_tasks_management_keyboard(lex, self._cfg.limits, tasks),
             )
             await event.answer(lex.cp_toast_task_canceled)
             return
@@ -326,14 +338,17 @@ class ControlPanelUI:
             self._state = _ControlPanelInteractiveState(
                 mode="await_setting_value",
                 setting_key=key,
+                pending_oauth=None,
             )
             await event.respond(lex.cp_edit_setting_prompt.format(key=key))
             await event.answer()
             return
 
         if data_str == "cp:create_invite":
-            token = f"inv_{secrets.token_urlsafe(18)}"
-            expires_at = datetime.now(tz=UTC) + timedelta(hours=24)
+            token = f"inv_{secrets.token_urlsafe(self._cfg.runtime.invite_token_bytes)}"
+            expires_at = datetime.now(tz=UTC) + timedelta(
+                hours=self._cfg.runtime.invite_ttl_hours
+            )
             await self._access_repo.create_invite(
                 token=token,
                 role=UserRole.MEMBER,
@@ -363,7 +378,7 @@ class ControlPanelUI:
 
         xdg_dir = str((self._cfg.paths.profiles_data_dir / slug).resolve())
         dbus_sock = str((self._cfg.paths.runtime_dir / f"bus_{slug}.sock").resolve())
-        keyring_password = secrets.token_urlsafe(32)
+        keyring_password = secrets.token_urlsafe(self._cfg.runtime.keyring_password_bytes)
         encrypted_pass = self._vault.encrypt_text(keyring_password)
 
         account = await self._account_repo.create_account(

@@ -8,6 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
 from antigravity_core.application.turn_orchestrator import TurnOrchestrator
+from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import NotifyPolicy, ScheduleKind, TurnStatus
 from antigravity_core.domain.exceptions import ConfigurationError
 from antigravity_core.domain.models import ScheduledTask, TurnProgressEvent
@@ -28,12 +29,14 @@ class TemporalSchedulerService:
 
     def __init__(
         self,
+        static_config: StaticConfig,
         schedule_repo: ScheduleRepository,
         settings_repo: SettingsRepository,
         topic_repo: TopicRepository,
         turn_orchestrator: TurnOrchestrator,
         deliver_report_cb: ScheduledReportDeliverCallback,
     ) -> None:
+        self._cfg = static_config
         self._schedule_repo = schedule_repo
         self._settings_repo = settings_repo
         self._topic_repo = topic_repo
@@ -104,7 +107,7 @@ class TemporalSchedulerService:
             id=str(task.id),
             args=[task.id],
             replace_existing=True,
-            misfire_grace_time=300,
+            misfire_grace_time=self._cfg.runtime.scheduler_misfire_grace_sec,
         )
 
     def _build_trigger(
