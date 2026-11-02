@@ -1,9 +1,12 @@
-from bisect import bisect_left
 from pathlib import Path
+import re
 
-from telethon.extensions import markdown
-from telethon.helpers import add_surrogate, del_surrogate
-from telethon.tl.types import MessageEntityBlockquote, TypeMessageEntity
+from telethon.helpers import add_surrogate
+from telethon.tl.types import (
+    MessageEntityBlockquote,
+    MessageEntityBold,
+    TypeMessageEntity,
+)
 
 from antigravity_core.config.dynamic_settings import DynamicSettings
 from antigravity_core.config.static_config import LimitsStaticConfig
@@ -22,60 +25,18 @@ from antigravity_core.domain.models import (
 )
 from antigravity_core.lexicon.schema import UiLexicon
 
-QUOTE_START: str = "\x02"
-QUOTE_END: str = "\x03"
+_BINARY_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]+")
 
 
-def parse_markdown_with_collapsible_quotes(
-    raw_text: str,
-) -> tuple[str, list[TypeMessageEntity]]:
-    """Parses Markdown text and converts QUOTE_START..QUOTE_END blocks into collapsible blockquotes."""
-    parsed_text, raw_entities = markdown.parse(raw_text)
-    s_text = add_surrogate(parsed_text)
+def _sanitize_trace_text(raw: str, max_len: int) -> str:
+    cleaned = _BINARY_CONTROL_RE.sub(" ", raw).strip()
+    if len(cleaned) <= max_len:
+        return cleaned
+    return cleaned[: max_len - 18].rstrip() + "\n... [сокращено]"
 
-    marker_positions: list[int] = [
-        idx for idx, ch in enumerate(s_text) if ch in (QUOTE_START, QUOTE_END)
-    ]
-    if not marker_positions:
-        return parsed_text, list(raw_entities)
 
-    def _project_offset(pos: int) -> int:
-        return pos - bisect_left(marker_positions, pos)
-
-    quote_spans: list[tuple[int, int]] = []
-    open_start: int | None = None
-    for idx, ch in enumerate(s_text):
-        if ch == QUOTE_START and open_start is None:
-            open_start = idx + 1
-        elif ch == QUOTE_END and open_start is not None:
-            quote_spans.append((open_start, idx))
-            open_start = None
-
-    adjusted_entities: list[TypeMessageEntity] = []
-    for ent in raw_entities:
-        orig_start = ent.offset
-        orig_end = ent.offset + ent.length
-        new_start = _project_offset(orig_start)
-        new_end = _project_offset(orig_end)
-        if new_end > new_start:
-            ent.offset = new_start
-            ent.length = new_end - new_start
-            adjusted_entities.append(ent)
-
-    for q_start, q_end in quote_spans:
-        c_start = _project_offset(q_start)
-        c_end = _project_offset(q_end)
-        if c_end > c_start:
-            adjusted_entities.append(
-                MessageEntityBlockquote(
-                    offset=c_start,
-                    length=c_end - c_start,
-                    collapsed=True,
-                )
-            )
-
-    clean_s_text = s_text.replace(QUOTE_START, "").replace(QUOTE_END, "")
-    return del_surrogate(clean_s_text), adjusted_entities
+def _utf16_len(text: str) -> int:
+    return len(add_surrogate(text))
 
 
 def render_topic_header_card(
@@ -143,115 +104,156 @@ def render_new_session_divider(lex: UiLexicon, topic: ForumTopic) -> str:
     )
 
 
-def _format_tool_blockquote(lex: UiLexicon, tool: ToolCallSummary) -> str:
+def _format_tool_plain_block(
+    lex: UiLexicon, tool: ToolCallSummary, detail_budget: int
+) -> str:
     icon = (
         lex.live_progress_tool_done_icon
         if tool.state == StepState.DONE
         else lex.live_progress_tool_active_icon
     )
     dur = (
-        lex.live_progress_tool_duration_suffix.format(duration=tool.duration_seconds)
+        f" ({tool.duration_seconds:.2f}с)"
         if tool.duration_seconds is not None
         else ""
     )
-    safe_hint = tool.target_hint.replace("`", "'") if tool.target_hint else None
-    hint = (
-        lex.live_progress_tool_hint_suffix.format(hint=safe_hint)
-        if safe_hint
-        else ""
-    )
-    header = lex.live_progress_tool_item.format(
-        icon=icon,
-        step_index=tool.step_index,
-        tool_name=tool.tool_name,
-        dur=dur,
-        hint=hint,
-    )
-    inner_lines: list[str] = [header]
+    hint_str = ""
+    if tool.target_hint:
+        clean_h = _sanitize_trace_text(tool.target_hint.replace("\n", " "), 80)
+        hint_str = f" → {clean_h}"
+
+    header_line = f"{icon} #{tool.step_index} {tool.tool_name}{dur}{hint_str}"
+    lines: list[str] = [header_line]
+
+    half_budget = max(40, detail_budget // 2)
     if tool.parameters_text:
-        clean_params = tool.parameters_text.replace("`", "'")
-        inner_lines.append(f"{lex.trace_tool_params_label}\n{clean_params}")
+        p_clean = _sanitize_trace_text(tool.parameters_text, half_budget)
+        lines.append(f"{lex.trace_tool_params_label}\n{p_clean}")
     if tool.output_text:
-        clean_out = tool.output_text.replace("`", "'")
-        inner_lines.append(f"{lex.trace_tool_output_label}\n{clean_out}")
+        o_clean = _sanitize_trace_text(tool.output_text, half_budget)
+        lines.append(f"{lex.trace_tool_output_label}\n{o_clean}")
 
-    return f"{QUOTE_START}" + "\n".join(inner_lines) + f"{QUOTE_END}"
+    return "\n".join(lines)
 
 
-def _build_trace_blocks(
+def _assemble_collapsible_trace_message(
+    header_line: str,
+    quote_blocks: list[str],
+) -> tuple[str, list[TypeMessageEntity]]:
+    """Builds plain text and exact UTF-16 MessageEntityBlockquote(collapsed=True) entities without markdown parsing."""
+    clean_header = header_line.replace("**", "").replace("`", "")
+    entities: list[TypeMessageEntity] = [
+        MessageEntityBold(offset=0, length=_utf16_len(clean_header))
+    ]
+    parts: list[str] = [clean_header]
+    current_utf16_offset = _utf16_len(clean_header)
+
+    for block in quote_blocks:
+        sep = "\n\n"
+        parts.append(sep)
+        current_utf16_offset += _utf16_len(sep)
+
+        b_len = _utf16_len(block)
+        if b_len > 0:
+            entities.append(
+                MessageEntityBlockquote(
+                    offset=current_utf16_offset,
+                    length=b_len,
+                    collapsed=True,
+                )
+            )
+            parts.append(block)
+            current_utf16_offset += b_len
+
+    return "".join(parts), entities
+
+
+def _build_budgeted_quote_blocks(
     lex: UiLexicon,
     limits: LimitsStaticConfig,
     thinking_text: str | None,
     subagents: tuple[SubagentState, ...],
     tools: tuple[ToolCallSummary, ...],
+    draft_text: str | None,
+    total_char_budget: int = 3600,
 ) -> list[str]:
-    blocks: list[str] = []
-    short_len = limits.uuid_short_chars
+    quote_blocks: list[str] = []
+    remaining_budget = total_char_budget
 
     if thinking_text and thinking_text.strip():
-        clean_thinking = thinking_text.strip().replace("`", "'")
-        blocks.append(
-            f"{QUOTE_START}{lex.trace_thinking_header}\n{clean_thinking}{QUOTE_END}"
-        )
+        t_budget = min(600, max(150, remaining_budget // 4))
+        t_header = lex.trace_thinking_header.replace("**", "")
+        t_body = _sanitize_trace_text(thinking_text, t_budget)
+        block_str = f"{t_header}\n{t_body}"
+        quote_blocks.append(block_str)
+        remaining_budget -= len(block_str) + 4
 
     if subagents:
-        sub_lines = [lex.live_progress_subagents_header]
+        short_len = limits.uuid_short_chars
+        sub_lines = [lex.live_progress_subagents_header.replace("**", "")]
         for sub in subagents:
             sub_lines.append(
-                lex.live_progress_subagent_item.format(
-                    role=sub.role,
-                    type_name=sub.type_name,
-                    conv_short=sub.conversation_id[:short_len],
-                )
+                f"• {sub.role} ({sub.type_name} — {sub.conversation_id[:short_len]})"
             )
-        blocks.append(f"{QUOTE_START}" + "\n".join(sub_lines) + f"{QUOTE_END}")
+        sub_block = "\n".join(sub_lines)
+        quote_blocks.append(sub_block)
+        remaining_budget -= len(sub_block) + 4
 
-    for tool in tools:
-        blocks.append(_format_tool_blockquote(lex, tool))
+    if draft_text and draft_text.strip():
+        d_budget = min(350, max(100, remaining_budget // 5))
+        d_body = _sanitize_trace_text(draft_text.strip()[-d_budget:], d_budget)
+        d_block = lex.live_progress_draft.replace("**", "").format(preview=d_body)
+        remaining_budget -= len(d_block) + 4
+    else:
+        d_block = None
 
-    return blocks
+    if tools:
+        # Telegram allows max ~90 entities per message; if >35 tools, show the most recent 35 in full detail
+        visible_tools = tools[-35:] if len(tools) > 35 else tools
+        per_tool_budget = max(80, (remaining_budget // len(visible_tools)) - 70)
+        for tool in visible_tools:
+            quote_blocks.append(_format_tool_plain_block(lex, tool, per_tool_budget))
+
+    if d_block is not None:
+        quote_blocks.append(d_block)
+
+    return quote_blocks
 
 
-def render_live_progress(
+def build_live_progress_message(
     lex: UiLexicon,
     limits: LimitsStaticConfig,
     event: TurnProgressEvent,
     elapsed_sec: float,
     model_slug: str,
     account_slug: str,
-) -> str:
+) -> tuple[str, list[TypeMessageEntity]]:
     header = lex.live_progress_header.format(
         model_slug=model_slug,
         account_slug=account_slug,
         elapsed_sec=elapsed_sec,
     )
-    blocks = _build_trace_blocks(
+    blocks = _build_budgeted_quote_blocks(
         lex=lex,
         limits=limits,
         thinking_text=event.thinking_text,
         subagents=event.active_subagents,
         tools=event.active_tools,
+        draft_text=event.text_accumulated,
+        total_char_budget=3500,
     )
-    if event.text_accumulated.strip():
-        draft_lim = limits.draft_preview_max_chars
-        preview = event.text_accumulated.strip()[-draft_lim:].replace("`", "'")
-        blocks.append(
-            f"{QUOTE_START}{lex.live_progress_draft.format(preview=preview)}{QUOTE_END}"
-        )
-
-    return "\n\n".join([header, *blocks])
+    return _assemble_collapsible_trace_message(header, blocks)
 
 
-def render_final_execution_trace_chunks(
+def build_final_execution_trace_message(
     lex: UiLexicon,
     limits: LimitsStaticConfig,
     result: TurnResult,
     model_slug: str,
     account_slug: str,
-    max_chars: int,
-) -> list[str]:
+) -> tuple[str, list[TypeMessageEntity]] | None:
     if not result.thinking_text and not result.tool_calls and not result.subagents:
-        return []
+        return None
 
     header = lex.trace_completed_header.format(
         model_slug=model_slug,
@@ -259,40 +261,16 @@ def render_final_execution_trace_chunks(
         elapsed_sec=result.turn_delta_duration_sec,
         steps_count=len(result.tool_calls),
     )
-    blocks = _build_trace_blocks(
+    blocks = _build_budgeted_quote_blocks(
         lex=lex,
         limits=limits,
         thinking_text=result.thinking_text,
         subagents=result.subagents,
         tools=result.tool_calls,
+        draft_text=None,
+        total_char_budget=3650,
     )
-
-    chunks: list[str] = []
-    current = header
-
-    for block in blocks:
-        if len(block) > max_chars - 200:
-            # Split an oversized single block safely while keeping QUOTE_START..QUOTE_END balanced
-            inner = block.removeprefix(QUOTE_START).removesuffix(QUOTE_END)
-            part_limit = max_chars - 250
-            for offset in range(0, len(inner), part_limit):
-                sub_block = f"{QUOTE_START}{inner[offset : offset + part_limit]}{QUOTE_END}"
-                if len(current) + 2 + len(sub_block) > max_chars and current != header:
-                    chunks.append(current)
-                    current = sub_block
-                else:
-                    current = f"{current}\n\n{sub_block}"
-            continue
-
-        if len(current) + 2 + len(block) > max_chars:
-            chunks.append(current)
-            current = block
-        else:
-            current = f"{current}\n\n{block}"
-
-    if current:
-        chunks.append(current)
-    return chunks
+    return _assemble_collapsible_trace_message(header, blocks)
 
 
 def render_turn_footer(

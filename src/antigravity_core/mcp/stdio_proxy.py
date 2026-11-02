@@ -84,15 +84,18 @@ async def send_file_to_telegram(file_path: str, caption: str) -> dict[str, Any]:
     )
 
 
+from typing import Literal
+
+
 @mcp.tool()
 async def schedule_task(
-    schedule_kind: str,
+    schedule_kind: Literal["ONE_SHOT", "CRON"],
     trigger_spec: str,
     instruction_prompt: str,
-    notify_policy: str,
-    keep_conversation_context: bool,
+    notify_policy: Literal["ALWAYS", "ALERT_ONLY"] = "ALWAYS",
+    keep_conversation_context: bool = False,
 ) -> dict[str, Any]:
-    """Schedule a ONE_SHOT (ISO-8601 date) or CRON (5-field cron) task in the current topic."""
+    """Schedule a task. For ONE_SHOT, trigger_spec can be relative ('+60s', '+5m', '+2h') or ISO-8601 datetime. For CRON, a 5-field cron string."""
     return await _call_bot_ipc(
         "schedule_task",
         {

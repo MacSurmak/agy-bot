@@ -120,13 +120,25 @@ class CoreIpcServer:
             topic = await self._topic_repo.get_topic_strict(topic_id)
             keep_ctx = bool(params.get("keep_conversation_context", False))
             conv_id = topic.active_conversation_id if keep_ctx else None
+            raw_kind = str(params["schedule_kind"]).strip().upper()
+            if raw_kind in ("ONCE", "ONE-SHOT", "SINGLE", "TIMER"):
+                kind = ScheduleKind.ONE_SHOT
+            else:
+                kind = ScheduleKind(raw_kind)
+
+            raw_policy = str(params.get("notify_policy", "ALWAYS")).strip().upper()
+            policy = (
+                NotifyPolicy.ALERT_ONLY
+                if "ALERT" in raw_policy
+                else NotifyPolicy.ALWAYS
+            )
             task = await self._scheduler.schedule_new_task(
                 topic_id=topic_id,
                 conversation_id=conv_id,
-                schedule_kind=ScheduleKind(str(params["schedule_kind"]).upper()),
+                schedule_kind=kind,
                 trigger_spec=str(params["trigger_spec"]),
                 instruction_prompt=str(params["instruction_prompt"]),
-                notify_policy=NotifyPolicy(str(params["notify_policy"]).upper()),
+                notify_policy=policy,
             )
             return {
                 "task_id": str(task.id),

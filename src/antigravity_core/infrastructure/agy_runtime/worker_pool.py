@@ -164,6 +164,59 @@ class AgyWorkerPool:
         except asyncio.CancelledError:
             return
 
+    async def execute_ephemeral_turn(
+        self,
+        topic: ForumTopic,
+        account: GoogleAccount,
+        prompt: str,
+        settings: DynamicSettings,
+        conversation_id_override: object = None,
+    ) -> TurnResult:
+        """Executes an isolated background/scheduled turn in parallel without waiting on slot.turn_lock."""
+        from uuid import UUID
+
+        conv_id = (
+            conversation_id_override
+            if isinstance(conversation_id_override, UUID)
+            else None
+        )
+        sig = WorkerSignature(
+            conversation_id=conv_id,
+            model_slug=topic.model_slug,
+            effort_level=None,
+            execution_mode=topic.execution_mode,
+            account_id=account.id,
+            account_slug=account.slug,
+            dbus_socket_path=account.dbus_socket_path,
+            xdg_data_dir=account.xdg_data_dir,
+            workspace_path=topic.workspace_path,
+            additional_dirs=topic.additional_dirs,
+        )
+        account_env = await self._keyring_mgr.ensure_account_bus(account)
+        ephemeral_worker = TopicWorker(
+            topic_id=topic.topic_id,
+            signature=sig,
+            static_config=self._cfg,
+            account_env=account_env,
+        )
+
+        async def _noop_init(_cid: UUID) -> None:
+            return
+
+        async def _noop_prog(_ev: object) -> None:
+            return
+
+        try:
+            await ephemeral_worker.start(settings)
+            return await ephemeral_worker.execute_turn(
+                prompt=prompt,
+                settings=settings,
+                on_init=_noop_init,
+                on_progress=_noop_prog,
+            )
+        finally:
+            await ephemeral_worker.close_gracefully()
+
     async def cancel_active_turn(self, topic_id: int) -> bool:
         slot = await self._get_or_create_slot(topic_id)
         self._cancel_idle_timer(slot)

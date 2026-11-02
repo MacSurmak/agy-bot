@@ -110,6 +110,24 @@ class TurnOrchestrator:
             )
         return result
 
+    async def execute_scheduled_turn(
+        self,
+        topic_id: int,
+        prompt: str,
+        conversation_id: UUID | None,
+    ) -> TurnResult:
+        """Runs a scheduled task turn immediately in parallel without blocking an active user turn."""
+        settings = await self._settings_repo.load_settings()
+        topic = await self._topic_repo.get_topic_strict(topic_id)
+        account = await self._account_repo.get_by_id(topic.assigned_account_id)
+        return await self._pool.execute_ephemeral_turn(
+            topic=topic,
+            account=account,
+            prompt=prompt,
+            settings=settings,
+            conversation_id_override=conversation_id,
+        )
+
     async def _run_single_attempt(
         self,
         topic: ForumTopic,

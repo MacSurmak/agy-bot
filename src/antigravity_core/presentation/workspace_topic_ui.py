@@ -26,10 +26,9 @@ from antigravity_core.infrastructure.database.repositories import (
 )
 from antigravity_core.lexicon import get_lexicon
 from antigravity_core.presentation.formatters import (
+    build_final_execution_trace_message,
+    build_live_progress_message,
     list_workspace_directories,
-    parse_markdown_with_collapsible_quotes,
-    render_final_execution_trace_chunks,
-    render_live_progress,
     render_new_session_divider,
     render_topic_header_card,
     render_turn_footer,
@@ -312,7 +311,7 @@ class WorkspaceTopicUI:
             now = time.monotonic()
             if (now - last_edit_ts) < settings.tg_edit_throttle_sec:
                 return
-            live_raw = render_live_progress(
+            clean_live, live_entities = build_live_progress_message(
                 lex=lex,
                 limits=self._cfg.limits,
                 event=progress,
@@ -320,9 +319,6 @@ class WorkspaceTopicUI:
                 model_slug=topic.model_slug,
                 account_slug=account.slug,
             )
-            if len(live_raw) > settings.tg_max_message_chars:
-                live_raw = live_raw[-settings.tg_max_message_chars :]
-            clean_live, live_entities = parse_markdown_with_collapsible_quotes(live_raw)
             if clean_live == last_clean_live:
                 return
             last_edit_ts = now
@@ -361,38 +357,28 @@ class WorkspaceTopicUI:
         updated_topic = await self._topic_repo.get_topic_strict(topic_id)
         updated_account = await self._account_repo.get_by_id(updated_topic.assigned_account_id)
 
-        # Finalize and preserve the full execution trace in collapsible blockquotes (do NOT delete status_msg!)
-        trace_chunks = render_final_execution_trace_chunks(
+        # Finalize the execution trace inside the single status_msg (never spawning extra messages after media!)
+        final_trace = build_final_execution_trace_message(
             lex=lex,
             limits=self._cfg.limits,
             result=result,
             model_slug=updated_topic.model_slug,
             account_slug=updated_account.slug,
-            max_chars=settings.tg_max_message_chars,
         )
-        if trace_chunks:
-            first_text, first_entities = parse_markdown_with_collapsible_quotes(trace_chunks[0])
+        if final_trace is not None:
+            trace_text, trace_entities = final_trace
             try:
                 await self._client.edit_message(
                     entity=self._cfg.telegram.forum_chat_id,
                     message=status_msg.id,
-                    text=first_text,
-                    formatting_entities=first_entities,
+                    text=trace_text,
+                    formatting_entities=trace_entities,
                     buttons=None,
                 )
             except MessageNotModifiedError:
                 pass
             except RPCError as exc:
-                logger.debug("Could not finalize first trace message", error=str(exc))
-
-            for extra_trace in trace_chunks[1:]:
-                extra_text, extra_entities = parse_markdown_with_collapsible_quotes(extra_trace)
-                await self._client.send_message(
-                    entity=self._cfg.telegram.forum_chat_id,
-                    message=extra_text,
-                    formatting_entities=extra_entities,
-                    reply_to=topic_id,
-                )
+                logger.debug("Could not finalize trace message", error=str(exc))
         else:
             try:
                 await status_msg.delete()

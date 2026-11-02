@@ -1,5 +1,6 @@
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+import re
 from uuid import UUID, uuid4
 
 import structlog
@@ -22,6 +23,8 @@ from antigravity_core.lexicon import get_lexicon
 logger = structlog.get_logger(__name__)
 
 ScheduledReportDeliverCallback = Callable[[int, str], Awaitable[None]]
+
+_RELATIVE_TIME_RE = re.compile(r"^\+?\s*(\d+)\s*([smhd])$", re.IGNORECASE)
 
 
 class TemporalSchedulerService:
@@ -74,8 +77,13 @@ class TemporalSchedulerService:
         instruction_prompt: str,
         notify_policy: NotifyPolicy,
     ) -> ScheduledTask:
-        # Validate trigger specification before writing to database
-        self._build_trigger(schedule_kind, trigger_spec)
+        normalized_spec = trigger_spec.strip()
+        if schedule_kind == ScheduleKind.ONE_SHOT:
+            run_dt = self._parse_iso_datetime(normalized_spec)
+            normalized_spec = run_dt.isoformat()
+        else:
+            self._build_trigger(schedule_kind, normalized_spec)
+        trigger_spec = normalized_spec
 
         task_id = uuid4()
         task = await self._schedule_repo.create_task(
@@ -125,11 +133,24 @@ class TemporalSchedulerService:
 
     @staticmethod
     def _parse_iso_datetime(spec: str) -> datetime:
+        cleaned = spec.strip()
+        rel_match = _RELATIVE_TIME_RE.match(cleaned)
+        if rel_match is not None:
+            amount = int(rel_match.group(1))
+            unit = rel_match.group(2).lower()
+            delta_map = {
+                "s": timedelta(seconds=amount),
+                "m": timedelta(minutes=amount),
+                "h": timedelta(hours=amount),
+                "d": timedelta(days=amount),
+            }
+            return datetime.now(tz=UTC) + delta_map[unit]
+
         try:
-            dt = datetime.fromisoformat(spec.strip())
+            dt = datetime.fromisoformat(cleaned)
         except ValueError as exc:
             raise ConfigurationError(
-                f"Invalid ISO-8601 datetime specification '{spec}': {exc}"
+                f"Invalid datetime specification '{spec}' (use ISO-8601 or relative '+60s', '+5m', '+2h'): {exc}"
             ) from exc
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
@@ -142,11 +163,6 @@ class TemporalSchedulerService:
 
         now_iso = datetime.now(tz=UTC).isoformat()
         is_one_shot = task.schedule_kind == ScheduleKind.ONE_SHOT
-
-        if task.conversation_id is None:
-            await self._topic_repo.set_active_conversation(task.topic_id, None)
-        else:
-            await self._topic_repo.set_active_conversation(task.topic_id, task.conversation_id)
 
         if task.notify_policy == NotifyPolicy.ALERT_ONLY:
             wake_prompt = (
@@ -162,17 +178,20 @@ class TemporalSchedulerService:
                 f"Execute the scheduled task and report to the user:\n{task.instruction_prompt}"
             )
 
-        async def _noop_progress(_ev: TurnProgressEvent) -> None:
-            return
-
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
 
+        logger.info(
+            "Firing scheduled task in parallel worker",
+            task_id=str(task.id),
+            topic_id=task.topic_id,
+            schedule_kind=task.schedule_kind.value,
+        )
         try:
-            result = await self._orchestrator.execute_topic_turn(
+            result = await self._orchestrator.execute_scheduled_turn(
                 topic_id=task.topic_id,
                 prompt=wake_prompt,
-                on_progress=_noop_progress,
+                conversation_id=task.conversation_id,
             )
             await self._schedule_repo.mark_task_executed(task.id, deactivate=is_one_shot)
 
