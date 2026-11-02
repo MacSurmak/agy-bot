@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Provisioning script for Ubuntu 24.04 / Debian 12 LXC container on Proxmox VE.
+# Provisioning script for Ubuntu 26.04 LTS / Debian 13 LXC container on Proxmox VE (Python 3.14+).
 # Requires LXC Options -> Features: nesting=1,fuse=1 enabled on the Proxmox host.
 
 if [[ "${EUID}" -ne 0 ]]; then
