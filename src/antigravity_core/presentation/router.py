@@ -5,8 +5,12 @@ from telethon.tl.custom import Message
 from antigravity_core.application.batcher import MessageBatcher
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import UserRole
-from antigravity_core.infrastructure.database.repositories import AccessControlRepository
+from antigravity_core.infrastructure.database.repositories import (
+    AccessControlRepository,
+    SettingsRepository,
+)
 from antigravity_core.infrastructure.media.mtproto_media import MediaService
+from antigravity_core.lexicon import get_lexicon
 from antigravity_core.presentation.control_panel_ui import ControlPanelUI
 from antigravity_core.presentation.workspace_topic_ui import WorkspaceTopicUI
 
@@ -33,6 +37,7 @@ class TelegramEventRouter:
         self,
         client: TelegramClient,
         static_config: StaticConfig,
+        settings_repo: SettingsRepository,
         access_repo: AccessControlRepository,
         media_service: MediaService,
         batcher: MessageBatcher,
@@ -41,6 +46,7 @@ class TelegramEventRouter:
     ) -> None:
         self._client = client
         self._cfg = static_config
+        self._settings_repo = settings_repo
         self._access_repo = access_repo
         self._media = media_service
         self._batcher = batcher
@@ -79,14 +85,16 @@ class TelegramEventRouter:
         raw_text = (message.message or "").strip()
 
         if raw_text.startswith("/redeem "):
+            settings = await self._settings_repo.load_settings()
+            lex = get_lexicon(settings.ui_language)
             token = raw_text.split(maxsplit=1)[1].strip()
             try:
                 sender = await event.get_sender()
                 uname = getattr(sender, "username", None) or str(sender_id)
                 await self._access_repo.redeem_invite(token, sender_id, uname)
-                await event.reply("✅ Invite token redeemed! You now have access.")
+                await event.reply(lex.router_invite_redeemed)
             except Exception as exc:
-                await event.reply(f"❌ Invite redemption failed: `{exc}`")
+                await event.reply(lex.router_invite_failed.format(error=exc))
             return
 
         if not await self._check_authorized(sender_id, topic_id):
@@ -124,7 +132,9 @@ class TelegramEventRouter:
 
         if data_str.startswith("cp:"):
             if sender_id != self._cfg.telegram.owner_telegram_id:
-                await event.answer("Access denied: Owner only.", alert=True)
+                settings = await self._settings_repo.load_settings()
+                lex = get_lexicon(settings.ui_language)
+                await event.answer(lex.router_toast_owner_only, alert=True)
                 return
             await self._cp_ui.handle_callback(event, data_str)
             return
@@ -133,6 +143,8 @@ class TelegramEventRouter:
             parts = data_str.split(":")
             topic_id = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else 1
             if not await self._check_authorized(sender_id, topic_id):
-                await event.answer("Access denied.", alert=True)
+                settings = await self._settings_repo.load_settings()
+                lex = get_lexicon(settings.ui_language)
+                await event.answer(lex.router_toast_access_denied, alert=True)
                 return
             await self._ws_ui.handle_callback(event, data_str)

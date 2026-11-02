@@ -147,6 +147,7 @@ async def run_service(static_config: StaticConfig) -> None:
 
     scheduler_service = TemporalSchedulerService(
         schedule_repo=schedule_repo,
+        settings_repo=settings_repo,
         topic_repo=topic_repo,
         turn_orchestrator=turn_orchestrator,
         deliver_report_cb=workspace_ui.deliver_scheduled_report,
@@ -187,6 +188,7 @@ async def run_service(static_config: StaticConfig) -> None:
     router = TelegramEventRouter(
         client=client,
         static_config=static_config,
+        settings_repo=settings_repo,
         access_repo=access_repo,
         media_service=media_service,
         batcher=batcher,

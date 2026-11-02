@@ -18,6 +18,7 @@ from antigravity_core.infrastructure.database.repositories import (
     SettingsRepository,
     TopicRepository,
 )
+from antigravity_core.lexicon import get_lexicon
 from antigravity_core.presentation.formatters import (
     list_workspace_directories,
     render_live_progress,
@@ -72,13 +73,14 @@ class WorkspaceTopicUI:
             return existing
 
         settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
         default_account = await self._account_repo.get_default_account()
         default_dir = self._cfg.paths.workspaces_root_dir / f"topic_{topic_id}"
         default_dir.mkdir(parents=True, exist_ok=True)
 
         topic = await self._topic_repo.create_topic(
             topic_id=topic_id,
-            title=f"Workspace #{topic_id}",
+            title=lex.ws_auto_topic_title.format(topic_id=topic_id),
             kind=TopicKind.PERMANENT_WORKSPACE,
             workspace_path=str(default_dir.resolve()),
             additional_dirs=(),
@@ -103,15 +105,17 @@ class WorkspaceTopicUI:
         )
         snapshots = await self._pool.get_pool_snapshots()
         is_warm = any(s.topic_id == topic_id and s.is_warm for s in snapshots)
+        lex = get_lexicon(settings.ui_language)
 
         card_text = render_topic_header_card(
+            lex=lex,
             topic=topic,
             account=account,
             active_session=active_session,
             is_worker_warm=is_warm,
             worker_ttl_sec=settings.worker_idle_ttl_sec,
         )
-        buttons = build_topic_header_keyboard(topic)
+        buttons = build_topic_header_keyboard(lex, topic)
 
         if topic.pinned_card_msg_id is not None:
             try:
@@ -140,20 +144,22 @@ class WorkspaceTopicUI:
             )
 
     async def handle_slash_command(self, topic_id: int, raw_text: str) -> bool:
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
         cmd = raw_text.split()[0].lower()
         if cmd in ("/new", "/clear"):
             topic = await self._lifecycle.reset_topic_session(topic_id)
             await self.refresh_pinned_card(topic_id)
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=render_new_session_divider(topic),
+                message=render_new_session_divider(lex, topic),
                 reply_to=topic_id,
             )
             return True
 
         if cmd == "/cancel":
             stopped = await self._pool.cancel_active_turn(topic_id)
-            msg = "⏹ Active turn stopped." if stopped else "ℹ️ No running turn in this topic."
+            msg = lex.ws_turn_stopped_msg if stopped else lex.ws_no_running_turn_msg
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
                 message=msg,
@@ -177,15 +183,18 @@ class WorkspaceTopicUI:
         topic = await self.ensure_topic_registered(topic_id)
         account = await self._account_repo.get_by_id(topic.assigned_account_id)
         settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
 
         start_ts = time.monotonic()
         last_edit_ts = start_ts
 
         status_msg = await self._client.send_message(
             entity=self._cfg.telegram.forum_chat_id,
-            message=f"⏳ **Starting turn** (`{topic.model_slug}` on `{account.slug}`)...",
+            message=lex.ws_starting_turn_msg.format(
+                model_slug=topic.model_slug, account_slug=account.slug
+            ),
             reply_to=reply_to_msg_id,
-            buttons=build_live_progress_keyboard(topic_id),
+            buttons=build_live_progress_keyboard(lex, topic_id),
         )
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
@@ -195,6 +204,7 @@ class WorkspaceTopicUI:
                 return
             last_edit_ts = now
             live_text = render_live_progress(
+                lex=lex,
                 event=progress,
                 elapsed_sec=now - start_ts,
                 model_slug=topic.model_slug,
@@ -203,7 +213,7 @@ class WorkspaceTopicUI:
             with contextlib.suppress(Exception):
                 await status_msg.edit(
                     live_text,
-                    buttons=build_live_progress_keyboard(topic_id),
+                    buttons=build_live_progress_keyboard(lex, topic_id),
                 )
 
         try:
@@ -215,7 +225,7 @@ class WorkspaceTopicUI:
         except Exception as exc:
             logger.error("Turn execution failed", topic_id=topic_id, error=str(exc))
             with contextlib.suppress(Exception):
-                await status_msg.edit(f"❌ **Turn Error:**\n`{exc}`", buttons=None)
+                await status_msg.edit(lex.ws_turn_error_msg.format(error=exc), buttons=None)
             return
 
         with contextlib.suppress(Exception):
@@ -225,6 +235,7 @@ class WorkspaceTopicUI:
         updated_account = await self._account_repo.get_by_id(updated_topic.assigned_account_id)
 
         footer = render_turn_footer(
+            lex=lex,
             result=result,
             model_slug=updated_topic.model_slug,
             account_slug=updated_account.slug,
@@ -232,7 +243,7 @@ class WorkspaceTopicUI:
         body_text = (
             result.response_text.strip()
             if result.response_text.strip()
-            else f"*(Completed with status `{result.status.value}`)*"
+            else lex.ws_empty_response_fallback.format(status=result.status.value)
         )
         full_output = body_text + footer
 
@@ -243,7 +254,7 @@ class WorkspaceTopicUI:
                 entity=self._cfg.telegram.forum_chat_id,
                 message=chunk,
                 reply_to=reply_to_msg_id if idx == 0 else topic_id,
-                buttons=build_turn_response_keyboard(updated_topic) if is_last else None,
+                buttons=build_turn_response_keyboard(lex, updated_topic) if is_last else None,
             )
 
         await self.refresh_pinned_card(topic_id)
@@ -260,6 +271,9 @@ class WorkspaceTopicUI:
         await self.refresh_pinned_card(topic_id)
 
     async def handle_callback(self, event: events.CallbackQuery.Event, data_str: str) -> None:
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
+
         parts = data_str.split(":")
         action = parts[1]
         topic_id = int(parts[2])
@@ -273,36 +287,38 @@ class WorkspaceTopicUI:
             await self.refresh_pinned_card(topic_id)
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=render_new_session_divider(topic),
+                message=render_new_session_divider(lex, topic),
                 reply_to=topic_id,
             )
-            await event.answer("Started a clean session (0 tokens).")
+            await event.answer(lex.ws_toast_new_session)
             return
 
         if action == "toggle_mode":
             updated = await self._lifecycle.toggle_execution_mode(topic_id)
             await self.refresh_pinned_card(topic_id)
-            await event.answer(f"Switched mode to {updated.execution_mode.value}.")
+            await event.answer(
+                lex.ws_toast_mode_switched.format(mode=updated.execution_mode.value)
+            )
             return
 
         if action == "cancel":
             await self._pool.cancel_active_turn(topic_id)
-            await event.answer("Turn canceled.")
+            await event.answer(lex.ws_toast_turn_canceled)
             return
 
         if action == "archive":
             await self._lifecycle.archive_topic(topic_id)
-            await event.answer("Topic archived and worker stopped.")
+            await event.answer(lex.ws_toast_topic_archived)
             return
 
         if action == "history":
             topic = await self._topic_repo.get_topic_strict(topic_id)
             sessions = await self._session_repo.list_topic_sessions(topic_id, limit=8)
             await event.respond(
-                "🕰 **Select a Past Session to Resume:**",
+                lex.ws_select_past_session_prompt,
                 reply_to=topic_id,
                 buttons=build_session_history_keyboard(
-                    topic_id, sessions, topic.active_conversation_id
+                    lex, topic_id, sessions, topic.active_conversation_id
                 ),
             )
             await event.answer()
@@ -312,7 +328,10 @@ class WorkspaceTopicUI:
             conv_uuid = UUID(parts[3])
             await self._lifecycle.resume_past_session(topic_id, conv_uuid)
             await self.refresh_pinned_card(topic_id)
-            await event.edit(f"✅ Resumed session `{conv_uuid}`.", buttons=None)
+            await event.edit(
+                lex.ws_session_resumed_msg.format(conversation_id=conv_uuid),
+                buttons=None,
+            )
             return
 
         if action == "models":
@@ -329,9 +348,9 @@ class WorkspaceTopicUI:
                     "claude-opus-4-6-thinking",
                 ]
             await event.respond(
-                "🧠 **Select Model or Thinking Effort:**",
+                lex.ws_select_model_prompt,
                 reply_to=topic_id,
-                buttons=build_model_picker_keyboard(topic_id, models, topic.model_slug),
+                buttons=build_model_picker_keyboard(lex, topic_id, models, topic.model_slug),
             )
             await event.answer()
             return
@@ -341,7 +360,10 @@ class WorkspaceTopicUI:
             topic = await self._topic_repo.get_topic_strict(topic_id)
             await self._lifecycle.change_model(topic_id, model_slug, topic.effort_level)
             await self.refresh_pinned_card(topic_id)
-            await event.edit(f"✅ Model updated to `{model_slug}`.", buttons=None)
+            await event.edit(
+                lex.ws_model_updated_msg.format(model_slug=model_slug),
+                buttons=None,
+            )
             return
 
         if action == "set_effort":
@@ -349,17 +371,20 @@ class WorkspaceTopicUI:
             topic = await self._topic_repo.get_topic_strict(topic_id)
             await self._lifecycle.change_model(topic_id, topic.model_slug, effort)
             await self.refresh_pinned_card(topic_id)
-            await event.edit(f"✅ Thinking effort updated to `{effort.value}`.", buttons=None)
+            await event.edit(
+                lex.ws_effort_updated_msg.format(effort=effort.value),
+                buttons=None,
+            )
             return
 
         if action == "accounts":
             topic = await self._topic_repo.get_topic_strict(topic_id)
             accounts = await self._account_repo.list_enabled_accounts()
             await event.respond(
-                "👤 **Select Google Account for this Topic:**",
+                lex.ws_select_account_prompt,
                 reply_to=topic_id,
                 buttons=build_topic_account_picker_keyboard(
-                    topic_id, accounts, topic.assigned_account_id
+                    lex, topic_id, accounts, topic.assigned_account_id
                 ),
             )
             await event.answer()
@@ -369,18 +394,19 @@ class WorkspaceTopicUI:
             acc_id = int(parts[3])
             await self._lifecycle.switch_topic_account(topic_id, acc_id)
             await self.refresh_pinned_card(topic_id)
-            await event.edit("✅ Switched Google Account for this topic.", buttons=None)
+            await event.edit(lex.ws_account_switched_msg, buttons=None)
             return
 
         if action == "dirs":
             choices = list_workspace_directories(
+                lex,
                 self._cfg.paths.workspaces_root_dir,
                 self._cfg.paths.remotes_mount_dir,
             )
             await event.respond(
-                "📂 **Select Workspace Directory:**",
+                lex.ws_select_workspace_prompt,
                 reply_to=topic_id,
-                buttons=build_workspace_dir_picker_keyboard(topic_id, choices),
+                buttons=build_workspace_dir_picker_keyboard(lex, topic_id, choices),
             )
             await event.answer()
             return
@@ -388,6 +414,7 @@ class WorkspaceTopicUI:
         if action == "set_dir":
             idx = int(parts[3])
             choices = list_workspace_directories(
+                lex,
                 self._cfg.paths.workspaces_root_dir,
                 self._cfg.paths.remotes_mount_dir,
             )
@@ -396,4 +423,7 @@ class WorkspaceTopicUI:
                 await self._topic_repo.update_workspace_path(topic_id, target_path)
                 await self._pool.evict_topic_worker(topic_id)
                 await self.refresh_pinned_card(topic_id)
-                await event.edit(f"✅ Workspace updated to `{target_path}`.", buttons=None)
+                await event.edit(
+                    lex.ws_workspace_updated_msg.format(workspace_path=target_path),
+                    buttons=None,
+                )

@@ -27,6 +27,7 @@ from antigravity_core.infrastructure.keyring.dbus_profile_mgr import (
     PendingOAuthSession,
 )
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
+from antigravity_core.lexicon import UiLexicon, get_lexicon
 from antigravity_core.presentation.formatters import render_control_panel_dashboard
 from antigravity_core.presentation.keyboards import (
     build_account_auth_keyboard,
@@ -84,9 +85,13 @@ class ControlPanelUI:
         self._dashboard_msg_id: int | None = None
         self._state: _ControlPanelInteractiveState | None = None
 
+    async def _load_lexicon(self) -> UiLexicon:
+        settings = await self._settings_repo.load_settings()
+        return get_lexicon(settings.ui_language)
+
     async def render_and_pin_dashboard(self) -> None:
-        text = await self._build_dashboard_text()
-        buttons = build_control_panel_keyboard()
+        lex, text = await self._build_dashboard_text()
+        buttons = build_control_panel_keyboard(lex)
         cp_topic_id = self._cfg.telegram.control_panel_topic_id
 
         if self._dashboard_msg_id is not None:
@@ -117,7 +122,7 @@ class ControlPanelUI:
         except Exception as exc:
             logger.warning("Could not pin Control-Panel dashboard message", error=str(exc))
 
-    async def _build_dashboard_text(self) -> str:
+    async def _build_dashboard_text(self) -> tuple[UiLexicon, str]:
         accounts = await self._account_repo.list_accounts()
         hosts = await self._host_repo.list_hosts()
         mount_statuses = {
@@ -126,8 +131,10 @@ class ControlPanelUI:
         pool_snapshots = await self._pool.get_pool_snapshots()
         tasks = await self._scheduler.list_tasks(topic_id=None)
         settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
 
-        return render_control_panel_dashboard(
+        return lex, render_control_panel_dashboard(
+            lex=lex,
             accounts=accounts,
             hosts=hosts,
             mount_statuses=mount_statuses,
@@ -146,12 +153,10 @@ class ControlPanelUI:
             return
 
         if self._state is None:
+            lex = await self._load_lexicon()
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=(
-                    "ℹ️ **#Control-Panel** is reserved for system administration.\n"
-                    "Use the dashboard buttons above or send `/panel` to refresh."
-                ),
+                message=lex.cp_reserved_notice,
                 reply_to=cp_topic_id,
             )
             return
@@ -179,14 +184,16 @@ class ControlPanelUI:
             return
 
     async def handle_callback(self, event: events.CallbackQuery.Event, data_str: str) -> None:
+        lex = await self._load_lexicon()
+
         if data_str == "cp:refresh":
             self._state = None
-            text = await self._build_dashboard_text()
-            await event.edit(text, buttons=build_control_panel_keyboard())
+            lex, text = await self._build_dashboard_text()
+            await event.edit(text, buttons=build_control_panel_keyboard(lex))
             return
 
         if data_str == "cp:probe_quotas":
-            await event.answer("Probing quotas across all accounts...")
+            await event.answer(lex.cp_toast_probing_quotas)
             accounts = await self._account_repo.list_enabled_accounts()
             for acc in accounts:
                 try:
@@ -194,37 +201,34 @@ class ControlPanelUI:
                     await self._account_repo.update_quota_snapshot(acc.id, q_info)
                 except Exception as exc:
                     logger.warning("Quota probe failed", account=acc.slug, error=str(exc))
-            text = await self._build_dashboard_text()
-            await event.edit(text, buttons=build_control_panel_keyboard())
+            lex, text = await self._build_dashboard_text()
+            await event.edit(text, buttons=build_control_panel_keyboard(lex))
             return
 
         if data_str == "cp:auth_menu":
             accounts = await self._account_repo.list_accounts()
             await event.edit(
-                "🔑 **Google AI Pro Account Management**\n"
-                "Select an existing account to re-authenticate via Remote SSH OAuth flow, "
-                "or register a new isolated D-Bus/Keyring profile:",
-                buttons=build_account_auth_keyboard(accounts),
+                lex.cp_auth_menu_prompt,
+                buttons=build_account_auth_keyboard(lex, accounts),
             )
             return
 
         if data_str == "cp:register_new_acc":
             self._state = _ControlPanelInteractiveState(mode="await_new_account")
-            await event.respond(
-                "➕ **Register New Google Account Profile**\n"
-                "Reply in this topic with `<slug> <email_label>` (for example: `acc_2 backup@gmail.com`)."
-            )
+            await event.respond(lex.cp_register_new_acc_prompt)
             await event.answer()
             return
 
         if data_str.startswith("cp:oauth_start:"):
             acc_id = int(data_str.split(":")[2])
             account = await self._account_repo.get_by_id(acc_id)
-            await event.answer("Launching agy login (Remote SSH OAuth Flow)...")
+            await event.answer(lex.cp_toast_launching_oauth)
             try:
                 pending = await self._keyring_mgr.start_remote_oauth_flow(account)
             except Exception as exc:
-                await event.respond(f"❌ Failed to start OAuth flow for `{account.slug}`:\n`{exc}`")
+                await event.respond(
+                    lex.cp_oauth_start_failed.format(slug=account.slug, error=exc)
+                )
                 return
 
             self._state = _ControlPanelInteractiveState(
@@ -232,48 +236,51 @@ class ControlPanelUI:
                 pending_oauth=pending,
             )
             await event.respond(
-                f"🔐 **OAuth Login for `{account.slug}` ({account.email_label})**\n\n"
-                f"1. Open this URL in your browser:\n{pending.auth_url}\n\n"
-                f"2. Sign into `{account.email_label}`, copy the single-use verification code, "
-                f"and **send it as your next message in this topic**."
+                lex.cp_oauth_instructions.format(
+                    slug=account.slug,
+                    email_label=account.email_label,
+                    auth_url=pending.auth_url,
+                )
             )
             return
 
         if data_str == "cp:switch_default_acc":
             accounts = await self._account_repo.list_accounts()
             await event.edit(
-                "🔀 **Select Default Google Account for New Topics:**",
-                buttons=build_default_account_picker_keyboard(accounts),
+                lex.cp_switch_default_acc_prompt,
+                buttons=build_default_account_picker_keyboard(lex, accounts),
             )
             return
 
         if data_str.startswith("cp:set_def_acc:"):
             acc_id = int(data_str.split(":")[2])
             await self._account_repo.set_default_account(acc_id)
-            text = await self._build_dashboard_text()
-            await event.edit(text, buttons=build_control_panel_keyboard())
-            await event.answer("Default account updated.")
+            lex, text = await self._build_dashboard_text()
+            await event.edit(text, buttons=build_control_panel_keyboard(lex))
+            await event.answer(lex.cp_toast_default_acc_updated)
             return
 
         if data_str == "cp:remount_hosts":
-            await event.answer("Verifying and mounting SSHFS hosts...")
+            await event.answer(lex.cp_toast_remounting_hosts)
             hosts = await self._host_repo.list_hosts()
             for host in hosts:
                 if host.auto_mount_enabled:
                     try:
                         await self._mount_mgr.ensure_mounted(host)
                     except Exception as exc:
-                        await event.respond(f"❌ SSHFS mount failed for `{host.alias}`: `{exc}`")
-            text = await self._build_dashboard_text()
-            await event.edit(text, buttons=build_control_panel_keyboard())
+                        await event.respond(
+                            lex.cp_remount_failed.format(alias=host.alias, error=exc)
+                        )
+            lex, text = await self._build_dashboard_text()
+            await event.edit(text, buttons=build_control_panel_keyboard(lex))
             return
 
         if data_str == "cp:new_topic":
             self._state = _ControlPanelInteractiveState(mode="await_new_topic")
             await event.respond(
-                "➕ **Create New Workspace Topic**\n"
-                "Reply with `<Topic Title> | <Workspace Path> | <PERMANENT or TASK>`\n"
-                f"Example:\n`🚀 Project Alpha | {self._cfg.paths.workspaces_root_dir}/alpha | TASK`"
+                lex.cp_new_topic_prompt.format(
+                    workspaces_root_dir=self._cfg.paths.workspaces_root_dir
+                )
             )
             await event.answer()
             return
@@ -281,8 +288,8 @@ class ControlPanelUI:
         if data_str == "cp:tasks_menu":
             tasks = await self._scheduler.list_tasks(topic_id=None)
             await event.edit(
-                f"⏰ **Active Scheduled Tasks ({len(tasks)}):**\nClick a task below to cancel it:",
-                buttons=build_tasks_management_keyboard(tasks),
+                lex.cp_tasks_menu_prompt.format(count=len(tasks)),
+                buttons=build_tasks_management_keyboard(lex, tasks),
             )
             return
 
@@ -291,22 +298,26 @@ class ControlPanelUI:
             await self._scheduler.cancel_task(task_uuid)
             tasks = await self._scheduler.list_tasks(topic_id=None)
             await event.edit(
-                f"⏰ **Active Scheduled Tasks ({len(tasks)}):**",
-                buttons=build_tasks_management_keyboard(tasks),
+                lex.cp_tasks_menu_updated.format(count=len(tasks)),
+                buttons=build_tasks_management_keyboard(lex, tasks),
             )
-            await event.answer("Task canceled.")
+            await event.answer(lex.cp_toast_task_canceled)
             return
 
         if data_str == "cp:settings_menu":
             rows = await self._settings_repo.list_all_with_descriptions()
-            lines = ["⚙️ **PostgreSQL Dynamic Settings:**\n"]
+            lines = [lex.cp_settings_menu_header]
             keys: list[str] = []
             for k, val, desc, _ in rows:
                 keys.append(k)
-                lines.append(f"• `{k}` = `{json.dumps(val)}`\n  _{desc}_")
+                lines.append(
+                    lex.cp_settings_menu_item.format(
+                        key=k, value_json=json.dumps(val), description=desc
+                    )
+                )
             await event.edit(
                 "\n".join(lines),
-                buttons=build_settings_menu_keyboard(keys),
+                buttons=build_settings_menu_keyboard(lex, keys),
             )
             return
 
@@ -316,10 +327,7 @@ class ControlPanelUI:
                 mode="await_setting_value",
                 setting_key=key,
             )
-            await event.respond(
-                f"✏️ **Update Setting `{key}`**\n"
-                "Reply with the new JSON value (e.g. `\"gemini-4-argon-high\"`, `900`, `1.8`)."
-            )
+            await event.respond(lex.cp_edit_setting_prompt.format(key=key))
             await event.answer()
             return
 
@@ -333,19 +341,16 @@ class ControlPanelUI:
                 created_by_user_id=self._cfg.telegram.owner_telegram_id,
                 expires_at=expires_at,
             )
-            await event.respond(
-                f"🎟 **Single-Use Member Invite Generated (valid 24h):**\n"
-                f"Ask the user to send the following command in the forum:\n"
-                f"`/redeem {token}`"
-            )
-            await event.answer("Invite generated.")
+            await event.respond(lex.cp_invite_generated_msg.format(token=token))
+            await event.answer(lex.cp_toast_invite_generated)
 
     async def _process_new_account_input(self, raw_text: str) -> None:
+        lex = await self._load_lexicon()
         parts = raw_text.split(maxsplit=1)
         if len(parts) < 2:
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message="❌ Format must be `<slug> <email_label>` (e.g. `acc_1 user@gmail.com`).",
+                message=lex.cp_new_acc_invalid_format,
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
             return
@@ -373,10 +378,7 @@ class ControlPanelUI:
         await self._keyring_mgr.ensure_account_bus(account)
         await self._client.send_message(
             entity=self._cfg.telegram.forum_chat_id,
-            message=(
-                f"✅ Registered and unlocked isolated D-Bus/Keyring profile `{account.slug}`.\n"
-                "Now open **[🔑 Add / Auth Account]** to complete Google OAuth sign-in."
-            ),
+            message=lex.cp_new_acc_created.format(slug=account.slug),
             reply_to=self._cfg.telegram.control_panel_topic_id,
         )
         await self.render_and_pin_dashboard()
@@ -384,27 +386,26 @@ class ControlPanelUI:
     async def _process_oauth_code_input(
         self, pending: PendingOAuthSession, verification_code: str
     ) -> None:
+        lex = await self._load_lexicon()
         try:
             await self._keyring_mgr.complete_remote_oauth_flow(pending, verification_code)
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=(
-                    f"✅ **OAuth Sign-In Complete for `{pending.account.slug}`!**\n"
-                    "Token stored in isolated `gnome-keyring` and backed up to PostgreSQL 18 via `Fernet`."
-                ),
+                message=lex.cp_oauth_success.format(slug=pending.account.slug),
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
         except Exception as exc:
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=f"❌ **OAuth Verification Failed:**\n`{exc}`",
+                message=lex.cp_oauth_failed.format(error=exc),
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
         await self.render_and_pin_dashboard()
 
     async def _process_new_topic_input(self, raw_text: str) -> None:
+        lex = await self._load_lexicon()
         parts = [p.strip() for p in raw_text.split("|")]
-        title = parts[0] if parts else "New Workspace"
+        title = parts[0] if parts else lex.cp_new_topic_default_title
         workspace_path = (
             parts[1]
             if len(parts) >= 2 and parts[1]
@@ -427,13 +428,15 @@ class ControlPanelUI:
             await self._workspace_ui.refresh_pinned_card(topic.topic_id)
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=f"✅ Created Forum Topic **{topic.title}** (`topic_id={topic.topic_id}`).",
+                message=lex.cp_new_topic_created.format(
+                    title=topic.title, topic_id=topic.topic_id
+                ),
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
         except Exception as exc:
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=f"❌ Failed to create topic: `{exc}`",
+                message=lex.cp_new_topic_failed.format(error=exc),
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
 
@@ -444,16 +447,20 @@ class ControlPanelUI:
             parsed_val = raw_text.strip()
 
         try:
-            await self._settings_repo.update_setting(key, parsed_val)
+            updated_settings = await self._settings_repo.update_setting(key, parsed_val)
+            lex = get_lexicon(updated_settings.ui_language)
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=f"✅ Updated setting `{key}` = `{json.dumps(parsed_val)}`.",
+                message=lex.cp_setting_updated.format(
+                    key=key, value_json=json.dumps(parsed_val)
+                ),
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
             await self.render_and_pin_dashboard()
         except Exception as exc:
+            lex = await self._load_lexicon()
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=f"❌ Validation failed for `{key}`:\n`{exc}`",
+                message=lex.cp_setting_update_failed.format(key=key, error=exc),
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
