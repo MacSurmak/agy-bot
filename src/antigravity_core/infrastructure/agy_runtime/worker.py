@@ -43,10 +43,12 @@ _QUOTA_ERROR_MARKERS: tuple[str, ...] = (
 )
 
 
-def is_effort_supported_for_model(model_slug: str) -> bool:
-    """Reference #1 Section 2: --effort is only supported on Gemini models, never on Claude models."""
+def is_effort_supported_for_model(
+    model_slug: str, supported_prefixes: tuple[str, ...]
+) -> bool:
+    """Checks whether --effort is supported by matching model_slug against configured prefixes."""
     normalized = model_slug.strip().lower()
-    return normalized.startswith("gemini")
+    return any(normalized.startswith(prefix) for prefix in supported_prefixes)
 
 
 def _contains_quota_exhaustion(text: str) -> bool:
@@ -154,9 +156,9 @@ class TopicWorker:
             str(log_file),
         ]
 
-        if (
-            self._signature.effort_level is not None
-            and is_effort_supported_for_model(self._signature.model_slug)
+        if self._signature.effort_level is not None and is_effort_supported_for_model(
+            self._signature.model_slug,
+            self._cfg.runtime.effort_supported_prefixes,
         ):
             cmd.extend(["--effort", self._signature.effort_level.value])
 

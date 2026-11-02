@@ -179,6 +179,45 @@ class WorkspaceTopicUI:
             await self.refresh_pinned_card(topic_id)
             return True
 
+        if cmd == "/model":
+            parts = raw_text.split(maxsplit=1)
+            topic = await self.ensure_topic_registered(topic_id)
+            if len(parts) == 2 and parts[1].strip():
+                new_slug = parts[1].strip()
+                await self._lifecycle.change_model(topic_id, new_slug, topic.effort_level)
+                await self.refresh_pinned_card(topic_id)
+                await self._client.send_message(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message=lex.ws_model_updated_msg.format(model_slug=new_slug),
+                    reply_to=topic_id,
+                )
+                return True
+
+            account = await self._account_repo.get_by_id(topic.assigned_account_id)
+            try:
+                models = await self._inspector.list_available_models(account)
+            except AgyProcessError as exc:
+                await self._client.send_message(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message=lex.ws_turn_error_msg.format(error=exc),
+                    reply_to=topic_id,
+                )
+                return True
+
+            await self._client.send_message(
+                entity=self._cfg.telegram.forum_chat_id,
+                message=lex.ws_select_model_prompt,
+                reply_to=topic_id,
+                buttons=build_model_picker_keyboard(
+                    lex,
+                    self._cfg.limits,
+                    topic_id,
+                    models,
+                    topic.model_slug,
+                ),
+            )
+            return True
+
         if cmd == "/archive":
             await self._lifecycle.archive_topic(topic_id)
             return True

@@ -181,6 +181,15 @@ class RuntimeStaticConfig(BaseModel):
     invite_ttl_hours: int
     invite_token_bytes: int
     keyring_password_bytes: int
+    effort_supported_prefixes: tuple[str, ...]
+
+    @field_validator("effort_supported_prefixes")
+    @classmethod
+    def _validate_effort_prefixes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = tuple(item.strip().lower() for item in value if item.strip())
+        if not cleaned:
+            raise ValueError("effort_supported_prefixes must contain at least one prefix.")
+        return cleaned
 
     @field_validator(
         "agy_sqlite_busy_timeout_ms",

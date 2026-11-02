@@ -64,6 +64,8 @@ runtime:
   invite_ttl_hours: 24
   invite_token_bytes: 18
   keyring_password_bytes: 32
+  effort_supported_prefixes:
+    - "gemini"
 
 limits:
   uuid_short_chars: 8

@@ -55,7 +55,10 @@ class TopicLifecycleService:
         effective_mode = execution_mode if execution_mode is not None else settings.default_execution_mode
         effective_effort = (
             settings.default_effort
-            if is_effort_supported_for_model(settings.default_model)
+            if is_effort_supported_for_model(
+                settings.default_model,
+                self._cfg.runtime.effort_supported_prefixes,
+            )
             else None
         )
 
@@ -97,7 +100,14 @@ class TopicLifecycleService:
     async def change_model(
         self, topic_id: int, model_slug: str, effort_level: EffortLevel | None
     ) -> ForumTopic:
-        effective_effort = effort_level if is_effort_supported_for_model(model_slug) else None
+        effective_effort = (
+            effort_level
+            if is_effort_supported_for_model(
+                model_slug,
+                self._cfg.runtime.effort_supported_prefixes,
+            )
+            else None
+        )
         updated = await self._topic_repo.update_model_and_effort(
             topic_id=topic_id,
             model_slug=model_slug,
