@@ -45,3 +45,5 @@ Thumbs.db
 
 # AI Workdir
 .ai/
+
+runtime_data/
