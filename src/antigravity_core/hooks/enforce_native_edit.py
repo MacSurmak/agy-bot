@@ -1,11 +1,12 @@
 import json
+import os
 import re
 import sys
 from typing import Any
 
 # Errata Patch #2 - Phase 1: Safe descriptor redirects and /dev/null sinks to strip before analysis
-_SAFE_FD_DUP_RE = re.compile(r"\b\d*>&\d+\b")
-_SAFE_DEV_NULL_FD_RE = re.compile(r"\b\d*>>?\s*/dev/null\b")
+_SAFE_FD_DUP_RE = re.compile(r"(?:^|(?<=[\s;|&()])|\b\d+)>&\d+\b")
+_SAFE_DEV_NULL_FD_RE = re.compile(r"(?:^|(?<=[\s;|&()])|\b\d+)>>?\s*/dev/null\b")
 _SAFE_DEV_NULL_AMP_RE = re.compile(r"&>>?\s*/dev/null\b")
 
 # Errata Patch #2 - Phase 2: Forbidden file modification and stream editing patterns
@@ -20,8 +21,18 @@ _FORBIDDEN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"<<\s*['\"]?\w+['\"]?[^\n]*>"), "heredoc redirection to file"),
     (re.compile(r"<<<[^\n]*>"), "herestring redirection to file"),
     (re.compile(r">>"), "append redirection (>>)"),
-    # Match single '>' that is NOT part of '->', '=>', '>-', or numeric comparison flags
-    (re.compile(r"(?<![-=>])\b\d*>\s*(?![&\s]*$)[^\s;|&>]+"), "output redirection (>) to file"),
+    # Catch single '>' preceded by whitespace, delimiter, or descriptor digit, excluding '->', '=>', '>='
+    (
+        re.compile(r"(?:^|[\s;|&()]|\b\d)(?<![-=>])>\s*(?![&\s=>]*$)[^\s;|&>]+"),
+        "output redirection (>) to file",
+    ),
+    # Block inline python one-liners attempting file writes via run_command
+    (
+        re.compile(
+            r"\bpython3?\b[^\n]*-c\b[^\n]*(?:\.write(?:_text|_bytes)?\s*\(|open\s*\([^)]*['\"][wa+])"
+        ),
+        "inline python file write",
+    ),
 )
 
 _DENY_REASON = (
@@ -68,6 +79,22 @@ def main() -> None:
         return
 
     tool_name = str(tool_call.get("name", ""))
+    if os.environ.get("AGY_EXECUTION_MODE") == "READ_ONLY" and tool_name in (
+        "write_to_file",
+        "replace_file_content",
+        "multi_replace_file_content",
+    ):
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "decision": "deny",
+                    "reason": "Topic is currently in READ_ONLY (Plan) mode. File modifications are disabled.",
+                }
+            )
+            + "\n"
+        )
+        return
+
     if tool_name != "run_command":
         sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
         return

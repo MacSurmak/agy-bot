@@ -69,6 +69,11 @@ class KeyringProfileManager:
         os.chmod(xdg_dir, 0o700)
         os.chmod(keyrings_dir, 0o700)
 
+        default_ptr = keyrings_dir / "default"
+        if not default_ptr.exists():
+            default_ptr.write_text("login\n", encoding="utf-8")
+            os.chmod(default_ptr, 0o600)
+
         socket_path = Path(account.dbus_socket_path)
         socket_path.parent.mkdir(parents=True, exist_ok=True)
 

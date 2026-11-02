@@ -12,9 +12,6 @@ from antigravity_core.domain.models import (
     TurnResult,
 )
 from antigravity_core.infrastructure.agy_runtime.worker_pool import WorkerTopicSnapshot
-
-
-from antigravity_core.infrastructure.agy_runtime.worker_pool import WorkerTopicSnapshot
 from antigravity_core.lexicon.schema import UiLexicon
 
 

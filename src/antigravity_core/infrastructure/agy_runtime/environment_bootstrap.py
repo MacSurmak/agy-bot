@@ -138,7 +138,7 @@ class AgyEnvironmentBootstrapper:
                 "enabled": True,
                 "PreToolUse": [
                     {
-                        "matcher": "run_command",
+                        "matcher": "run_command|write_to_file|replace_file_content|multi_replace_file_content",
                         "hooks": [
                             {
                                 "type": "command",

@@ -98,10 +98,11 @@ class TopicWorker:
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
         cmd = self._build_command_args(settings)
-        # Errata Patch #1: Inject topic and IPC socket variables so child stdio_proxy inherits them
+        # Errata Patch #1: Inject topic, execution mode, and IPC socket variables for child processes & hooks
         worker_env = {
             **self._account_env,
             "AGY_CURRENT_TOPIC_ID": str(self._topic_id),
+            "AGY_EXECUTION_MODE": self._signature.execution_mode.value,
             "AGY_ACCOUNT_SLUG": self._signature.account_slug,
             "AGY_CORE_IPC_SOCKET": str(self._cfg.paths.ipc_socket_path),
         }
