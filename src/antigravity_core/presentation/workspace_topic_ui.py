@@ -11,7 +11,10 @@ from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import EffortLevel, TopicKind
 from antigravity_core.domain.exceptions import AgyProcessError
 from antigravity_core.domain.models import ForumTopic, TurnProgressEvent
-from antigravity_core.infrastructure.agy_runtime.cli_inspector import AgyCliInspector
+from antigravity_core.infrastructure.agy_runtime.cli_inspector import (
+    AgyCliInspector,
+    is_valid_model_slug_syntax,
+)
 from antigravity_core.infrastructure.agy_runtime.worker_pool import AgyWorkerPool
 from antigravity_core.infrastructure.database.repositories import (
     AccountRepository,
@@ -182,17 +185,6 @@ class WorkspaceTopicUI:
         if cmd == "/model":
             parts = raw_text.split(maxsplit=1)
             topic = await self.ensure_topic_registered(topic_id)
-            if len(parts) == 2 and parts[1].strip():
-                new_slug = parts[1].strip()
-                await self._lifecycle.change_model(topic_id, new_slug, topic.effort_level)
-                await self.refresh_pinned_card(topic_id)
-                await self._client.send_message(
-                    entity=self._cfg.telegram.forum_chat_id,
-                    message=lex.ws_model_updated_msg.format(model_slug=new_slug),
-                    reply_to=topic_id,
-                )
-                return True
-
             account = await self._account_repo.get_by_id(topic.assigned_account_id)
             try:
                 models = await self._inspector.list_available_models(account)
@@ -200,6 +192,29 @@ class WorkspaceTopicUI:
                 await self._client.send_message(
                     entity=self._cfg.telegram.forum_chat_id,
                     message=lex.ws_turn_error_msg.format(error=exc),
+                    reply_to=topic_id,
+                )
+                return True
+
+            if len(parts) == 2 and parts[1].strip():
+                new_slug = parts[1].strip().lower()
+                if not is_valid_model_slug_syntax(new_slug) or new_slug not in models:
+                    formatted_list = ", ".join(f"`{m}`" for m in models)
+                    await self._client.send_message(
+                        entity=self._cfg.telegram.forum_chat_id,
+                        message=lex.ws_model_unknown_msg.format(
+                            model_slug=new_slug,
+                            available_models=formatted_list,
+                        ),
+                        reply_to=topic_id,
+                    )
+                    return True
+
+                await self._lifecycle.change_model(topic_id, new_slug, topic.effort_level)
+                await self.refresh_pinned_card(topic_id)
+                await self._client.send_message(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message=lex.ws_model_updated_msg.format(model_slug=new_slug),
                     reply_to=topic_id,
                 )
                 return True

@@ -147,6 +147,7 @@ class UiLexicon:
     ws_session_resumed_msg: str
     ws_select_model_prompt: str
     ws_model_updated_msg: str
+    ws_model_unknown_msg: str
     ws_effort_updated_msg: str
     ws_select_account_prompt: str
     ws_account_switched_msg: str

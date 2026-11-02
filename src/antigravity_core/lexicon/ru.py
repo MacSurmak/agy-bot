@@ -204,6 +204,10 @@ RU_LEXICON = UiLexicon(
     ws_session_resumed_msg="✅ Возобновлена сессия `{conversation_id}`.",
     ws_select_model_prompt="🧠 **Выберите модель или глубину рассуждений (Effort):**",
     ws_model_updated_msg="✅ Модель изменена на `{model_slug}`.",
+    ws_model_unknown_msg=(
+        "❌ Модель `{model_slug}` не найдена в `agy models`.\n"
+        "Доступные модели: {available_models}"
+    ),
     ws_effort_updated_msg="✅ Глубина рассуждений (Effort) изменена на `{effort}`.",
     ws_select_account_prompt="👤 **Выберите Google-аккаунт для этого топика:**",
     ws_account_switched_msg="✅ Google-аккаунт для топика переключен.",

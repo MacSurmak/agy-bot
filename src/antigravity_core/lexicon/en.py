@@ -198,6 +198,10 @@ EN_LEXICON = UiLexicon(
     ws_session_resumed_msg="✅ Resumed session `{conversation_id}`.",
     ws_select_model_prompt="🧠 **Select Model or Thinking Effort:**",
     ws_model_updated_msg="✅ Model updated to `{model_slug}`.",
+    ws_model_unknown_msg=(
+        "❌ Model `{model_slug}` is not found in `agy models`.\n"
+        "Available models: {available_models}"
+    ),
     ws_effort_updated_msg="✅ Thinking effort updated to `{effort}`.",
     ws_select_account_prompt="👤 **Select Google Account for this Topic:**",
     ws_account_switched_msg="✅ Switched Google Account for this topic.",

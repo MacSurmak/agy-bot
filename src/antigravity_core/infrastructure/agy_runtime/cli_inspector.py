@@ -3,17 +3,25 @@ import json
 import re
 from typing import Any
 
+import structlog
+
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import AgyProcessError
 from antigravity_core.domain.models import GoogleAccount
 from antigravity_core.infrastructure.keyring.dbus_profile_mgr import KeyringProfileManager
 
+logger = structlog.get_logger(__name__)
+
 _PERCENT_PATTERN = re.compile(r"(\d{1,3})\s*%")
-# Universal model slug pattern: lowercase alphanumeric with hyphens/dots, containing at least one hyphen and digit/version
-_GENERIC_MODEL_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9.]+)+$")
+# Universal model slug pattern: lowercase alphanumeric with hyphens/dots, requiring at least one hyphen and at least one digit
+_GENERIC_MODEL_SLUG_RE = re.compile(r"^(?=.*\d)[a-z0-9]+(?:-[a-z0-9.]+)+$")
 _IGNORED_HEADER_WORDS: frozenset[str] = frozenset(
     {"model", "models", "available", "name", "slug", "id", "default", "provider", "status"}
 )
+
+
+def is_valid_model_slug_syntax(slug: str) -> bool:
+    return _GENERIC_MODEL_SLUG_RE.match(slug.strip().lower()) is not None
 
 
 class AgyCliInspector:
@@ -85,8 +93,11 @@ class AgyCliInspector:
                         models.append(slug)
                 if models:
                     return models
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as exc:
+                logger.debug(
+                    "agy models output started with bracket/brace but is not JSON; falling back to line parser",
+                    error=str(exc),
+                )
 
         # Universal table / list parser for any model family (no hardcoded gemini/claude prefixes)
         for raw_line in raw_output.splitlines():
