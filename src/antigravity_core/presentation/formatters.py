@@ -77,10 +77,20 @@ def _utf16_len(text: str) -> int:
 
 def _pad_wide_bar(text: str) -> str:
     clean = text.replace("**", "").replace("`", "").strip()
-    if len(clean) >= _WIDE_BUBBLE_TARGET_COLS:
-        return clean
-    pad_len = max(2, _WIDE_BUBBLE_TARGET_COLS - len(clean) - 1)
-    return f"{clean} " + ("─" * pad_len)
+    lines = [ln.strip() for ln in clean.splitlines() if ln.strip()]
+    if not lines:
+        lines = ["─" * _WIDE_BUBBLE_TARGET_COLS]
+
+    first = lines[0]
+    if len(first) < _WIDE_BUBBLE_TARGET_COLS:
+        pad_len = max(2, _WIDE_BUBBLE_TARGET_COLS - len(first) - 1)
+        lines[0] = f"{first} " + ("─" * pad_len)
+
+    # Telegram Desktop downgrades single-line MessageEntityPre(language="") to inline code;
+    # having a second line forces block-level <pre> rendering and full-width bubble expansion.
+    if len(lines) == 1:
+        lines.append("─" * _WIDE_BUBBLE_TARGET_COLS)
+    return "\n".join(lines)
 
 
 def format_wide_header_block(title: str) -> str:
@@ -446,12 +456,12 @@ def render_turn_footer(
     cum_k = result.cumulative_usage.total_tokens / 1000.0
     cache_k = result.cumulative_usage.cache_read_tokens / 1000.0
 
-    stats_line = (
+    stats_line_1 = (
         f"⏱ {result.turn_delta_duration_sec:.1f}с │ "
-        f"📊 +{tok_k:.1f}k ток (сессия: {cum_k:.1f}k, кэш: {cache_k:.1f}k) │ "
-        f"🧠 {model_slug} │ 👤 {account_slug}"
+        f"📊 +{tok_k:.1f}k ток (сессия: {cum_k:.1f}k, кэш: {cache_k:.1f}k)"
     )
-    lines = [_pad_wide_bar(stats_line)]
+    stats_line_2 = f"🧠 {model_slug} │ 👤 {account_slug}"
+    lines = [_pad_wide_bar(f"{stats_line_1}\n{stats_line_2}")]
 
     if result.account_switched_from and result.account_switched_to:
         failover_clean = (
