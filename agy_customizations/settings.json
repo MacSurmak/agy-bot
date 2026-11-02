@@ -18,10 +18,7 @@
   "permissions": {
     "allow": [
       "read_file(*)",
-      "write_file(/srv/antigravity/workspaces)",
-      "write_file(/mnt/remotes)",
-      "write_file(/root/.gemini/config/rules)",
-      "write_file(/root/.gemini/config/skills)",
+      "write_file(*)",
       "command(*)",
       "read_url(*)",
       "mcp(telegram-core/*)",

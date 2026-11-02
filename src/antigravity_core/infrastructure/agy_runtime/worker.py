@@ -170,13 +170,7 @@ class TopicWorker:
             cmd.extend(["--conversation", str(self._conversation_id)])
 
         seen_dirs: set[str] = {str(Path(self._signature.workspace_path).resolve())}
-        all_extra_dirs = (
-            *self._signature.additional_dirs,
-            str(Path.home().resolve()),
-            str(self._cfg.paths.inbox_dir),
-            str(self._cfg.paths.remotes_mount_dir),
-        )
-        for extra_dir in all_extra_dirs:
+        for extra_dir in self._signature.additional_dirs:
             resolved = str(Path(extra_dir).resolve())
             if resolved not in seen_dirs and Path(resolved).exists():
                 seen_dirs.add(resolved)
