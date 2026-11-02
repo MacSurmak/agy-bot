@@ -7,7 +7,7 @@ import structlog
 from telethon import TelegramClient
 from telethon.errors import RPCError
 from telethon.tl.custom import Message
-from telethon.tl.functions.channels import CreateForumTopicRequest, EditForumTopicRequest
+from telethon.tl.functions.messages import CreateForumTopicRequest, EditForumTopicRequest
 from telethon.tl.types import Updates
 
 from antigravity_core.config.static_config import StaticConfig
@@ -211,7 +211,7 @@ class TelethonForumGateway:
     async def create_forum_topic(self, title: str) -> int:
         updates: Updates = await self._client(
             CreateForumTopicRequest(
-                channel=self._cfg.telegram.forum_chat_id,
+                peer=self._cfg.telegram.forum_chat_id,
                 title=title,
             )
         )
@@ -226,7 +226,7 @@ class TelethonForumGateway:
     async def close_and_rename_forum_topic(self, topic_id: int, new_title: str) -> None:
         await self._client(
             EditForumTopicRequest(
-                channel=self._cfg.telegram.forum_chat_id,
+                peer=self._cfg.telegram.forum_chat_id,
                 topic_id=topic_id,
                 title=new_title,
                 closed=True,

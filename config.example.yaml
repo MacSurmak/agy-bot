@@ -16,8 +16,8 @@ security:
   fernet_master_key: "REPLACE_WITH_32_BYTE_URLSAFE_BASE64_FERNET_KEY="
 
 database:
-  dsn: "postgresql+asyncpg://antigravity:strong_password_here@127.0.0.1:5432/antigravity_core"
-  sync_dsn: "postgresql://antigravity:strong_password_here@127.0.0.1:5432/antigravity_core"
+  dsn: "postgresql+asyncpg://antigravity:antigravity_local_pass@127.0.0.1:5432/antigravity_core"
+  sync_dsn: "postgresql://antigravity:antigravity_local_pass@127.0.0.1:5432/antigravity_core"
   pool_size: 10
   max_overflow: 20
   pool_timeout_sec: 10.0
