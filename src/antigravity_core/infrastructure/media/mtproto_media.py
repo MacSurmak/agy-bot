@@ -223,6 +223,15 @@ class TelethonForumGateway:
             "Failed to extract created topic_id from CreateForumTopicRequest response."
         )
 
+    async def rename_forum_topic(self, topic_id: int, new_title: str) -> None:
+        await self._client(
+            EditForumTopicRequest(
+                peer=self._cfg.telegram.forum_chat_id,
+                topic_id=topic_id,
+                title=new_title,
+            )
+        )
+
     async def close_and_rename_forum_topic(self, topic_id: int, new_title: str) -> None:
         await self._client(
             EditForumTopicRequest(

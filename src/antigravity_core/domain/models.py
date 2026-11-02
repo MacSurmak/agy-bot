@@ -189,8 +189,10 @@ class WorkerTopicSnapshot:
 
 
 class ForumTopicGateway(Protocol):
-    """Domain boundary protocol for creating and closing Telegram Forum Topics."""
+    """Domain boundary protocol for creating, renaming, and closing Telegram Forum Topics."""
 
     async def create_forum_topic(self, title: str) -> int: ...
+
+    async def rename_forum_topic(self, topic_id: int, new_title: str) -> None: ...
 
     async def close_and_rename_forum_topic(self, topic_id: int, new_title: str) -> None: ...

@@ -530,6 +530,16 @@ class TopicRepository:
             await session.flush()
             return _map_topic(row)
 
+    async def update_topic_title(self, topic_id: int, new_title: str) -> ForumTopic:
+        async with self._db.session() as session:
+            row = await session.get(ForumTopicRow, topic_id)
+            if row is None:
+                raise DatabaseIntegrityError(f"ForumTopic topic_id={topic_id} does not exist.")
+            row.title = new_title
+            row.updated_at = datetime.now(tz=UTC)
+            await session.flush()
+            return _map_topic(row)
+
     async def archive_topic(self, topic_id: int, archived_title: str) -> ForumTopic:
         async with self._db.session() as session:
             row = await session.get(ForumTopicRow, topic_id)
