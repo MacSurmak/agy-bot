@@ -161,6 +161,31 @@ class TurnOrchestrator:
             initial_cumulative_tokens=prev_tokens,
         )
 
+        # If the 1-hour OAuth access_token expired mid-flight before generating a response,
+        # the worker has already been recycled; retry once so the new worker refreshes the token seamlessly.
+        if (
+            not result.response_text.strip()
+            and result.error_message
+            and (
+                "UNAUTHENTICATED" in result.error_message.upper()
+                or "401" in result.error_message
+            )
+        ):
+            logger.info(
+                "OAuth access_token expired (401); retrying turn with freshly spawned agy worker",
+                topic_id=topic.topic_id,
+                account=account.slug,
+            )
+            result = await self._pool.execute_turn(
+                topic=topic,
+                account=account,
+                prompt=prompt,
+                settings=settings,
+                on_init=_on_init,
+                on_progress=on_progress,
+                initial_cumulative_tokens=prev_tokens,
+            )
+
         await self._topic_repo.set_active_conversation(topic.topic_id, result.conversation_id)
         await self._session_repo.ensure_session_initialized(
             conversation_id=result.conversation_id,

@@ -475,7 +475,11 @@ def render_turn_footer(
         )
         lines.append(failover_clean)
 
-    if result.status != TurnStatus.SUCCESS and result.error_message:
+    if (
+        result.status != TurnStatus.SUCCESS
+        and result.error_message
+        and not result.response_text.strip()
+    ):
         err_lim = limits.error_summary_max_chars
         err_clean = (
             lex.turn_footer_error_status.format(
@@ -560,17 +564,19 @@ def _format_markdown_table_block(table_lines: list[str]) -> list[str]:
         box_lines.append("```")
         return box_lines
 
-    # Fallback for extra-wide tables: render each row as a structured card
+    # Fallback for extra-wide tables: render each row as a compact card without exhausting Telegram's 100-entity limit
     headers = normalized_rows[0]
     data_rows = normalized_rows[1:] if len(normalized_rows) > 1 else normalized_rows
     card_lines: list[str] = []
     for row in data_rows:
         title_cell = row[0] if row else "—"
-        card_lines.append(f"▸ **{title_cell}**")
-        for c_i in range(1, num_cols):
+        second_hdr = f" — {row[1]}" if num_cols > 1 and row[1] else ""
+        card_lines.append(f"▸ **{title_cell}{second_hdr}**")
+        start_col = 2 if num_cols > 1 and row[1] else 1
+        for c_i in range(start_col, num_cols):
             col_name = headers[c_i] if c_i < len(headers) and headers[c_i] else f"#{c_i + 1}"
             val = row[c_i] if row[c_i] else "—"
-            card_lines.append(f"  • {col_name}: `{val}`")
+            card_lines.append(f"  • {col_name}: {val}")
     return card_lines
 
 
@@ -777,7 +783,11 @@ def render_Formatted_response_chunks(
         )
         clean_body = del_surrogate(clean_s)
 
-        # Attach wide preformatted bar at the bottom of every chunk so Telegram Desktop expands bubble to full width
+        # Telegram Server silently drops all entities beyond index 99 (100-entity hard limit per message).
+        # Reserve the last slot so the bottom wide MessageEntityPre bar is guaranteed never to be dropped.
+        if len(entities) > 94:
+            entities = entities[:94]
+
         if idx < total_chunks:
             bar_text = _pad_wide_bar(f"📄 Часть {idx}/{total_chunks}")
         else:
