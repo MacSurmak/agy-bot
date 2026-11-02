@@ -106,6 +106,7 @@ RU_LEXICON = UiLexicon(
     btn_cp_settings_menu="⚙️ Настройки БД",
     btn_cp_create_invite="🎟 Создать инвайт-токен",
     btn_cp_reauth_account="🔑 Авторизовать {slug} ({email_label})",
+    btn_cp_open_oauth_url="🔗 Открыть страницу входа Google",
     btn_cp_register_new_acc="➕ Зарегистрировать новый профиль",
     btn_cp_back_to_dashboard="⬅️ Назад к дашборду",
     btn_cp_default_acc_item="{mark}{slug} ({email_label})",
@@ -146,7 +147,7 @@ RU_LEXICON = UiLexicon(
     cp_oauth_start_failed="❌ Не удалось запустить OAuth-авторизацию для `{slug}`:\n`{error}`",
     cp_oauth_instructions=(
         "🔐 **OAuth-авторизация профиля `{slug}` ({email_label})**\n\n"
-        "1. Откройте эту ссылку в браузере:\n{auth_url}\n\n"
+        "1. Нажмите кнопку ниже или скопируйте ссылку в браузер:\n`{auth_url}`\n\n"
         "2. Войдите в аккаунт `{email_label}`, скопируйте одноразовый код подтверждения "
         "и **отправьте его следующим сообщением в этот топик**."
     ),

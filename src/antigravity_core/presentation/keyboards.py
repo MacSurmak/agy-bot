@@ -57,6 +57,13 @@ def build_account_auth_keyboard(
     return rows
 
 
+def build_oauth_url_keyboard(lex: UiLexicon, auth_url: str) -> list[list[Button]]:
+    return [
+        [Button.url(lex.btn_cp_open_oauth_url, auth_url)],
+        [Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")],
+    ]
+
+
 def build_default_account_picker_keyboard(
     lex: UiLexicon, accounts: list[GoogleAccount]
 ) -> list[list[Button]]:

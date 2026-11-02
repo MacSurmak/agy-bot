@@ -369,15 +369,18 @@ class KeyringProfileManager:
             **env,
             "SSH_CONNECTION": "1",
             "TERM": "xterm-256color",
+            "COLUMNS": "2000",
+            "LINES": "50",
             "BROWSER": "/bin/false",
         }
         oauth_env.pop("DISPLAY", None)
         oauth_env.pop("WAYLAND_DISPLAY", None)
 
         master_fd, slave_fd = pty.openpty()
-        # Set 2000-column PTY width so TUI never wraps long OAuth URLs across lines
+        # Set 2000-column PTY width on both master and slave so TUI never wraps long OAuth URLs
         winsize = struct.pack("HHHH", 50, 2000, 0, 0)
         fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
         os.set_blocking(master_fd, False)
 
         try:
@@ -441,19 +444,30 @@ class KeyringProfileManager:
                         )
 
                     match = _OAUTH_URL_PATTERN.search(clean_text)
-                    if match is not None:
-                        auth_url = match.group(1).strip()
-                        logger.info(
-                            "Captured OAuth URL from agy PTY",
-                            account_slug=account.slug,
-                            auth_url=auth_url,
-                        )
-                        return PendingOAuthSession(
-                            account=account,
-                            process=proc,
-                            pty_master_fd=master_fd,
-                            auth_url=auth_url,
-                        )
+                    if match is not None and "response_type=" in match.group(1):
+                        # Drain any remaining bytes of the URL line before returning
+                        await asyncio.sleep(poll_interval * 4)
+                        with contextlib.suppress(BlockingIOError, OSError):
+                            while True:
+                                extra = os.read(master_fd, chunk_size)
+                                if not extra:
+                                    break
+                                accumulated += extra.decode("utf-8", errors="replace")
+                        clean_text = _ANSI_ESCAPE_RE.sub("", accumulated)
+                        full_match = _OAUTH_URL_PATTERN.search(clean_text)
+                        if full_match is not None:
+                            auth_url = full_match.group(1).strip()
+                            logger.info(
+                                "Captured complete OAuth URL from agy PTY",
+                                account_slug=account.slug,
+                                auth_url=auth_url,
+                            )
+                            return PendingOAuthSession(
+                                account=account,
+                                process=proc,
+                                pty_master_fd=master_fd,
+                                auth_url=auth_url,
+                            )
         except TimeoutError as exc:
             self._cleanup_oauth_pty(proc, master_fd)
             clean_out = _ANSI_ESCAPE_RE.sub("", accumulated).strip()

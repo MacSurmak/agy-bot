@@ -100,6 +100,7 @@ EN_LEXICON = UiLexicon(
     btn_cp_settings_menu="⚙️ DB Settings",
     btn_cp_create_invite="🎟 Generate Member Invite",
     btn_cp_reauth_account="🔑 Re-Authenticate {slug} ({email_label})",
+    btn_cp_open_oauth_url="🔗 Open Google Sign-In Page",
     btn_cp_register_new_acc="➕ Register New Account Profile",
     btn_cp_back_to_dashboard="⬅️ Back to Dashboard",
     btn_cp_default_acc_item="{mark}{slug} ({email_label})",
@@ -140,7 +141,7 @@ EN_LEXICON = UiLexicon(
     cp_oauth_start_failed="❌ Failed to start OAuth flow for `{slug}`:\n`{error}`",
     cp_oauth_instructions=(
         "🔐 **OAuth Login for `{slug}` ({email_label})**\n\n"
-        "1. Open this URL in your browser:\n{auth_url}\n\n"
+        "1. Click the button below or copy this URL into your browser:\n`{auth_url}`\n\n"
         "2. Sign into `{email_label}`, copy the single-use verification code, "
         "and **send it as your next message in this topic**."
     ),

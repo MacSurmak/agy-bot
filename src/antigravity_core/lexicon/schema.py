@@ -79,6 +79,7 @@ class UiLexicon:
     btn_cp_settings_menu: str
     btn_cp_create_invite: str
     btn_cp_reauth_account: str
+    btn_cp_open_oauth_url: str
     btn_cp_register_new_acc: str
     btn_cp_back_to_dashboard: str
     btn_cp_default_acc_item: str

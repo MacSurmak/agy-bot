@@ -34,6 +34,7 @@ from antigravity_core.presentation.keyboards import (
     build_account_auth_keyboard,
     build_control_panel_keyboard,
     build_default_account_picker_keyboard,
+    build_oauth_url_keyboard,
     build_settings_menu_keyboard,
     build_tasks_management_keyboard,
 )
@@ -255,7 +256,8 @@ class ControlPanelUI:
                     slug=account.slug,
                     email_label=account.email_label,
                     auth_url=pending.auth_url,
-                )
+                ),
+                buttons=build_oauth_url_keyboard(lex, pending.auth_url),
             )
             return
 
