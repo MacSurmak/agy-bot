@@ -172,6 +172,7 @@ class TopicWorker:
         seen_dirs: set[str] = {str(Path(self._signature.workspace_path).resolve())}
         all_extra_dirs = (
             *self._signature.additional_dirs,
+            str(Path.home().resolve()),
             str(self._cfg.paths.inbox_dir),
             str(self._cfg.paths.remotes_mount_dir),
         )

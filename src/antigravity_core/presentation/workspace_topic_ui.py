@@ -382,6 +382,14 @@ class WorkspaceTopicUI:
                             error=str(exc),
                         )
 
+        sync_lock = asyncio.Lock()
+
+        async def _bg_sync_pages(pages: list[tuple[str, list[object]]]) -> None:
+            if sync_lock.locked():
+                return
+            async with sync_lock:
+                await _sync_trace_pages(pages, is_final=False)
+
         async def _on_progress(progress: TurnProgressEvent) -> None:
             nonlocal last_edit_ts
             now = time.monotonic()
@@ -393,12 +401,12 @@ class WorkspaceTopicUI:
                 model_slug=topic.model_slug,
                 account_slug=account.slug,
             )
-            # Immediately sync when spilling over to a new message page; otherwise respect edit throttle
             is_new_page_spillover = len(pages) > len(trace_msgs)
             if not is_new_page_spillover and (now - last_edit_ts) < settings.tg_edit_throttle_sec:
                 return
             last_edit_ts = now
-            await _sync_trace_pages(pages, is_final=False)
+            # Fire-and-forget UI sync so Telegram FloodWaits never block agy stdout reading
+            asyncio.create_task(_bg_sync_pages(pages))
 
         try:
             result = await self._orchestrator.execute_topic_turn(
@@ -429,7 +437,8 @@ class WorkspaceTopicUI:
             account_slug=updated_account.slug,
         )
         if final_pages:
-            await _sync_trace_pages(final_pages, is_final=True)
+            async with sync_lock:
+                await _sync_trace_pages(final_pages, is_final=True)
             # Delete any trailing trace messages that only held the temporary live draft preview
             if len(trace_msgs) > len(final_pages):
                 extra_msgs = trace_msgs[len(final_pages) :]

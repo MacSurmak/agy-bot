@@ -35,9 +35,31 @@ _FORBIDDEN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
 )
 
+# Block recursive grep -r / grep -rn which hangs on huge/binary directories (/home, /var, docker, conda)
+_RECURSIVE_GREP_RE = re.compile(
+    r"\bgrep\s+(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b"
+)
+
+# Block local `cat <file>` (when command is not an ssh invocation and not reading /proc or /sys)
+_LOCAL_CAT_READ_RE = re.compile(
+    r"(?:^|[;&|]\s*)cat\s+(?!/proc/|/sys/|/etc/os-release)[^\s|;&><]+"
+)
+_SSH_COMMAND_RE = re.compile(r"(?:^|[;&|]\s*)ssh\b")
+
 _DENY_REASON = (
-    "Use native file tools (view_file, write_to_file, replace_file_content, "
+    "Use native file tools (read_file, view_file, write_to_file, replace_file_content, "
     "multi_replace_file_content) on local or /mnt/remotes/<host> paths."
+)
+
+_DENY_RECURSIVE_GREP_REASON = (
+    "Recursive 'grep -r / -rn' is forbidden because it hangs on binary/cache/virtual directories. "
+    "Locally, use native grep_search / find_by_name tools or 'rg --max-filesize 1M'. "
+    "Over SSH, always wrap searches with 'timeout 10 rg -n --max-filesize 1M' and exclude /var, /proc, /sys."
+)
+
+_DENY_LOCAL_CAT_REASON = (
+    "Reading local files via 'cat' in run_command is forbidden because it floods stdout. "
+    "Use your native read_file / view_file tool instead."
 )
 
 
@@ -56,6 +78,22 @@ def evaluate_command_line(command_line: str) -> dict[str, str]:
                 "decision": "deny",
                 "reason": _DENY_REASON,
             }
+
+    if _RECURSIVE_GREP_RE.search(normalized) is not None:
+        return {
+            "decision": "deny",
+            "reason": _DENY_RECURSIVE_GREP_REASON,
+        }
+
+    if (
+        _SSH_COMMAND_RE.search(normalized) is None
+        and _LOCAL_CAT_READ_RE.search(normalized) is not None
+    ):
+        return {
+            "decision": "deny",
+            "reason": _DENY_LOCAL_CAT_REASON,
+        }
+
     return {"decision": "allow"}
 
 
