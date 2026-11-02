@@ -118,12 +118,18 @@ class TelegramEventRouter:
                 logger.error("Failed to download incoming media", error=str(exc))
                 return
 
+        is_multi = (
+            message.fwd_from is not None
+            or message.grouped_id is not None
+            or len(downloaded_files) > 0
+        )
         await self._batcher.enqueue(
             topic_id=topic_id,
             message_id=message.id,
             sender_id=sender_id,
             text_segment=raw_text,
             downloaded_files=downloaded_files,
+            is_multi_part_or_forward=is_multi,
         )
 
     async def _on_callback_query(self, event: events.CallbackQuery.Event) -> None:

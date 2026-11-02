@@ -12,8 +12,7 @@ from telethon.errors import MessageNotModifiedError, RPCError
 from antigravity_core.application.scheduler_service import TemporalSchedulerService
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.config.static_config import StaticConfig
-from antigravity_core.domain.enums import EffortLevel, ExecutionMode, TopicKind, UserRole
-from antigravity_core.domain.exceptions import AgyProcessError
+from antigravity_core.domain.enums import ExecutionMode, TopicKind, UserRole
 from antigravity_core.infrastructure.agy_runtime.cli_inspector import AgyCliInspector
 from antigravity_core.infrastructure.agy_runtime.worker_pool import AgyWorkerPool
 from antigravity_core.infrastructure.crypto.fernet_vault import FernetVault
@@ -496,21 +495,38 @@ class ControlPanelUI:
     async def _render_settings_menu(
         self, event: events.CallbackQuery.Event, lex: UiLexicon
     ) -> None:
-        rows = await self._settings_repo.list_all_with_descriptions()
-        lines = [lex.cp_settings_menu_header]
-        keys: list[str] = []
-        for k, val, desc, _ in rows:
-            keys.append(k)
-            lines.append(
-                lex.cp_settings_menu_item.format(
-                    key=k, value_json=json.dumps(val), description=desc
-                )
-            )
-        await self._safe_edit_event(
-            event,
-            "\n".join(lines),
-            build_settings_menu_keyboard(lex, keys),
+        settings = await self._settings_repo.load_settings()
+        is_ru = settings.ui_language == "ru"
+        lang_display = "🇷🇺 Русский" if is_ru else "🇬🇧 English"
+        mode_display = (
+            ("⚡ Полный доступ (Запись)" if is_ru else "⚡ Full Write")
+            if settings.default_execution_mode == ExecutionMode.FULL_ACCESS
+            else ("🛡 Только чтение (Plan)" if is_ru else "🛡 Read-Only (Plan)")
         )
+
+        items = [
+            ("🌐 Язык интерфейса" if is_ru else "🌐 UI Language", lang_display),
+            ("🧠 Модель по умолчанию" if is_ru else "🧠 Default Model", settings.default_model),
+            ("🛡 Режим прав по умолчанию" if is_ru else "🛡 Default Permissions", mode_display),
+        ]
+        lines = [lex.cp_settings_menu_header]
+        for label, val in items:
+            lines.append(lex.cp_settings_menu_item.format(key="", value_json=val, description=label))
+
+        btn_labels = [
+            ("🌐 Язык (Language)", "ui_language"),
+            ("🧠 Модель (Model)", "default_model"),
+            ("🛡 Режим прав (Permissions)", "default_execution_mode"),
+        ]
+        from telethon.tl.custom import Button
+
+        rows: list[list[Button]] = [
+            [Button.inline(lbl, f"cp:edit_set:{k}".encode("ascii"))]
+            for lbl, k in btn_labels
+        ]
+        rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
+
+        await self._safe_edit_event(event, "\n".join(lines), rows)
 
     async def _open_setting_selector(
         self, event: events.CallbackQuery.Event, lex: UiLexicon, key: str
@@ -518,11 +534,11 @@ class ControlPanelUI:
         settings = await self._settings_repo.load_settings()
 
         if key == "ui_language":
-            lang_labels = {"ru": "🇷🇺 Русский (ru)", "en": "🇬🇧 English (en)"}
+            lang_labels = {"ru": "🇷🇺 Русский", "en": "🇬🇧 English"}
             options = [(lang_labels.get(code, code), code) for code in SUPPORTED_LANGUAGES]
             await self._safe_edit_event(
                 event,
-                f"🌐 **{key}**",
+                "🌐 **Выберите язык интерфейса / Select UI Language:**",
                 build_setting_options_keyboard(lex, key, options, settings.ui_language),
             )
             return
@@ -539,32 +555,26 @@ class ControlPanelUI:
             options = [(m, m) for m in models[: self._cfg.limits.models_menu_display_limit]]
             await self._safe_edit_event(
                 event,
-                f"🧠 **{key}**",
+                lex.ws_select_model_prompt,
                 build_setting_options_keyboard(lex, key, options, settings.default_model),
             )
             return
 
-        if key == "default_effort":
-            options = [
-                (lvl.value, lvl.value)
-                for lvl in (EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH, EffortLevel.MAX)
-            ]
-            current_eff = settings.default_effort.value if settings.default_effort else ""
-            await self._safe_edit_event(
-                event,
-                f"💭 **{key}**",
-                build_setting_options_keyboard(lex, key, options, current_eff),
-            )
-            return
-
         if key == "default_execution_mode":
+            is_ru = settings.ui_language == "ru"
             options = [
-                ("⚡ FULL_ACCESS", ExecutionMode.FULL_ACCESS.value),
-                ("🛡 READ_ONLY (Plan)", ExecutionMode.READ_ONLY.value),
+                (
+                    "⚡ Полный доступ (Чтение и Запись)" if is_ru else "⚡ Full Access (Read & Write)",
+                    ExecutionMode.FULL_ACCESS.value,
+                ),
+                (
+                    "🛡 Только чтение (Режим Plan)" if is_ru else "🛡 Read-Only (Plan Mode)",
+                    ExecutionMode.READ_ONLY.value,
+                ),
             ]
             await self._safe_edit_event(
                 event,
-                f"🛡 **{key}**",
+                "🛡 **Режим прав по умолчанию / Default Permissions:**",
                 build_setting_options_keyboard(
                     lex, key, options, settings.default_execution_mode.value
                 ),

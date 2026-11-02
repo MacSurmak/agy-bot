@@ -64,9 +64,8 @@ class KeyringProfileManager:
         async with self._lock:
             existing = self._runtimes.get(account.id)
             socket_path = Path(account.dbus_socket_path)
-            if existing is not None and socket_path.exists():
-                if await self._verify_secret_service(existing.env):
-                    return dict(existing.env)
+            if existing is not None and await self._is_unix_socket_alive(socket_path):
+                return dict(existing.env)
 
             return await self._initialize_account_bus_locked(account)
 

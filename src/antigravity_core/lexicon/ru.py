@@ -86,10 +86,8 @@ RU_LEXICON = UiLexicon(
     dashboard_tasks_header="\n⏰ **Активные задачи планировщика:** `{count}`",
     dashboard_task_item="  • `{short_id}` [Топик `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
     dashboard_settings_summary=(
-        "\n⚙️ **Динамические настройки (PostgreSQL 18):**\n"
-        "  • Язык: `{ui_language}` | Модель: `{default_model}` (Effort: `{default_effort}`)\n"
-        "  • Режим: `{default_execution_mode}` | TTL воркера: `{worker_idle_ttl_sec}с`\n"
-        "  • Дебаунс: `{debounce_window_sec}с` | Авто-свитч квоты: `< {quota_auto_switch_threshold_pct}%`"
+        "\n⚙️ **Настройки по умолчанию:**\n"
+        "  • Язык: `{ui_language}` | Модель: `{default_model}` | Режим: `{default_execution_mode}`"
     ),
     # Workspace directory picker labels
     workspace_dir_root_label="📁 Корень рабочих папок",
@@ -103,7 +101,7 @@ RU_LEXICON = UiLexicon(
     btn_cp_switch_default_acc="🔀 Сменить основной аккаунт",
     btn_cp_remount_hosts="🔌 Перемонтировать SSHFS",
     btn_cp_tasks_menu="⏰ Расписания и Таймеры",
-    btn_cp_settings_menu="⚙️ Настройки БД",
+    btn_cp_settings_menu="⚙️ Настройки",
     btn_cp_create_invite="🎟 Создать инвайт-токен",
     btn_cp_reauth_account="🔑 Авторизовать {slug} ({email_label})",
     btn_cp_open_oauth_url="🔗 Открыть страницу входа Google",
@@ -116,7 +114,7 @@ RU_LEXICON = UiLexicon(
     btn_ws_past_sessions="🕰 Прошлые сессии",
     btn_ws_mode_full_to_plan="🛡 Режим: Запись разрешена ⇄ Plan",
     btn_ws_mode_plan_to_full="⚡ Режим: Только чтение (Plan) ⇄ Запись",
-    btn_ws_models="🧠 Модель / Effort",
+    btn_ws_models="🧠 Сменить модель",
     btn_ws_workspace="📂 Сменить папку",
     btn_ws_switch_account="👤 Сменить аккаунт",
     btn_ws_archive_topic="🗄 В Архив",
@@ -163,8 +161,8 @@ RU_LEXICON = UiLexicon(
     cp_tasks_menu_prompt="⏰ **Активные задачи планировщика ({count}):**\nНажмите на задачу для отмены:",
     cp_tasks_menu_updated="⏰ **Активные задачи планировщика ({count}):**",
     cp_toast_task_canceled="Задача отменена.",
-    cp_settings_menu_header="⚙️ **Динамические настройки в PostgreSQL 18:**\n",
-    cp_settings_menu_item="• `{key}` = `{value_json}`\n  _{description}_",
+    cp_settings_menu_header="⚙️ **Настройки по умолчанию для новых топиков:**\n",
+    cp_settings_menu_item="• **{description}:** `{value_json}`",
     cp_edit_setting_prompt=(
         "✏️ **Изменение параметра `{key}`**\n"
         "Отправьте новое значение (например: `\"ru\"`, `\"en\"`, `\"gemini-4-argon-high\"`, `900`, `1.8`)."
@@ -216,7 +214,7 @@ RU_LEXICON = UiLexicon(
     ws_toast_topic_archived="Топик отправлен в архив, воркер выгружен.",
     ws_select_past_session_prompt="🕰 **Выберите прошлую сессию для возврата:**",
     ws_session_resumed_msg="✅ Возобновлена сессия `{conversation_id}`.",
-    ws_select_model_prompt="🧠 **Выберите модель или глубину рассуждений (Effort):**",
+    ws_select_model_prompt="🧠 **Выберите модель для топика:**",
     ws_model_updated_msg="✅ Модель изменена на `{model_slug}`.",
     ws_model_unknown_msg=(
         "❌ Модель `{model_slug}` не найдена в `agy models`.\n"

@@ -233,11 +233,18 @@ class TelethonForumGateway:
         )
 
     async def close_and_rename_forum_topic(self, topic_id: int, new_title: str) -> None:
+        # Telegram MTProto requires renaming and closing in two separate requests (TOPIC_CLOSE_SEPARATELY)
         await self._client(
             EditForumTopicRequest(
                 peer=self._cfg.telegram.forum_chat_id,
                 topic_id=topic_id,
                 title=new_title,
+            )
+        )
+        await self._client(
+            EditForumTopicRequest(
+                peer=self._cfg.telegram.forum_chat_id,
+                topic_id=topic_id,
                 closed=True,
             )
         )

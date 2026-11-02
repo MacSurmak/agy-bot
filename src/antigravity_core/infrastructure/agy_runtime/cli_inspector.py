@@ -34,15 +34,25 @@ class AgyCliInspector:
     ) -> None:
         self._cfg = static_config
         self._keyring_mgr = keyring_mgr
+        self._models_cache: dict[int, list[str]] = {}
 
-    async def list_available_models(self, account: GoogleAccount) -> list[str]:
+    async def list_available_models(
+        self, account: GoogleAccount, force_refresh: bool = False
+    ) -> list[str]:
+        if not force_refresh and account.id in self._models_cache:
+            return list(self._models_cache[account.id])
+
         env = await self._keyring_mgr.ensure_account_bus(account)
+        workspace_cwd = str(self._cfg.paths.workspaces_root_dir)
+        self._cfg.paths.workspaces_root_dir.mkdir(parents=True, exist_ok=True)
+
         proc = await asyncio.create_subprocess_exec(
             str(self._cfg.paths.agy_binary_path),
             "models",
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=workspace_cwd,
             env=env,
         )
         try:
@@ -61,7 +71,9 @@ class AgyCliInspector:
             )
 
         raw_output = stdout_bytes.decode("utf-8", errors="replace").strip()
-        return self._parse_models_output(raw_output)
+        parsed = self._parse_models_output(raw_output)
+        self._models_cache[account.id] = parsed
+        return list(parsed)
 
     @staticmethod
     def _parse_models_output(raw_output: str) -> list[str]:
@@ -124,19 +136,24 @@ class AgyCliInspector:
     async def fetch_account_quota(self, account: GoogleAccount) -> dict[str, Any]:
         # Reference #1 Section 3: /quota must be executed as a standalone `agy -p /quota` invocation
         env = await self._keyring_mgr.ensure_account_bus(account)
+        workspace_cwd = str(self._cfg.paths.workspaces_root_dir)
+        self._cfg.paths.workspaces_root_dir.mkdir(parents=True, exist_ok=True)
+
         proc = await asyncio.create_subprocess_exec(
             str(self._cfg.paths.agy_binary_path),
             "-p",
             "/quota",
+            "--dangerously-skip-permissions",
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=workspace_cwd,
             env=env,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(),
-                timeout=self._cfg.runtime.command_exec_timeout_sec,
+                timeout=15.0,
             )
         except TimeoutError as exc:
             proc.kill()

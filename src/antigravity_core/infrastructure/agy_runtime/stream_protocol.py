@@ -55,6 +55,7 @@ def parse_stream_json_line(
     prev_cumulative_tokens: int,
     prev_cumulative_duration_sec: float,
     target_hint_max_chars: int,
+    fallback_conversation_id: UUID | None = None,
 ) -> ParsedInitEvent | ParsedStepUpdateEvent | TurnResult:
     stripped = raw_line.strip()
     if not stripped:
@@ -72,12 +73,17 @@ def parse_stream_json_line(
     if event_kind == "init":
         return _parse_init_event(data)
     if event_kind == "step_update":
-        return _parse_step_update_event(data, target_hint_max_chars=target_hint_max_chars)
+        return _parse_step_update_event(
+            data,
+            target_hint_max_chars=target_hint_max_chars,
+            fallback_conversation_id=fallback_conversation_id,
+        )
     if event_kind == "result":
         return _parse_result_event(
             data,
             prev_cumulative_tokens=prev_cumulative_tokens,
             prev_cumulative_duration_sec=prev_cumulative_duration_sec,
+            fallback_conversation_id=fallback_conversation_id,
         )
 
     raise AgyProcessError(f"Unknown event type in agy stream-json output: '{event_kind}'.")
@@ -114,13 +120,22 @@ def _parse_init_event(data: dict[str, Any]) -> ParsedInitEvent:
 
 
 def _parse_step_update_event(
-    data: dict[str, Any], target_hint_max_chars: int
+    data: dict[str, Any],
+    target_hint_max_chars: int,
+    fallback_conversation_id: UUID | None = None,
 ) -> ParsedStepUpdateEvent:
     body = data.get("step_update")
     if not isinstance(body, dict):
         raise AgyProcessError("Missing 'step_update' object inside step_update event.")
 
-    conv_id = _parse_uuid(body.get("conversation_id"), "step_update event")
+    raw_conv = body.get("conversation_id") or data.get("conversation_id")
+    conv_id = (
+        _parse_uuid(raw_conv, "step_update event")
+        if raw_conv
+        else fallback_conversation_id
+    )
+    if conv_id is None:
+        raise AgyProcessError("Missing conversation_id in step_update event.")
     step_index = int(body.get("step_index", 0))
     raw_state = str(body.get("state", "ACTIVE")).upper()
     state = StepState.DONE if raw_state == "DONE" else StepState.ACTIVE
@@ -202,12 +217,12 @@ def _parse_result_event(
     data: dict[str, Any],
     prev_cumulative_tokens: int,
     prev_cumulative_duration_sec: float,
+    fallback_conversation_id: UUID | None = None,
 ) -> TurnResult:
     body = data.get("result")
     if not isinstance(body, dict):
         raise AgyProcessError("Missing 'result' object inside result event.")
 
-    conv_id = _parse_uuid(body.get("conversation_id"), "result event")
     raw_status = str(body.get("status", "ERROR")).upper()
     try:
         status = TurnStatus(raw_status)
@@ -215,8 +230,17 @@ def _parse_result_event(
         status = TurnStatus.ERROR
 
     response_text = str(body.get("response", ""))
-    error_val = body.get("error")
+    error_val = body.get("error") or data.get("error")
     error_message = str(error_val) if error_val is not None else None
+
+    raw_conv = body.get("conversation_id") or data.get("conversation_id")
+    if isinstance(raw_conv, str) and raw_conv.strip():
+        conv_id = _parse_uuid(raw_conv, "result event")
+    elif fallback_conversation_id is not None:
+        conv_id = fallback_conversation_id
+    else:
+        detail = error_message or response_text or "agy returned empty conversation_id"
+        raise AgyProcessError(f"agy turn failed before session initialization: {detail}")
 
     cum_duration = float(body.get("duration_seconds", 0.0))
     cum_turns = int(body.get("num_turns", 1))

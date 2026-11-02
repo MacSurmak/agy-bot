@@ -229,14 +229,6 @@ def build_model_picker_keyboard(
                 )
             ]
         )
-    effort_row = [
-        Button.inline(
-            lex.btn_ws_effort_item.format(effort=lvl.value),
-            f"ws:set_effort:{topic_id}:{lvl.value}".encode("ascii"),
-        )
-        for lvl in (EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH, EffortLevel.MAX)
-    ]
-    rows.append(effort_row)
     rows.append([Button.inline(lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii"))])
     return rows
 

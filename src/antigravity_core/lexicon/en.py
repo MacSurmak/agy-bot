@@ -80,10 +80,8 @@ EN_LEXICON = UiLexicon(
     dashboard_tasks_header="\n⏰ **Active Scheduled Tasks:** `{count}`",
     dashboard_task_item="  • `{short_id}` [Topic `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
     dashboard_settings_summary=(
-        "\n⚙️ **Dynamic Defaults (PostgreSQL 18):**\n"
-        "  • Language: `{ui_language}` | Model: `{default_model}` (Effort: `{default_effort}`)\n"
-        "  • Mode: `{default_execution_mode}` | TTL: `{worker_idle_ttl_sec}s`\n"
-        "  • Debounce: `{debounce_window_sec}s` | Auto-Switch Quota: `< {quota_auto_switch_threshold_pct}%`"
+        "\n⚙️ **Default Settings:**\n"
+        "  • Language: `{ui_language}` | Model: `{default_model}` | Mode: `{default_execution_mode}`"
     ),
     # Workspace directory picker labels
     workspace_dir_root_label="📁 Root Workspaces",
@@ -97,7 +95,7 @@ EN_LEXICON = UiLexicon(
     btn_cp_switch_default_acc="🔀 Switch Default Account",
     btn_cp_remount_hosts="🔌 Remount SSHFS Hosts",
     btn_cp_tasks_menu="⏰ Scheduled Tasks",
-    btn_cp_settings_menu="⚙️ DB Settings",
+    btn_cp_settings_menu="⚙️ Settings",
     btn_cp_create_invite="🎟 Generate Member Invite",
     btn_cp_reauth_account="🔑 Re-Authenticate {slug} ({email_label})",
     btn_cp_open_oauth_url="🔗 Open Google Sign-In Page",
@@ -110,7 +108,7 @@ EN_LEXICON = UiLexicon(
     btn_ws_past_sessions="🕰 Past Sessions",
     btn_ws_mode_full_to_plan="🛡 Mode: Full Write ⇄ Plan",
     btn_ws_mode_plan_to_full="⚡ Mode: Plan (Read-Only) ⇄ Write",
-    btn_ws_models="🧠 Model / Effort",
+    btn_ws_models="🧠 Switch Model",
     btn_ws_workspace="📂 Workspace",
     btn_ws_switch_account="👤 Switch Account",
     btn_ws_archive_topic="🗄 Archive Topic",
@@ -157,8 +155,8 @@ EN_LEXICON = UiLexicon(
     cp_tasks_menu_prompt="⏰ **Active Scheduled Tasks ({count}):**\nClick a task below to cancel it:",
     cp_tasks_menu_updated="⏰ **Active Scheduled Tasks ({count}):**",
     cp_toast_task_canceled="Task canceled.",
-    cp_settings_menu_header="⚙️ **PostgreSQL Dynamic Settings:**\n",
-    cp_settings_menu_item="• `{key}` = `{value_json}`\n  _{description}_",
+    cp_settings_menu_header="⚙️ **Default Settings for New Topics:**\n",
+    cp_settings_menu_item="• **{description}:** `{value_json}`",
     cp_edit_setting_prompt=(
         "✏️ **Update Setting `{key}`**\n"
         "Reply with the new JSON value (e.g. `\"ru\"`, `\"en\"`, `\"gemini-4-argon-high\"`, `900`, `1.8`)."
@@ -210,7 +208,7 @@ EN_LEXICON = UiLexicon(
     ws_toast_topic_archived="Topic archived and worker stopped.",
     ws_select_past_session_prompt="🕰 **Select a Past Session to Resume:**",
     ws_session_resumed_msg="✅ Resumed session `{conversation_id}`.",
-    ws_select_model_prompt="🧠 **Select Model or Thinking Effort:**",
+    ws_select_model_prompt="🧠 **Select Model for Topic:**",
     ws_model_updated_msg="✅ Model updated to `{model_slug}`.",
     ws_model_unknown_msg=(
         "❌ Model `{model_slug}` is not found in `agy models`.\n"

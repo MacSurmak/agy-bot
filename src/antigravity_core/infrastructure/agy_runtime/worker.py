@@ -156,11 +156,8 @@ class TopicWorker:
             str(log_file),
         ]
 
-        if self._signature.effort_level is not None and is_effort_supported_for_model(
-            self._signature.model_slug,
-            self._cfg.runtime.effort_supported_prefixes,
-        ):
-            cmd.extend(["--effort", self._signature.effort_level.value])
+        # Note: agy model slugs already encode reasoning effort (e.g. gemini-3.8-flash-low/medium/high);
+        # passing a separate --effort flag causes mismatch errors when switching model variants.
 
         # Reference #1 Section 5: Deterministic execution profiles
         if self._signature.execution_mode == ExecutionMode.FULL_ACCESS:
@@ -262,6 +259,7 @@ class TopicWorker:
                         prev_cumulative_tokens=self._cumulative_tokens,
                         prev_cumulative_duration_sec=self._cumulative_duration_sec,
                         target_hint_max_chars=self._cfg.limits.tool_target_hint_max_chars,
+                        fallback_conversation_id=self._conversation_id,
                     )
 
                     if isinstance(event, ParsedInitEvent):

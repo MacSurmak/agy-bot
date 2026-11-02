@@ -45,6 +45,7 @@ class MessageBatcher:
         sender_id: int,
         text_segment: str,
         downloaded_files: list[str],
+        is_multi_part_or_forward: bool = False,
     ) -> None:
         settings = await self._settings_repo.load_settings()
         loop = asyncio.get_running_loop()
@@ -81,7 +82,10 @@ class MessageBatcher:
                 self._buffers.pop(topic_id, None)
                 flush_immediately_buffer = buf
             else:
-                wait_sec = min(settings.debounce_window_sec, remaining_max)
+                target_debounce = (
+                    settings.debounce_window_sec if is_multi_part_or_forward else 0.12
+                )
+                wait_sec = min(target_debounce, remaining_max)
                 buf.debounce_task = asyncio.create_task(
                     self._delayed_flush(topic_id, wait_sec)
                 )

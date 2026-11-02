@@ -41,11 +41,7 @@ def render_topic_header_card(
     else:
         session_str = lex.topic_card_session_clean
 
-    effort_str = (
-        lex.topic_card_effort_suffix.format(effort=topic.effort_level.value)
-        if topic.effort_level
-        else ""
-    )
+    effort_str = ""
     mode_str = (
         lex.topic_card_mode_full_access
         if topic.execution_mode == ExecutionMode.FULL_ACCESS
