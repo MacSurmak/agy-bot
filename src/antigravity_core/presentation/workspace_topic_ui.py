@@ -29,6 +29,7 @@ from antigravity_core.presentation.formatters import (
     build_final_execution_trace_pages,
     build_live_progress_pages,
     list_workspace_directories,
+    render_Formatted_response_chunks,
     render_new_session_divider,
     render_topic_header_card,
     render_turn_footer,
@@ -422,7 +423,7 @@ class WorkspaceTopicUI:
             except RPCError as exc:
                 logger.debug("Could not delete empty status message", error=str(exc))
 
-        footer = render_turn_footer(
+        footer_bar = render_turn_footer(
             lex=lex,
             limits=self._cfg.limits,
             result=result,
@@ -434,14 +435,18 @@ class WorkspaceTopicUI:
             if result.response_text.strip()
             else lex.ws_empty_response_fallback.format(status=result.status.value)
         )
-        full_output = body_text + footer
 
-        chunks = split_message_chunks(full_output, settings.tg_max_message_chars)
-        for idx, chunk in enumerate(chunks):
-            is_last = idx == len(chunks) - 1
+        formatted_chunks = render_Formatted_response_chunks(
+            body_markdown=body_text,
+            footer_bar_text=footer_bar,
+            max_chars=settings.tg_max_message_chars,
+        )
+        for idx, (chunk_text, chunk_entities) in enumerate(formatted_chunks):
+            is_last = idx == len(formatted_chunks) - 1
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=chunk,
+                message=chunk_text,
+                formatting_entities=chunk_entities,
                 reply_to=reply_to_msg_id if idx == 0 else topic_id,
                 buttons=build_turn_response_keyboard(lex, updated_topic) if is_last else None,
             )

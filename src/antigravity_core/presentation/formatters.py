@@ -1,10 +1,13 @@
 from pathlib import Path
 import re
 
-from telethon.helpers import add_surrogate
+from bisect import bisect_left
+from telethon.extensions import markdown
+from telethon.helpers import add_surrogate, del_surrogate
 from telethon.tl.types import (
     MessageEntityBlockquote,
     MessageEntityBold,
+    MessageEntityPre,
     TypeMessageEntity,
 )
 
@@ -29,6 +32,17 @@ _BINARY_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]+")
 _MAX_SINGLE_BLOCK_CHARS: int = 3100
 _MAX_PAGE_UTF16_LEN: int = 3750
 _MAX_BLOCKS_PER_PAGE: int = 25
+_WIDE_BUBBLE_TARGET_COLS: int = 92
+
+_HEADING_RE = re.compile(r"^(\s*)(#{1,6})\s+(.+?)\s*$")
+_BULLET_RE = re.compile(r"^(\s*)[*-]\s+(.+)$")
+_HRULE_RE = re.compile(r"^\s*(?:---+|\*\*\*+|___+)\s*$")
+_QUOTE_LINE_RE = re.compile(r"^\s*>\s?(.*)$")
+_SNAKE_CASE_UNDERSCORE_RE = re.compile(r"(?<=[a-zA-Z0-9а-яА-ЯёЁ])_(?=[a-zA-Z0-9а-яА-ЯёЁ])")
+
+_MD_QUOTE_START: str = "\x02"
+_MD_QUOTE_END: str = "\x03"
+_UNDERSCORE_GUARD: str = "\x04"
 
 
 def _clean_binary_noise(raw: str) -> str:
@@ -352,26 +366,228 @@ def render_turn_footer(
     cum_k = result.cumulative_usage.total_tokens / 1000.0
     cache_k = result.cumulative_usage.cache_read_tokens / 1000.0
 
-    footer = lex.turn_footer_stats.format(
-        duration=result.turn_delta_duration_sec,
-        tok_k=tok_k,
-        cum_k=cum_k,
-        cache_k=cache_k,
-        model_slug=model_slug,
-        account_slug=account_slug,
+    stats_line = (
+        f"⏱ {result.turn_delta_duration_sec:.1f}с │ "
+        f"📊 +{tok_k:.1f}k ток (сессия: {cum_k:.1f}k, кэш: {cache_k:.1f}k) │ "
+        f"🧠 {model_slug} │ 👤 {account_slug}"
     )
+    lines = [stats_line.ljust(_WIDE_BUBBLE_TARGET_COLS)]
+
     if result.account_switched_from and result.account_switched_to:
-        footer += lex.turn_footer_failover.format(
-            from_slug=result.account_switched_from,
-            to_slug=result.account_switched_to,
+        failover_clean = (
+            lex.turn_footer_failover.format(
+                from_slug=result.account_switched_from,
+                to_slug=result.account_switched_to,
+            )
+            .replace("*", "")
+            .replace("`", "")
+            .strip()
         )
+        lines.append(failover_clean)
+
     if result.status != TurnStatus.SUCCESS and result.error_message:
         err_lim = limits.error_summary_max_chars
-        footer += lex.turn_footer_error_status.format(
-            status=result.status.value,
-            error=result.error_message[:err_lim],
+        err_clean = (
+            lex.turn_footer_error_status.format(
+                status=result.status.value,
+                error=result.error_message[:err_lim],
+            )
+            .replace("*", "")
+            .replace("`", "")
+            .strip()
         )
-    return footer
+        lines.append(err_clean)
+
+    return "\n".join(lines)
+
+
+def _preprocess_gfm_markdown(raw_md: str) -> str:
+    """Converts LLM CommonMark/GFM (headings, bullets, horizontal rules, blockquotes) into Telethon-compatible Markdown."""
+    lines = raw_md.splitlines()
+    out_lines: list[str] = []
+    in_code_fence = False
+    quote_buffer: list[str] = []
+
+    def _flush_quote_buffer() -> None:
+        if not quote_buffer:
+            return
+        joined_q = "\n".join(quote_buffer)
+        out_lines.append(f"{_MD_QUOTE_START}{joined_q}{_MD_QUOTE_END}")
+        quote_buffer.clear()
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            _flush_quote_buffer()
+            in_code_fence = not in_code_fence
+            out_lines.append(line)
+            continue
+
+        if in_code_fence:
+            out_lines.append(line)
+            continue
+
+        q_match = _QUOTE_LINE_RE.match(line)
+        if q_match is not None:
+            quote_buffer.append(q_match.group(1))
+            continue
+        _flush_quote_buffer()
+
+        if _HRULE_RE.match(line):
+            out_lines.append("─" * 38)
+            continue
+
+        h_match = _HEADING_RE.match(line)
+        if h_match is not None:
+            level = len(h_match.group(2))
+            title = h_match.group(3).strip().replace("**", "")
+            prefix = "📌" if level <= 2 else "▸"
+            out_lines.append(f"{prefix} **{title}**")
+            continue
+
+        b_match = _BULLET_RE.match(line)
+        if b_match is not None:
+            indent = b_match.group(1)
+            content = b_match.group(2)
+            bullet = "◦" if len(indent) >= 2 else "•"
+            line = f"{indent}{bullet} {content}"
+
+        # Protect snake_case underscores outside inline code spans
+        parts = line.split("`")
+        for idx in range(0, len(parts), 2):
+            parts[idx] = _SNAKE_CASE_UNDERSCORE_RE.sub(_UNDERSCORE_GUARD, parts[idx])
+        out_lines.append("`".join(parts))
+
+    _flush_quote_buffer()
+    return "\n".join(out_lines)
+
+
+def split_markdown_preserving_blocks(text: str, max_chars: int) -> list[str]:
+    """Splits long Markdown text across chunks without breaking fenced code blocks."""
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks: list[str] = []
+    current_lines: list[str] = []
+    current_len = 0
+    in_fence = False
+    fence_header = "```"
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        line_len = len(line) + 1
+
+        if current_len + line_len > max_chars and current_lines:
+            if in_fence:
+                current_lines.append("```")
+                chunks.append("\n".join(current_lines).strip())
+                current_lines = [fence_header, line]
+                current_len = len(fence_header) + 1 + line_len
+            else:
+                chunks.append("\n".join(current_lines).strip())
+                current_lines = [line]
+                current_len = line_len
+        else:
+            current_lines.append(line)
+            current_len += line_len
+
+        if stripped.startswith("```"):
+            if not in_fence:
+                in_fence = True
+                fence_header = stripped
+            else:
+                in_fence = False
+                fence_header = "```"
+
+    if current_lines:
+        if in_fence:
+            current_lines.append("```")
+        chunks.append("\n".join(current_lines).strip())
+
+    return [c for c in chunks if c]
+
+
+def render_Formatted_response_chunks(
+    body_markdown: str,
+    footer_bar_text: str,
+    max_chars: int,
+) -> list[tuple[str, list[TypeMessageEntity]]]:
+    """Renders LLM Markdown response into formatted Telegram chunks with a full-width preformatted status bar."""
+    raw_chunks = split_markdown_preserving_blocks(body_markdown, max_chars - 220)
+    total_chunks = len(raw_chunks)
+    rendered_pages: list[tuple[str, list[TypeMessageEntity]]] = []
+
+    for idx, raw_chunk in enumerate(raw_chunks, start=1):
+        preprocessed = _preprocess_gfm_markdown(raw_chunk)
+        parsed_text, raw_entities = markdown.parse(preprocessed)
+        s_text = add_surrogate(parsed_text)
+
+        marker_positions: list[int] = [
+            i for i, ch in enumerate(s_text) if ch in (_MD_QUOTE_START, _MD_QUOTE_END)
+        ]
+
+        def _proj(pos: int, markers: list[int] = marker_positions) -> int:
+            return pos - bisect_left(markers, pos)
+
+        quote_spans: list[tuple[int, int]] = []
+        open_q: int | None = None
+        for i, ch in enumerate(s_text):
+            if ch == _MD_QUOTE_START and open_q is None:
+                open_q = i + 1
+            elif ch == _MD_QUOTE_END and open_q is not None:
+                quote_spans.append((open_q, i))
+                open_q = None
+
+        entities: list[TypeMessageEntity] = []
+        for ent in raw_entities:
+            s_orig = ent.offset
+            e_orig = ent.offset + ent.length
+            s_new = _proj(s_orig)
+            e_new = _proj(e_orig)
+            if e_new > s_new:
+                ent.offset = s_new
+                ent.length = e_new - s_new
+                entities.append(ent)
+
+        for qs, qe in quote_spans:
+            cs = _proj(qs)
+            ce = _proj(qe)
+            if ce > cs:
+                entities.append(
+                    MessageEntityBlockquote(
+                        offset=cs,
+                        length=ce - cs,
+                        collapsed=(ce - cs > 260),
+                    )
+                )
+
+        clean_s = (
+            s_text.replace(_MD_QUOTE_START, "")
+            .replace(_MD_QUOTE_END, "")
+            .replace(_UNDERSCORE_GUARD, "_")
+        )
+        clean_body = del_surrogate(clean_s)
+
+        # Attach wide preformatted bar at the bottom of every chunk so Telegram Desktop expands bubble to full width
+        if idx < total_chunks:
+            bar_text = f"📄 Часть {idx}/{total_chunks}".ljust(_WIDE_BUBBLE_TARGET_COLS)
+        else:
+            bar_text = footer_bar_text
+
+        sep = "\n\n"
+        bar_offset = _utf16_len(clean_body) + _utf16_len(sep)
+        bar_len = _utf16_len(bar_text)
+        entities.append(
+            MessageEntityPre(
+                offset=bar_offset,
+                length=bar_len,
+                language="",
+            )
+        )
+        full_chunk_text = f"{clean_body}{sep}{bar_text}"
+        rendered_pages.append((full_chunk_text, entities))
+
+    return rendered_pages
 
 
 def render_control_panel_dashboard(
