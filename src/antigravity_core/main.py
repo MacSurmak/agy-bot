@@ -66,12 +66,14 @@ def configure_structlog(log_file_path: Path) -> None:
     )
 
     console_formatter = structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=shared_processors,
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             structlog.dev.ConsoleRenderer(colors=True),
         ],
     )
     file_formatter = structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=shared_processors,
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             structlog.processors.JSONRenderer(),
@@ -81,6 +83,13 @@ def configure_structlog(log_file_path: Path) -> None:
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
     root_logger.handlers.clear()
+
+    # Suppress noisy low-level MTProto chunk/update logs while keeping flood-wait warnings formatted
+    logging.getLogger("telethon.client.updates").setLevel(logging.WARNING)
+    logging.getLogger("telethon.client.uploads").setLevel(logging.WARNING)
+    logging.getLogger("telethon.client.downloads").setLevel(logging.WARNING)
+    logging.getLogger("telethon.network").setLevel(logging.WARNING)
+    logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
 
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setFormatter(console_formatter)

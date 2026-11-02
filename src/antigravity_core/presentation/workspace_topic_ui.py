@@ -285,8 +285,18 @@ class WorkspaceTopicUI:
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
 
+        logger.info(
+            "Starting user turn in topic",
+            topic_id=topic_id,
+            model=topic.model_slug,
+            account=account.slug,
+            workspace=topic.workspace_path,
+            prompt_preview=prompt[:100].replace("\n", " "),
+        )
+
         start_ts = time.monotonic()
         last_edit_ts = start_ts
+        last_clean_live = ""
 
         status_msg = await self._client.send_message(
             entity=self._cfg.telegram.forum_chat_id,
@@ -298,11 +308,10 @@ class WorkspaceTopicUI:
         )
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
-            nonlocal last_edit_ts
+            nonlocal last_edit_ts, last_clean_live
             now = time.monotonic()
             if (now - last_edit_ts) < settings.tg_edit_throttle_sec:
                 return
-            last_edit_ts = now
             live_raw = render_live_progress(
                 lex=lex,
                 limits=self._cfg.limits,
@@ -311,10 +320,13 @@ class WorkspaceTopicUI:
                 model_slug=topic.model_slug,
                 account_slug=account.slug,
             )
-            # Keep live preview within single message bounds; full non-truncated trace is finalized on completion
             if len(live_raw) > settings.tg_max_message_chars:
                 live_raw = live_raw[-settings.tg_max_message_chars :]
             clean_live, live_entities = parse_markdown_with_collapsible_quotes(live_raw)
+            if clean_live == last_clean_live:
+                return
+            last_edit_ts = now
+            last_clean_live = clean_live
             try:
                 await self._client.edit_message(
                     entity=self._cfg.telegram.forum_chat_id,
@@ -424,8 +436,14 @@ class WorkspaceTopicUI:
         except AgyProcessError:
             return
         if summary is not None and summary.title.strip() and summary.title != "Untitled Session":
+            new_title = summary.title.strip()
             try:
-                await self._lifecycle.rename_topic(topic.topic_id, summary.title.strip())
+                await self._lifecycle.rename_topic(topic.topic_id, new_title)
+                logger.info(
+                    "Auto-renamed topic title from agy conversation summary",
+                    topic_id=topic.topic_id,
+                    new_title=new_title,
+                )
             except RPCError as exc:
                 logger.debug("Could not auto-rename forum topic", topic_id=topic.topic_id, error=str(exc))
 

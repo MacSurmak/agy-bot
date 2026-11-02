@@ -82,10 +82,17 @@ class CoreIpcServer:
 
             method = str(payload.get("method", ""))
             topic_id = int(payload.get("topic_id", 0))
+            account_slug = str(payload.get("account_slug", ""))
             params = payload.get("params")
             if not isinstance(params, dict) or topic_id <= 0:
                 raise ValueError("Invalid IPC request parameters or topic_id.")
 
+            logger.info(
+                "Executing MCP tool call via IPC",
+                method=method,
+                topic_id=topic_id,
+                account_slug=account_slug,
+            )
             result = await self._dispatch(method=method, topic_id=topic_id, params=params)
             response = {"ok": True, "result": result}
         except Exception as exc:

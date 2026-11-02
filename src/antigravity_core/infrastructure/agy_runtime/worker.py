@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+from dataclasses import replace
 import os
 import signal
 from collections.abc import Awaitable, Callable
@@ -264,6 +265,13 @@ class TopicWorker:
 
                     if isinstance(event, ParsedInitEvent):
                         self._conversation_id = event.conversation_id
+                        logger.info(
+                            "Initialized agy session",
+                            topic_id=self._topic_id,
+                            conversation_id=str(event.conversation_id),
+                            model=event.model,
+                            cwd=event.cwd,
+                        )
                         await on_init(event.conversation_id)
                         continue
 
@@ -298,7 +306,25 @@ class TopicWorker:
                                 )
                             else:
                                 tools_by_step[event.tool_summary.step_index] = event.tool_summary
+                            t_sum = tools_by_step[event.tool_summary.step_index]
+                            logger.info(
+                                "Agent tool step",
+                                topic_id=self._topic_id,
+                                step=t_sum.step_index,
+                                tool=t_sum.tool_name,
+                                state=t_sum.state.value,
+                                target=t_sum.target_hint,
+                                duration_sec=t_sum.duration_seconds,
+                            )
                         for sub in event.subagents:
+                            if sub.conversation_id not in active_subagents:
+                                logger.info(
+                                    "Agent spawned subagent",
+                                    topic_id=self._topic_id,
+                                    role=sub.role,
+                                    type_name=sub.type_name,
+                                    subagent_id=sub.conversation_id,
+                                )
                             active_subagents[sub.conversation_id] = sub
 
                         progress_event = TurnProgressEvent(
@@ -329,6 +355,17 @@ class TopicWorker:
                                     model_slug=self._signature.model_slug,
                                     details=combined_err,
                                 )
+                        logger.info(
+                            "Completed agy turn",
+                            topic_id=self._topic_id,
+                            conversation_id=str(event.conversation_id),
+                            status=event.status.value,
+                            turn_sec=round(event.turn_delta_duration_sec, 2),
+                            turn_tokens=event.turn_delta_tokens,
+                            session_tokens=event.cumulative_usage.total_tokens,
+                            cached_tokens=event.cumulative_usage.cache_read_tokens,
+                            tools_used=len(tools_by_step),
+                        )
                         return replace(
                             event,
                             thinking_text=accumulated_thinking.strip() or None,
