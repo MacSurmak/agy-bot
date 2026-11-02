@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import re
 from typing import Any
@@ -134,15 +135,17 @@ class AgyCliInspector:
         return models
 
     async def fetch_account_quota(self, account: GoogleAccount) -> dict[str, Any]:
-        # Reference #1 Section 3: /quota must be executed as a standalone `agy -p /quota` invocation
+        """Queries structured 5-hour and weekly quota buckets via `agy --print /usage --output-format json`."""
         env = await self._keyring_mgr.ensure_account_bus(account)
         workspace_cwd = str(self._cfg.paths.workspaces_root_dir)
         self._cfg.paths.workspaces_root_dir.mkdir(parents=True, exist_ok=True)
 
         proc = await asyncio.create_subprocess_exec(
             str(self._cfg.paths.agy_binary_path),
-            "-p",
-            "/quota",
+            "--print",
+            "/usage",
+            "--output-format",
+            "json",
             "--dangerously-skip-permissions",
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
@@ -153,25 +156,110 @@ class AgyCliInspector:
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(),
-                timeout=15.0,
+                timeout=25.0,
             )
         except TimeoutError as exc:
-            proc.kill()
-            raise AgyProcessError(f"agy -p /quota timed out for account '{account.slug}'.") from exc
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            raise AgyProcessError(
+                f"agy --print /usage timed out for account '{account.slug}'."
+            ) from exc
 
         raw_stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
         raw_stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
         if proc.returncode != 0 and not raw_stdout:
             raise AgyProcessError(
-                f"agy -p /quota failed for account '{account.slug}' (code {proc.returncode}): {raw_stderr}"
+                f"agy --print /usage failed for account '{account.slug}' (code {proc.returncode}): {raw_stderr}"
             )
 
-        combined = raw_stdout if raw_stdout else raw_stderr
-        percentages = [int(m.group(1)) for m in _PERCENT_PATTERN.finditer(combined)]
-        min_remaining_pct = min(percentages) if percentages else 100
+        return self._parse_usage_quota_output(raw_stdout if raw_stdout else raw_stderr)
+
+    @classmethod
+    def _parse_usage_quota_output(cls, raw_output: str) -> dict[str, Any]:
+        buckets_list: list[dict[str, Any]] = []
+
+        # Extract JSON object from stdout (in case multiple NDJSON lines or logs were emitted)
+        for candidate_line in reversed([raw_output, *raw_output.splitlines()]):
+            stripped = candidate_line.strip()
+            if not stripped.startswith("{"):
+                continue
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, dict):
+                    cls._collect_quota_buckets_recursive(parsed, buckets_list)
+                    if buckets_list:
+                        break
+            except json.JSONDecodeError:
+                continue
+
+        structured_buckets: dict[str, dict[str, Any]] = {}
+        gemini_pcts: list[int] = []
+        all_pcts: list[int] = []
+
+        for b in buckets_list:
+            b_id = str(b.get("id") or b.get("name") or b.get("label") or "").strip().lower()
+            window = str(b.get("window") or "").strip().lower()
+            frac = b.get("remaining_fraction")
+            if isinstance(frac, int | float):
+                pct = max(0, min(100, round(float(frac) * 100)))
+            else:
+                pct = 100
+            reset_time = str(b.get("reset_time") or "").strip()
+
+            key = b_id
+            if not key:
+                is_5h = "5h" in window or "five" in window or "hour" in window
+                key = f"bucket_{'5h' if is_5h else 'weekly'}_{len(structured_buckets)}"
+
+            structured_buckets[key] = {
+                "id": b_id,
+                "name": str(b.get("name") or b.get("label") or b_id),
+                "window": window,
+                "remaining_pct": pct,
+                "reset_time": reset_time,
+            }
+            all_pcts.append(pct)
+            if "gemini" in key or "gemini" in str(b.get("group_title", "")).lower():
+                gemini_pcts.append(pct)
+
+        if not all_pcts:
+            all_pcts = [int(m.group(1)) for m in _PERCENT_PATTERN.finditer(raw_output)]
+
+        min_remaining_pct = (
+            min(gemini_pcts)
+            if gemini_pcts
+            else (min(all_pcts) if all_pcts else 100)
+        )
 
         return {
-            "raw_report": combined,
+            "buckets": structured_buckets,
             "min_remaining_pct": min_remaining_pct,
-            "parsed_percentages": percentages,
+            "parsed_percentages": all_pcts,
+            "raw_report": raw_output[:1500],
         }
+
+    @classmethod
+    def _collect_quota_buckets_recursive(
+        cls,
+        node: Any,
+        out: list[dict[str, Any]],
+        group_title: str = "",
+    ) -> None:
+        if isinstance(node, dict):
+            current_group = str(
+                node.get("title") or node.get("name") or node.get("label") or group_title
+            )
+            raw_buckets = node.get("buckets")
+            if isinstance(raw_buckets, list):
+                for item in raw_buckets:
+                    if isinstance(item, dict) and (
+                        "remaining_fraction" in item or "window" in item
+                    ):
+                        out.append({**item, "group_title": current_group})
+            for val in node.values():
+                if isinstance(val, dict | list):
+                    cls._collect_quota_buckets_recursive(val, out, current_group)
+        elif isinstance(node, list):
+            for elem in node:
+                if isinstance(elem, dict | list):
+                    cls._collect_quota_buckets_recursive(elem, out, group_title)

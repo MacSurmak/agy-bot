@@ -29,6 +29,7 @@ from antigravity_core.lexicon import get_lexicon
 from antigravity_core.presentation.formatters import (
     build_final_execution_trace_pages,
     build_live_progress_pages,
+    format_account_quota_lines,
     list_workspace_directories,
     render_Formatted_response_chunks,
     render_new_session_divider,
@@ -203,6 +204,32 @@ class WorkspaceTopicUI:
 
         if cmd == "/panel":
             await self.refresh_pinned_card(topic_id)
+            return True
+
+        if cmd in ("/quota", "/usage"):
+            topic = await self.ensure_topic_registered(topic_id)
+            account = await self._account_repo.get_by_id(topic.assigned_account_id)
+            wait_msg = await self._client.send_message(
+                entity=self._cfg.telegram.forum_chat_id,
+                message=f"📊 {lex.cp_toast_probing_quotas}",
+                reply_to=topic_id,
+            )
+            try:
+                q_info = await self._inspector.fetch_account_quota(account)
+                await self._account_repo.update_quota_snapshot(account.id, q_info)
+                q_lines = format_account_quota_lines(q_info, lex)
+                if q_lines:
+                    body = (
+                        f"📊 **Квоты аккаунта `{account.slug}` ({account.email_label}):**\n"
+                        + "\n".join(q_lines)
+                    )
+                else:
+                    min_p = q_info.get("min_remaining_pct", "?")
+                    body = f"📊 **Квота `{account.slug}`:** остаток `{min_p}%`"
+                await wait_msg.edit(body)
+            except Exception as exc:
+                max_err = self._cfg.limits.error_summary_max_chars
+                await wait_msg.edit(f"❌ Ошибка запроса квот: `{str(exc)[:max_err]}`")
             return True
 
         if cmd == "/model":

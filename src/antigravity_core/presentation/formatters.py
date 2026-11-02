@@ -1,6 +1,8 @@
 from bisect import bisect_left
+from datetime import UTC, datetime
 from pathlib import Path
 import re
+from typing import Any
 import unicodedata
 from telethon.extensions import markdown
 from telethon.helpers import add_surrogate, del_surrogate
@@ -780,25 +782,37 @@ def render_control_panel_dashboard(
             if acc.is_enabled
             else lex.dashboard_account_disabled_icon
         )
-        quota_str = lex.dashboard_account_quota_unprobed
-        if acc.last_quota_json is not None:
-            min_pct = acc.last_quota_json.get("min_remaining_pct", "?")
-            quota_str = lex.dashboard_account_quota_probed.format(min_pct=min_pct)
         backup_badge = (
             lex.dashboard_account_backup_ok
             if acc.encrypted_token_backup
             else lex.dashboard_account_backup_missing
         )
-        lines.append(
-            lex.dashboard_account_item.format(
-                status_badge=status_badge,
-                slug=acc.slug,
-                email_label=acc.email_label,
-                default_badge=default_badge,
-                quota_str=quota_str,
-                backup_badge=backup_badge,
+        quota_lines = format_account_quota_lines(acc.last_quota_json, lex)
+        if not quota_lines:
+            lines.append(
+                lex.dashboard_account_item.format(
+                    status_badge=status_badge,
+                    slug=acc.slug,
+                    email_label=acc.email_label,
+                    default_badge=default_badge,
+                    quota_str=lex.dashboard_account_quota_unprobed,
+                    backup_badge=backup_badge,
+                )
             )
-        )
+        else:
+            min_pct = acc.last_quota_json.get("min_remaining_pct", "?") if acc.last_quota_json else "?"
+            short_q = lex.dashboard_account_quota_probed.format(min_pct=min_pct)
+            lines.append(
+                lex.dashboard_account_item.format(
+                    status_badge=status_badge,
+                    slug=acc.slug,
+                    email_label=acc.email_label,
+                    default_badge=default_badge,
+                    quota_str=short_q,
+                    backup_badge=backup_badge,
+                )
+            )
+            lines.extend(quota_lines)
 
     lines.append(lex.dashboard_hosts_header)
     if not hosts:
@@ -867,6 +881,82 @@ def split_message_chunks(text: str, max_chars: int) -> list[str]:
     if remaining:
         chunks.append(remaining)
     return chunks
+
+
+def _render_mini_bar(pct: int, width: int = 8) -> str:
+    filled = max(0, min(width, round((pct / 100.0) * width)))
+    return ("█" * filled) + ("░" * (width - filled))
+
+
+def _format_reset_countdown(iso_reset_time: str) -> str:
+    if not iso_reset_time:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_reset_time.replace("Z", "+00:00"))
+        now = datetime.now(tz=UTC)
+        diff_sec = int((dt - now).total_seconds())
+        if diff_sec <= 0:
+            return ""
+        days, rem = divmod(diff_sec, 86400)
+        hours, rem = divmod(rem, 3600)
+        mins = rem // 60
+        if days > 0:
+            return f" (↻ {days}д {hours}ч)"
+        if hours > 0:
+            return f" (↻ {hours}ч {mins}м)"
+        return f" (↻ {mins}м)"
+    except ValueError:
+        return ""
+
+
+def format_account_quota_lines(
+    quota_json: dict[str, Any] | None, lex: UiLexicon
+) -> list[str]:
+    if not quota_json:
+        return []
+    raw_buckets = quota_json.get("buckets")
+    if not isinstance(raw_buckets, dict) or not raw_buckets:
+        return []
+
+    def _fmt_bucket(b_key: str) -> str | None:
+        b = raw_buckets.get(b_key)
+        if not isinstance(b, dict):
+            return None
+        pct = int(b.get("remaining_pct", 100))
+        rst = _format_reset_countdown(str(b.get("reset_time", "")))
+        return f"`{_render_mini_bar(pct)} {pct}%`{rst}"
+
+    gem_5h = _fmt_bucket("gemini-5h")
+    gem_wk = _fmt_bucket("gemini-weekly")
+    c_5h = _fmt_bucket("3p-5h")
+    c_wk = _fmt_bucket("3p-weekly")
+
+    out: list[str] = []
+    if gem_5h or gem_wk:
+        parts_g = []
+        if gem_5h:
+            parts_g.append(f"**5ч:** {gem_5h}")
+        if gem_wk:
+            parts_g.append(f"**Нед:** {gem_wk}")
+        out.append("    ├─ 🧠 **Gemini:** " + " │ ".join(parts_g))
+
+    if c_5h or c_wk:
+        parts_c = []
+        if c_5h:
+            parts_c.append(f"**5ч:** {c_5h}")
+        if c_wk:
+            parts_c.append(f"**Нед:** {c_wk}")
+        out.append("    └─ 🤖 **Claude/3P:** " + " │ ".join(parts_c))
+
+    if not out:
+        for b_key, b_val in raw_buckets.items():
+            if isinstance(b_val, dict):
+                pct = int(b_val.get("remaining_pct", 100))
+                rst = _format_reset_countdown(str(b_val.get("reset_time", "")))
+                win = str(b_val.get("window") or b_key)
+                out.append(f"    • `{win}`: `{_render_mini_bar(pct)} {pct}%`{rst}")
+
+    return out
 
 
 def list_workspace_directories(
