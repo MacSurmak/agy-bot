@@ -17,6 +17,7 @@ from antigravity_core.infrastructure.database.repositories import (
     SettingsRepository,
     TopicRepository,
 )
+from antigravity_core.lexicon import get_lexicon
 
 logger = structlog.get_logger(__name__)
 
@@ -130,12 +131,14 @@ class TopicLifecycleService:
 
     async def archive_topic(self, topic_id: int) -> ForumTopic:
         topic = await self._topic_repo.get_topic_strict(topic_id)
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
         await self._pool.evict_topic_worker(topic_id)
 
         archived_title = (
             topic.title
             if topic.title.startswith("🗄")
-            else f"🗄 [Archive] {topic.title}"
+            else f"{lex.topic_archive_prefix}{topic.title}"
         )[:120]
 
         await self._client(

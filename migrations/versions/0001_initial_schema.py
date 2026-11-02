@@ -157,6 +157,12 @@ def upgrade() -> None:
         system_settings,
         [
             {
+                "key": "ui_language",
+                "value_json": "ru",
+                "description": "Telegram UI language code (ru or en).",
+                "updated_at": now,
+            },
+            {
                 "key": "default_model",
                 "value_json": "gemini-4-argon-medium",
                 "description": "Default agy model slug for newly created workspace topics.",

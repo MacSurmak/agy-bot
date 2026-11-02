@@ -3,6 +3,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from antigravity_core.infrastructure.database.repositories import SettingsRepository
+from antigravity_core.lexicon import get_lexicon
 
 
 @dataclass(slots=True)
@@ -114,10 +115,10 @@ class MessageBatcher:
             all_files.extend(item.downloaded_files)
 
         if all_files:
+            settings = await self._settings_repo.load_settings()
+            lex = get_lexicon(settings.ui_language)
             files_block = "\n".join(f"- `{path}`" for path in all_files)
-            parts.append(
-                f"[Attached files saved in local inbox for inspection]:\n{files_block}"
-            )
+            parts.append(f"{lex.batch_attached_files_header}\n{files_block}")
 
         combined_prompt = "\n\n".join(parts).strip()
         if combined_prompt:

@@ -13,8 +13,10 @@ from antigravity_core.domain.exceptions import ConfigurationError
 from antigravity_core.domain.models import ScheduledTask, TurnProgressEvent
 from antigravity_core.infrastructure.database.repositories import (
     ScheduleRepository,
+    SettingsRepository,
     TopicRepository,
 )
+from antigravity_core.lexicon import get_lexicon
 
 logger = structlog.get_logger(__name__)
 
@@ -27,11 +29,13 @@ class TemporalSchedulerService:
     def __init__(
         self,
         schedule_repo: ScheduleRepository,
+        settings_repo: SettingsRepository,
         topic_repo: TopicRepository,
         turn_orchestrator: TurnOrchestrator,
         deliver_report_cb: ScheduledReportDeliverCallback,
     ) -> None:
         self._schedule_repo = schedule_repo
+        self._settings_repo = settings_repo
         self._topic_repo = topic_repo
         self._orchestrator = turn_orchestrator
         self._deliver_cb = deliver_report_cb
@@ -158,6 +162,9 @@ class TemporalSchedulerService:
         async def _noop_progress(_ev: TurnProgressEvent) -> None:
             return
 
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
+
         try:
             result = await self._orchestrator.execute_topic_turn(
                 topic_id=task.topic_id,
@@ -175,16 +182,17 @@ class TemporalSchedulerService:
                 logger.info("Silent scheduled check returned HEARTBEAT_OK", task_id=str(task.id))
                 return
 
-            header = (
-                f"⏰ **Scheduled Task Report** (`{task.trigger_spec}`)\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
+            header = lex.sched_report_header.format(trigger_spec=task.trigger_spec)
+            body = (
+                cleaned_resp
+                if cleaned_resp
+                else lex.sched_report_empty_status.format(status=result.status.value)
             )
-            body = cleaned_resp if cleaned_resp else f"Status: `{result.status.value}`"
             await self._deliver_cb(task.topic_id, header + body)
         except Exception as exc:
             logger.error("Scheduled task execution failed", task_id=str(task.id), error=str(exc))
             await self._schedule_repo.mark_task_executed(task.id, deactivate=is_one_shot)
             await self._deliver_cb(
                 task.topic_id,
-                f"❌ **Scheduled Task Failed** (`{task.id}`):\n`{exc}`",
+                lex.sched_report_failed.format(task_id=task.id, error=exc),
             )

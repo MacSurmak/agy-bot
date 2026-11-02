@@ -5,8 +5,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from antigravity_core.domain.enums import EffortLevel, ExecutionMode
 from antigravity_core.domain.exceptions import ConfigurationError
+from antigravity_core.lexicon import SUPPORTED_LANGUAGES
 
 MANDATORY_SYSTEM_SETTING_KEYS: tuple[str, ...] = (
+    "ui_language",
     "default_model",
     "default_effort",
     "default_execution_mode",
@@ -24,6 +26,7 @@ MANDATORY_SYSTEM_SETTING_KEYS: tuple[str, ...] = (
 class DynamicSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    ui_language: str
     default_model: str
     default_effort: EffortLevel | None
     default_execution_mode: ExecutionMode
@@ -35,6 +38,16 @@ class DynamicSettings(BaseModel):
     tg_max_message_chars: int
     stdout_buffer_limit_bytes: int
     quota_auto_switch_threshold_pct: int
+
+    @field_validator("ui_language")
+    @classmethod
+    def _validate_ui_language(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in SUPPORTED_LANGUAGES:
+            raise ValueError(
+                f"Unsupported ui_language '{value}'. Must be one of {SUPPORTED_LANGUAGES}."
+            )
+        return normalized
 
     @field_validator("default_model")
     @classmethod
