@@ -6,7 +6,7 @@ telegram:
   api_id: 12345678
   api_hash: "0123456789abcdef0123456789abcdef"
   bot_token: "1234567890:AAH_your_bot_token_here"
-  session_file_path: "/srv/antigravity/data/telethon_bot.session"
+  session_file_path: "/home/macsurmak/agy-bot/runtime_data/data/telethon_bot.session"
   owner_telegram_id: 123456789
   forum_chat_id: -1001234567890
   control_panel_topic_id: 1
@@ -23,20 +23,20 @@ database:
   pool_timeout_sec: 10.0
 
 paths:
-  venv_python_path: "/srv/antigravity/venv/bin/python"
-  agy_binary_path: "/usr/local/bin/agy"
-  agy_home_dir: "/root/.gemini"
-  system_path_env: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-  system_user: "root"
-  system_logname: "root"
-  ssh_config_dir: "/root/.ssh/config.d"
-  workspaces_root_dir: "/srv/antigravity/workspaces"
-  remotes_mount_dir: "/mnt/remotes"
-  inbox_dir: "/srv/antigravity/inbox"
-  profiles_data_dir: "/srv/antigravity/profiles"
-  runtime_dir: "/run/agy"
-  ipc_socket_path: "/run/agy/bot_ipc.sock"
-  log_file_path: "/srv/antigravity/logs/antigravity_core.jsonl"
+  venv_python_path: "/home/macsurmak/miniforge3/envs/agy-core/bin/python"
+  agy_binary_path: "/home/macsurmak/.local/bin/agy"
+  agy_home_dir: "/home/macsurmak/.gemini"
+  system_path_env: "/home/macsurmak/.local/bin:/home/macsurmak/miniforge3/envs/agy-core/bin:/usr/local/sbin:/usr/local/bin:/usr/bin"
+  system_user: "macsurmak"
+  system_logname: "macsurmak"
+  ssh_config_dir: "/home/macsurmak/.ssh/config.d"
+  workspaces_root_dir: "/home/macsurmak/agy-bot/runtime_data/workspaces"
+  remotes_mount_dir: "/home/macsurmak/agy-bot/runtime_data/remotes"
+  inbox_dir: "/home/macsurmak/agy-bot/runtime_data/inbox"
+  profiles_data_dir: "/home/macsurmak/agy-bot/runtime_data/profiles"
+  runtime_dir: "/home/macsurmak/agy-bot/runtime_data/run"
+  ipc_socket_path: "/home/macsurmak/agy-bot/runtime_data/run/bot_ipc.sock"
+  log_file_path: "/home/macsurmak/agy-bot/runtime_data/logs/antigravity_core.jsonl"
 
 remotes:
   # Errata Patch #3: Safe auto_cache instead of kernel_cache so remote SSH edits are visible immediately
