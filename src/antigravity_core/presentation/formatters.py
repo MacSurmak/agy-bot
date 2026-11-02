@@ -216,7 +216,7 @@ def _assemble_collapsible_trace_message(
     clean_header = _pad_wide_bar(header_line.replace("**", "").replace("`", ""))
     header_u16 = _utf16_len(clean_header)
     entities: list[TypeMessageEntity] = [
-        MessageEntityPre(offset=0, length=header_u16, language="trace")
+        MessageEntityPre(offset=0, length=header_u16, language="")
     ]
     parts: list[str] = [clean_header]
     current_utf16_offset = header_u16
@@ -489,7 +489,7 @@ def _format_markdown_table_block(table_lines: list[str]) -> list[str]:
         mid_border = "├" + "┼".join("─" * (w + 2) for w in col_widths) + "┤"
         bot_border = "└" + "┴".join("─" * (w + 2) for w in col_widths) + "┘"
 
-        box_lines: list[str] = ["```table", top_border]
+        box_lines: list[str] = [f"```{top_border}"]
         for row_idx, row in enumerate(normalized_rows):
             padded_cells = [
                 _pad_display_width(row[c_i], col_widths[c_i])
@@ -498,8 +498,7 @@ def _format_markdown_table_block(table_lines: list[str]) -> list[str]:
             box_lines.append("│ " + " │ ".join(padded_cells) + " │")
             if row_idx == 0 and len(normalized_rows) > 1:
                 box_lines.append(mid_border)
-        box_lines.append(bot_border)
-        box_lines.append("```")
+        box_lines.append(f"{bot_border}```")
         return box_lines
 
     # Fallback for extra-wide tables: render each row as a structured card
@@ -537,17 +536,36 @@ def _preprocess_gfm_markdown(raw_md: str) -> str:
         out_lines.extend(_format_markdown_table_block(table_buffer))
         table_buffer.clear()
 
+    pending_fence_open = False
+
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("```"):
             _flush_quote_buffer()
             _flush_table_buffer()
-            in_code_fence = not in_code_fence
-            out_lines.append(line)
+            if stripped != "```" and stripped.endswith("```") and len(stripped) > 6:
+                # Single-line fenced block (such as ```┌───...───┐```)
+                out_lines.append(line)
+                continue
+            if not in_code_fence:
+                in_code_fence = True
+                pending_fence_open = True
+            else:
+                in_code_fence = False
+                if pending_fence_open:
+                    pending_fence_open = False
+                elif out_lines:
+                    out_lines[-1] = f"{out_lines[-1]}```"
+                else:
+                    out_lines.append("```")
             continue
 
         if in_code_fence:
-            out_lines.append(line)
+            if pending_fence_open:
+                out_lines.append(f"```{line}")
+                pending_fence_open = False
+            else:
+                out_lines.append(line)
             continue
 
         if _TABLE_ROW_RE.match(line):
@@ -624,7 +642,7 @@ def split_markdown_preserving_blocks(text: str, max_chars: int) -> list[str]:
         if stripped.startswith("```"):
             if not in_fence:
                 in_fence = True
-                fence_header = stripped
+                fence_header = "```"
             else:
                 in_fence = False
                 fence_header = "```"
@@ -711,7 +729,7 @@ def render_Formatted_response_chunks(
             MessageEntityPre(
                 offset=bar_offset,
                 length=bar_len,
-                language="stats",
+                language="",
             )
         )
         full_chunk_text = f"{clean_body}{sep}{bar_text}"
