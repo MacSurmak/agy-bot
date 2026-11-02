@@ -234,7 +234,8 @@ class ControlPanelUI:
             try:
                 pending = await self._keyring_mgr.start_remote_oauth_flow(account)
             except Exception as exc:
-                err_detail = f"{type(exc).__name__}: {exc}"
+                max_err = self._cfg.limits.error_summary_max_chars
+                err_detail = f"{type(exc).__name__}: {exc}"[:max_err]
                 logger.error(
                     "OAuth flow start failed",
                     account_slug=account.slug,
@@ -285,8 +286,10 @@ class ControlPanelUI:
                     try:
                         await self._mount_mgr.ensure_mounted(host)
                     except Exception as exc:
+                        max_err = self._cfg.limits.error_summary_max_chars
+                        err_short = str(exc)[:max_err]
                         await event.respond(
-                            lex.cp_remount_failed.format(alias=host.alias, error=exc)
+                            lex.cp_remount_failed.format(alias=host.alias, error=err_short)
                         )
             lex, text = await self._build_dashboard_text()
             await event.edit(text, buttons=build_control_panel_keyboard(lex))
@@ -419,7 +422,8 @@ class ControlPanelUI:
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
         except Exception as exc:
-            err_detail = f"{type(exc).__name__}: {exc}"
+            max_err = self._cfg.limits.error_summary_max_chars
+            err_detail = f"{type(exc).__name__}: {exc}"[:max_err]
             logger.error(
                 "OAuth verification failed",
                 account_slug=pending.account.slug,
@@ -465,7 +469,8 @@ class ControlPanelUI:
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
         except Exception as exc:
-            err_detail = f"{type(exc).__name__}: {exc}"
+            max_err = self._cfg.limits.error_summary_max_chars
+            err_detail = f"{type(exc).__name__}: {exc}"[:max_err]
             logger.error("Failed to create forum topic", error=err_detail, exc_info=True)
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
@@ -492,8 +497,10 @@ class ControlPanelUI:
             await self.render_and_pin_dashboard()
         except Exception as exc:
             lex = await self._load_lexicon()
+            max_err = self._cfg.limits.error_summary_max_chars
+            err_short = str(exc)[:max_err]
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=lex.cp_setting_update_failed.format(key=key, error=exc),
+                message=lex.cp_setting_update_failed.format(key=key, error=err_short),
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )

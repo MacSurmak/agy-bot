@@ -288,9 +288,13 @@ class WorkspaceTopicUI:
                 on_progress=_on_progress,
             )
         except Exception as exc:
-            logger.error("Turn execution failed", topic_id=topic_id, error=str(exc))
+            max_err = self._cfg.limits.error_summary_max_chars
+            err_short = str(exc)[:max_err]
+            logger.error("Turn execution failed", topic_id=topic_id, error=err_short)
             try:
-                await status_msg.edit(lex.ws_turn_error_msg.format(error=exc), buttons=None)
+                await status_msg.edit(
+                    lex.ws_turn_error_msg.format(error=err_short), buttons=None
+                )
             except RPCError as edit_exc:
                 logger.warning("Failed to update status message with turn error", error=str(edit_exc))
             return

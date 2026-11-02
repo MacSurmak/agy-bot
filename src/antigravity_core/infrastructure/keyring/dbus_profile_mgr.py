@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import contextlib
 import fcntl
 import os
@@ -24,6 +25,7 @@ from antigravity_core.infrastructure.database.repositories import AccountReposit
 logger = structlog.get_logger(__name__)
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\].*?\x07")
+_TUI_NOISE_RE = re.compile(r"[─━═│┃┌┐└┘├┤┬┴┼\ufffd]+")
 _OAUTH_URL_PATTERN = re.compile(r"(https://accounts\.google\.com/[^\s\"'<>]+)")
 
 
@@ -114,12 +116,26 @@ class KeyringProfileManager:
                 f"(socket={socket_path}, xdg={xdg_dir})."
             )
 
-        # Restore OAuth token backup from PostgreSQL if keyring is fresh after container reboot
+        # Restore OAuth token or login.keyring backup from PostgreSQL if keyring is fresh
         has_token = await self._has_gemini_secret(profile_env)
+        keyring_file = keyrings_dir / "login.keyring"
         if not has_token and account.encrypted_token_backup is not None:
-            restored_secret = self._vault.decrypt_text(account.encrypted_token_backup)
-            await self._store_gemini_secret(profile_env, restored_secret)
-            logger.info("Restored OAuth token from Fernet backup into keyring", account_slug=account.slug)
+            restored_payload = self._vault.decrypt_text(account.encrypted_token_backup)
+            if restored_payload.startswith("keyring-b64:"):
+                b64_data = restored_payload[len("keyring-b64:") :]
+                if not keyring_file.exists():
+                    keyring_file.write_bytes(base64.b64decode(b64_data.encode("ascii")))
+                    os.chmod(keyring_file, 0o600)
+                    logger.info(
+                        "Restored login.keyring binary from Fernet backup",
+                        account_slug=account.slug,
+                    )
+            elif not restored_payload.startswith("oauth-verified:"):
+                await self._store_gemini_secret(profile_env, restored_payload)
+                logger.info(
+                    "Restored OAuth token from Fernet backup into keyring",
+                    account_slug=account.slug,
+                )
 
         self._runtimes[account.id] = _ActiveProfileRuntime(
             account_id=account.id,
@@ -352,14 +368,35 @@ class KeyringProfileManager:
             timeout=self._cfg.runtime.command_exec_timeout_sec,
         )
 
+    def _sanitize_tui_output(self, raw_text: str) -> str:
+        no_ansi = _ANSI_ESCAPE_RE.sub(" ", raw_text)
+        no_boxes = _TUI_NOISE_RE.sub(" ", no_ansi)
+        collapsed = " ".join(no_boxes.split())
+        max_chars = self._cfg.limits.error_summary_max_chars
+        return collapsed[-max_chars:] if len(collapsed) > max_chars else collapsed
+
     async def backup_account_token_to_db(self, account: GoogleAccount) -> bool:
         env = await self.ensure_account_bus(account)
         secret_val = await self._lookup_gemini_secret(env)
-        if not secret_val:
-            return False
-        encrypted = self._vault.encrypt_text(secret_val)
-        await self._account_repo.update_token_backup(account.id, encrypted)
-        return True
+        if secret_val:
+            encrypted = self._vault.encrypt_text(secret_val)
+            await self._account_repo.update_token_backup(account.id, encrypted)
+            return True
+
+        keyrings_dir = Path(account.xdg_data_dir) / "keyrings"
+        keyring_file = keyrings_dir / "login.keyring"
+        if not keyring_file.is_file():
+            candidates = sorted(keyrings_dir.glob("*.keyring"))
+            if candidates:
+                keyring_file = candidates[0]
+
+        if keyring_file.is_file() and keyring_file.stat().st_size > 0:
+            b64_str = base64.b64encode(keyring_file.read_bytes()).decode("ascii")
+            encrypted = self._vault.encrypt_text(f"keyring-b64:{b64_str}")
+            await self._account_repo.update_token_backup(account.id, encrypted)
+            return True
+
+        return False
 
     async def start_remote_oauth_flow(self, account: GoogleAccount) -> PendingOAuthSession:
         env = await self.ensure_account_bus(account)
@@ -470,20 +507,20 @@ class KeyringProfileManager:
                             )
         except TimeoutError as exc:
             self._cleanup_oauth_pty(proc, master_fd)
-            clean_out = _ANSI_ESCAPE_RE.sub("", accumulated).strip()
+            summary = self._sanitize_tui_output(accumulated)
             logger.error(
                 "Timed out waiting for OAuth URL from agy PTY",
                 account_slug=account.slug,
-                output=clean_out,
+                output=summary,
             )
             raise AccountAuthFlowError(
-                f"Timed out waiting for OAuth URL from agy PTY. Output: {clean_out or '<empty>'}"
+                f"Timed out waiting for OAuth URL from agy PTY. Output: {summary or '<empty>'}"
             ) from exc
 
         self._cleanup_oauth_pty(proc, master_fd)
-        clean_out = _ANSI_ESCAPE_RE.sub("", accumulated).strip()
+        summary = self._sanitize_tui_output(accumulated)
         raise AccountAuthFlowError(
-            f"agy PTY exited (code {proc.returncode}) without OAuth URL. Output: {clean_out or '<empty>'}"
+            f"agy PTY exited (code {proc.returncode}) without OAuth URL. Output: {summary or '<empty>'}"
         )
 
     async def complete_remote_oauth_flow(
@@ -498,6 +535,7 @@ class KeyringProfileManager:
         poll_interval = self._cfg.runtime.dbus_socket_poll_interval_sec
         chunk_size = self._cfg.runtime.oauth_stdout_chunk_bytes
         accumulated = ""
+        authenticated = False
 
         try:
             os.write(pending.pty_master_fd, (clean_code + "\r").encode("utf-8"))
@@ -510,7 +548,28 @@ class KeyringProfileManager:
                     except (BlockingIOError, OSError):
                         pass
 
-                    if await self._has_gemini_secret(env):
+                    clean_text = _ANSI_ESCAPE_RE.sub("", accumulated)
+                    if (
+                        "Do you trust the contents" in clean_text
+                        or "Accessing workspace" in clean_text
+                    ):
+                        with contextlib.suppress(OSError):
+                            os.write(pending.pty_master_fd, b"\r")
+                        await asyncio.sleep(1.0)
+                        authenticated = True
+                        logger.info(
+                            "Confirmed workspace trust prompt and completed OAuth login",
+                            account_slug=pending.account.slug,
+                        )
+                        break
+
+                    if "accept-edits" in clean_text or await self._has_gemini_secret(env):
+                        await asyncio.sleep(1.0)
+                        authenticated = True
+                        logger.info(
+                            "Detected active session after OAuth code submission",
+                            account_slug=pending.account.slug,
+                        )
                         break
 
                     if pending.process.returncode is not None:
@@ -518,18 +577,27 @@ class KeyringProfileManager:
 
                     await asyncio.sleep(poll_interval)
         except TimeoutError as exc:
-            clean_out = _ANSI_ESCAPE_RE.sub("", accumulated).strip()
+            summary = self._sanitize_tui_output(accumulated)
             raise AccountAuthFlowError(
-                f"Timed out waiting for agy to store OAuth token in keyring. Output: {clean_out}"
+                f"Timed out waiting for agy OAuth completion. Output tail: {summary}"
             ) from exc
         finally:
             self._cleanup_oauth_pty(pending.process, pending.pty_master_fd)
 
         backed_up = await self.backup_account_token_to_db(pending.account)
+        if not backed_up and authenticated:
+            encrypted_marker = self._vault.encrypt_text(
+                f"oauth-verified:{pending.account.slug}"
+            )
+            await self._account_repo.update_token_backup(
+                pending.account.id, encrypted_marker
+            )
+            backed_up = True
+
         if not backed_up:
-            clean_out = _ANSI_ESCAPE_RE.sub("", accumulated).strip()
+            summary = self._sanitize_tui_output(accumulated)
             raise AccountAuthFlowError(
-                f"agy did not store secret in gnome-keyring (service=gemini, account=antigravity). Output: {clean_out}"
+                f"agy OAuth login did not complete. Output tail: {summary}"
             )
 
     @staticmethod
