@@ -91,12 +91,7 @@ class AgyEnvironmentBootstrapper:
         config_agents.write_text(content, encoding="utf-8")
 
     def _write_settings_json(self, settings_path: Path) -> None:
-        rules_dir = str(self._cfg.paths.agy_home_dir / "config" / "rules")
-        skills_dir = str(self._cfg.paths.agy_home_dir / "config" / "skills")
-        home_dir = str(Path.home().resolve())
         workspaces_dir = str(self._cfg.paths.workspaces_root_dir)
-        inbox_dir = str(self._cfg.paths.inbox_dir)
-        remotes_dir = str(self._cfg.paths.remotes_mount_dir)
 
         payload: dict[str, Any] = {
             "$schema": "https://antigravity.google/schemas/v1/settings.json",
@@ -110,15 +105,11 @@ class AgyEnvironmentBootstrapper:
             "showFeedbackSurvey": False,
             "notifications": False,
             "historySize": -1,
-            "trustedWorkspaces": [home_dir, workspaces_dir, inbox_dir, remotes_dir],
+            "trustedWorkspaces": [workspaces_dir],
             "permissions": {
                 "allow": [
                     "read_file(*)",
-                    f"write_file({home_dir})",
-                    f"write_file({workspaces_dir})",
-                    f"write_file({remotes_dir})",
-                    f"write_file({rules_dir})",
-                    f"write_file({skills_dir})",
+                    "write_file(*)",
                     "command(*)",
                     "read_url(*)",
                     "mcp(telegram-core/*)",

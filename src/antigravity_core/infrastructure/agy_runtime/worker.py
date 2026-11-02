@@ -3,6 +3,7 @@ import contextlib
 from dataclasses import replace
 import os
 import signal
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from uuid import UUID
@@ -225,6 +226,7 @@ class TopicWorker:
                 f"Failed to write prompt to agy stdin (stderr: {self.get_stderr_summary()}): {exc}"
             ) from exc
 
+        turn_start_monotonic = time.monotonic()
         accumulated_text = ""
         accumulated_thinking = ""
         tools_by_step: dict[int, ToolCallSummary] = {}
@@ -350,12 +352,13 @@ class TopicWorker:
                                     model_slug=self._signature.model_slug,
                                     details=combined_err,
                                 )
+                        actual_turn_sec = max(0.01, time.monotonic() - turn_start_monotonic)
                         logger.info(
                             "Completed agy turn",
                             topic_id=self._topic_id,
                             conversation_id=str(event.conversation_id),
                             status=event.status.value,
-                            turn_sec=round(event.turn_delta_duration_sec, 2),
+                            turn_sec=round(actual_turn_sec, 2),
                             turn_tokens=event.turn_delta_tokens,
                             session_tokens=event.cumulative_usage.total_tokens,
                             cached_tokens=event.cumulative_usage.cache_read_tokens,
@@ -363,6 +366,7 @@ class TopicWorker:
                         )
                         return replace(
                             event,
+                            turn_delta_duration_sec=actual_turn_sec,
                             thinking_text=accumulated_thinking.strip() or None,
                             tool_calls=tuple(tools_by_step.values()),
                             subagents=tuple(active_subagents.values()),
