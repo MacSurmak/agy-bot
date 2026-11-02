@@ -99,6 +99,7 @@ class AgyWorkerPool:
         settings: DynamicSettings,
         on_init: InitCallback,
         on_progress: ProgressCallback,
+        initial_cumulative_tokens: int = 0,
     ) -> TurnResult:
         slot = await self._get_or_create_slot(topic.topic_id)
 
@@ -126,6 +127,7 @@ class AgyWorkerPool:
                         signature=desired_sig,
                         static_config=self._cfg,
                         account_env=account_env,
+                        initial_cumulative_tokens=initial_cumulative_tokens,
                     )
                     await slot.worker.start(settings)
 

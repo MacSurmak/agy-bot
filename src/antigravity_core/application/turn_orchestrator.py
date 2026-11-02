@@ -145,6 +145,12 @@ class TurnOrchestrator:
                 workspace_path=topic.workspace_path,
             )
 
+        prev_tokens = 0
+        if topic.active_conversation_id is not None:
+            existing_sess = await self._session_repo.get_session(topic.active_conversation_id)
+            if existing_sess is not None:
+                prev_tokens = existing_sess.cumulative_tokens
+
         result = await self._pool.execute_turn(
             topic=topic,
             account=account,
@@ -152,6 +158,7 @@ class TurnOrchestrator:
             settings=settings,
             on_init=_on_init,
             on_progress=on_progress,
+            initial_cumulative_tokens=prev_tokens,
         )
 
         await self._topic_repo.set_active_conversation(topic.topic_id, result.conversation_id)

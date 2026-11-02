@@ -46,6 +46,12 @@ _LOCAL_CAT_READ_RE = re.compile(
 )
 _SSH_COMMAND_RE = re.compile(r"(?:^|[;&|]\s*)ssh\b")
 
+# Errata Patch #3: Block recursive traversal (find, rg, grep, fd, du, tree, ls -R) over local SSHFS mounts (/remotes/<host>)
+_SSHFS_TRAVERSAL_RE = re.compile(
+    r"\b(?:find|rg|ripgrep|grep|fd|fdfind|du|tree|ls\s+-[a-zA-Z]*R)\b[^\n;|]*?(?:/mnt/remotes/|/runtime_data/remotes/)"
+)
+_SSHFS_PATH_RE = re.compile(r"(?:/mnt/remotes/|/runtime_data/remotes/)")
+
 _DENY_REASON = (
     "Use native file tools (read_file, view_file, write_to_file, replace_file_content, "
     "multi_replace_file_content) on local or /mnt/remotes/<host> paths."
@@ -60,6 +66,13 @@ _DENY_RECURSIVE_GREP_REASON = (
 _DENY_LOCAL_CAT_REASON = (
     "Reading local files via 'cat' in run_command is forbidden because it floods stdout. "
     "Use your native read_file / view_file tool instead."
+)
+
+_DENY_SSHFS_TRAVERSAL_REASON = (
+    "FORBIDDEN (Errata Patch #3): Running recursive search/traversal (find, rg, grep, fd, du, tree) "
+    "over a local SSHFS FUSE mount (/remotes/<host>/...) causes hundreds of thousands of slow SFTP "
+    "round-trips and hangs! Run searches directly on the remote CPU via 'ssh <host> \"timeout 10 find /path -maxdepth 4 ...\"' "
+    "or 'ssh <host> \"timeout 10 rg ...\"', and use /remotes/<host>/... ONLY to read/edit specific known files."
 )
 
 
@@ -83,6 +96,12 @@ def evaluate_command_line(command_line: str) -> dict[str, str]:
         return {
             "decision": "deny",
             "reason": _DENY_RECURSIVE_GREP_REASON,
+        }
+
+    if _SSHFS_TRAVERSAL_RE.search(normalized) is not None:
+        return {
+            "decision": "deny",
+            "reason": _DENY_SSHFS_TRAVERSAL_REASON,
         }
 
     if (
@@ -133,12 +152,33 @@ def main() -> None:
         )
         return
 
-    if tool_name != "run_command":
+    args = tool_call.get("args")
+    if not isinstance(args, dict):
         sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
         return
 
-    args = tool_call.get("args")
-    if not isinstance(args, dict):
+    if tool_name in ("find_by_name", "grep_search"):
+        search_target = str(
+            args.get("SearchDirectory")
+            or args.get("SearchPath")
+            or args.get("DirectoryPath")
+            or ""
+        )
+        if _SSHFS_PATH_RE.search(search_target) is not None:
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "decision": "deny",
+                        "reason": _DENY_SSHFS_TRAVERSAL_REASON,
+                    }
+                )
+                + "\n"
+            )
+            return
+        sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+        return
+
+    if tool_name != "run_command":
         sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
         return
 

@@ -67,6 +67,7 @@ class TopicWorker:
         signature: WorkerSignature,
         static_config: StaticConfig,
         account_env: dict[str, str],
+        initial_cumulative_tokens: int = 0,
     ) -> None:
         self._topic_id = topic_id
         self._signature = signature
@@ -75,7 +76,8 @@ class TopicWorker:
         self._process: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._stderr_tail: list[str] = []
-        self._cumulative_tokens: int = 0
+        self._initial_cumulative_tokens: int = max(0, initial_cumulative_tokens)
+        self._cumulative_tokens: int = self._initial_cumulative_tokens
         self._cumulative_duration_sec: float = 0.0
         self._conversation_id: UUID | None = signature.conversation_id
 
@@ -112,7 +114,7 @@ class TopicWorker:
         }
 
         self._stderr_tail.clear()
-        self._cumulative_tokens = 0
+        self._cumulative_tokens = self._initial_cumulative_tokens
         self._cumulative_duration_sec = 0.0
 
         try:
