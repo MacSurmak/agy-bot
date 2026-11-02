@@ -86,6 +86,9 @@ class PathsStaticConfig(BaseModel):
     venv_python_path: Path
     agy_binary_path: Path
     agy_home_dir: Path
+    system_path_env: str
+    system_user: str
+    system_logname: str
     ssh_config_dir: Path
     workspaces_root_dir: Path
     remotes_mount_dir: Path
@@ -114,12 +117,22 @@ class PathsStaticConfig(BaseModel):
             raise ValueError(f"Configured path must be absolute, got '{value}'.")
         return value
 
+    @field_validator("system_path_env", "system_user", "system_logname")
+    @classmethod
+    def _validate_non_empty_sys_str(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("System environment string cannot be empty.")
+        return stripped
+
 
 class RemotesStaticConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     sshfs_mount_options: str
     ssh_connect_timeout_sec: int
+    ssh_check_grace_sec: int
+    sshfs_mount_grace_sec: int
 
     @field_validator("sshfs_mount_options")
     @classmethod
@@ -136,11 +149,15 @@ class RemotesStaticConfig(BaseModel):
             raise ValueError("sshfs_mount_options must include 'auto_cache' (Errata Patch #3).")
         return stripped
 
-    @field_validator("ssh_connect_timeout_sec")
+    @field_validator(
+        "ssh_connect_timeout_sec",
+        "ssh_check_grace_sec",
+        "sshfs_mount_grace_sec",
+    )
     @classmethod
     def _validate_ssh_timeout(cls, value: int) -> int:
         if value <= 0:
-            raise ValueError(f"ssh_connect_timeout_sec must be positive, got {value}.")
+            raise ValueError(f"SSH timeout parameter must be positive, got {value}.")
         return value
 
 
@@ -153,8 +170,32 @@ class RuntimeStaticConfig(BaseModel):
     process_kill_grace_sec: float
     ipc_request_timeout_sec: float
     command_exec_timeout_sec: float
+    turn_watchdog_grace_sec: float
+    dbus_socket_poll_attempts: int
+    dbus_socket_poll_interval_sec: float
+    oauth_stdout_chunk_bytes: int
+    stderr_tail_max_lines: int
+    stderr_summary_lines: int
+    active_tools_window_size: int
+    scheduler_misfire_grace_sec: int
+    invite_ttl_hours: int
+    invite_token_bytes: int
+    keyring_password_bytes: int
 
-    @field_validator("agy_sqlite_busy_timeout_ms", "mcp_stdio_timeout_sec", "hook_timeout_sec")
+    @field_validator(
+        "agy_sqlite_busy_timeout_ms",
+        "mcp_stdio_timeout_sec",
+        "hook_timeout_sec",
+        "dbus_socket_poll_attempts",
+        "oauth_stdout_chunk_bytes",
+        "stderr_tail_max_lines",
+        "stderr_summary_lines",
+        "active_tools_window_size",
+        "scheduler_misfire_grace_sec",
+        "invite_ttl_hours",
+        "invite_token_bytes",
+        "keyring_password_bytes",
+    )
     @classmethod
     def _validate_positive_runtime_int(cls, value: int) -> int:
         if value <= 0:
@@ -165,11 +206,50 @@ class RuntimeStaticConfig(BaseModel):
         "process_kill_grace_sec",
         "ipc_request_timeout_sec",
         "command_exec_timeout_sec",
+        "turn_watchdog_grace_sec",
+        "dbus_socket_poll_interval_sec",
     )
     @classmethod
     def _validate_positive_runtime_float(cls, value: float) -> float:
         if value <= 0.0:
             raise ValueError(f"Runtime timeout parameter must be positive, got {value}.")
+        return value
+
+
+class LimitsStaticConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    uuid_short_chars: int
+    tool_target_hint_max_chars: int
+    topic_title_max_chars: int
+    thinking_snippet_max_chars: int
+    draft_preview_max_chars: int
+    error_summary_max_chars: int
+    live_tools_display_limit: int
+    dashboard_tasks_display_limit: int
+    tasks_menu_display_limit: int
+    models_menu_display_limit: int
+    sessions_history_display_limit: int
+    workspace_dirs_display_limit: int
+
+    @field_validator(
+        "uuid_short_chars",
+        "tool_target_hint_max_chars",
+        "topic_title_max_chars",
+        "thinking_snippet_max_chars",
+        "draft_preview_max_chars",
+        "error_summary_max_chars",
+        "live_tools_display_limit",
+        "dashboard_tasks_display_limit",
+        "tasks_menu_display_limit",
+        "models_menu_display_limit",
+        "sessions_history_display_limit",
+        "workspace_dirs_display_limit",
+    )
+    @classmethod
+    def _validate_positive_limit(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError(f"Limit integer parameter must be strictly positive, got {value}.")
         return value
 
 
@@ -182,6 +262,7 @@ class StaticConfig(BaseModel):
     paths: PathsStaticConfig
     remotes: RemotesStaticConfig
     runtime: RuntimeStaticConfig
+    limits: LimitsStaticConfig
 
 
 def load_static_config(config_path: Path) -> StaticConfig:

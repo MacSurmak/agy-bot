@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Protocol
 from uuid import UUID
 
 from antigravity_core.domain.enums import (
@@ -176,3 +177,20 @@ class TurnResult:
     turn_delta_tokens: int
     account_switched_from: str | None
     account_switched_to: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerTopicSnapshot:
+    topic_id: int
+    is_warm: bool
+    is_running_turn: bool
+    model_slug: str | None
+    account_slug: str | None
+
+
+class ForumTopicGateway(Protocol):
+    """Domain boundary protocol for creating and closing Telegram Forum Topics."""
+
+    async def create_forum_topic(self, title: str) -> int: ...
+
+    async def close_and_rename_forum_topic(self, topic_id: int, new_title: str) -> None: ...

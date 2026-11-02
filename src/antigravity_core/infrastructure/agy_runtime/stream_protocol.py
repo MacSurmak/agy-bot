@@ -54,6 +54,7 @@ def parse_stream_json_line(
     raw_line: str,
     prev_cumulative_tokens: int,
     prev_cumulative_duration_sec: float,
+    target_hint_max_chars: int,
 ) -> ParsedInitEvent | ParsedStepUpdateEvent | TurnResult:
     stripped = raw_line.strip()
     if not stripped:
@@ -62,9 +63,7 @@ def parse_stream_json_line(
     try:
         data: Any = json.loads(stripped)
     except json.JSONDecodeError as exc:
-        raise AgyProcessError(
-            f"Malformed JSON line from agy stdout: {exc} | Line: {stripped[:300]}"
-        ) from exc
+        raise AgyProcessError(f"Malformed JSON line from agy stdout: {exc}") from exc
 
     if not isinstance(data, dict):
         raise AgyProcessError(f"Expected JSON object from agy stdout, got {type(data).__name__}.")
@@ -73,7 +72,7 @@ def parse_stream_json_line(
     if event_kind == "init":
         return _parse_init_event(data)
     if event_kind == "step_update":
-        return _parse_step_update_event(data)
+        return _parse_step_update_event(data, target_hint_max_chars=target_hint_max_chars)
     if event_kind == "result":
         return _parse_result_event(
             data,
@@ -114,7 +113,9 @@ def _parse_init_event(data: dict[str, Any]) -> ParsedInitEvent:
     )
 
 
-def _parse_step_update_event(data: dict[str, Any]) -> ParsedStepUpdateEvent:
+def _parse_step_update_event(
+    data: dict[str, Any], target_hint_max_chars: int
+) -> ParsedStepUpdateEvent:
     body = data.get("step_update")
     if not isinstance(body, dict):
         raise AgyProcessError("Missing 'step_update' object inside step_update event.")
@@ -145,7 +146,7 @@ def _parse_step_update_event(data: dict[str, Any]) -> ParsedStepUpdateEvent:
                     "alias",
                 ):
                     if key in params and params[key] is not None:
-                        target_hint = str(params[key])[:120]
+                        target_hint = str(params[key])[:target_hint_max_chars]
                         break
         tool_summary = ToolCallSummary(
             step_index=step_index,

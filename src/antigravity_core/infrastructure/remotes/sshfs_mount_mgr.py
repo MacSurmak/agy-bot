@@ -52,10 +52,13 @@ class RemoteMountManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        ssh_timeout = float(
+            self._cfg.remotes.ssh_connect_timeout_sec + self._cfg.remotes.ssh_check_grace_sec
+        )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(),
-                timeout=float(self._cfg.remotes.ssh_connect_timeout_sec + 5),
+                timeout=ssh_timeout,
             )
         except TimeoutError as exc:
             proc.kill()
@@ -93,10 +96,13 @@ class RemoteMountManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        mount_timeout = float(
+            self._cfg.remotes.ssh_connect_timeout_sec + self._cfg.remotes.sshfs_mount_grace_sec
+        )
         try:
             _, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(),
-                timeout=float(self._cfg.remotes.ssh_connect_timeout_sec + 10),
+                timeout=mount_timeout,
             )
         except TimeoutError as exc:
             proc.kill()

@@ -1,4 +1,3 @@
-import contextlib
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -6,7 +5,10 @@ from typing import Any
 
 import structlog
 from telethon import TelegramClient
+from telethon.errors import RPCError
 from telethon.tl.custom import Message
+from telethon.tl.functions.channels import CreateForumTopicRequest, EditForumTopicRequest
+from telethon.tl.types import Updates
 
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import AntigravityError
@@ -69,7 +71,7 @@ class MediaService:
                 pct = (current * 100.0) / total
                 mb_cur = current / (1024 * 1024)
                 mb_tot = total / (1024 * 1024)
-                with contextlib.suppress(Exception):
+                try:
                     await status_msg.edit(
                         lex.media_downloading_progress.format(
                             file_name=safe_name,
@@ -78,6 +80,8 @@ class MediaService:
                             mb_tot=mb_tot,
                         )
                     )
+                except RPCError as exc:
+                    logger.debug("Progress edit skipped by Telegram RPC", error=str(exc))
 
         try:
             downloaded = await self._client.download_media(
@@ -85,15 +89,21 @@ class MediaService:
                 file=str(dest_path),
                 progress_callback=_progress_cb,
             )
-        except Exception as exc:
-            with contextlib.suppress(Exception):
+        except (RPCError, OSError) as exc:
+            try:
                 await status_msg.edit(
                     lex.media_download_failed.format(file_name=safe_name, error=exc)
                 )
-            raise MediaTransferError(f"Failed to download media from message {message.id}: {exc}") from exc
+            except RPCError as edit_exc:
+                logger.warning("Failed to update download error status message", error=str(edit_exc))
+            raise MediaTransferError(
+                f"Failed to download media from message {message.id}: {exc}"
+            ) from exc
 
-        with contextlib.suppress(Exception):
+        try:
             await status_msg.delete()
+        except RPCError as exc:
+            logger.debug("Could not delete download status message", error=str(exc))
 
         if downloaded is None:
             raise MediaTransferError(f"Telethon download_media returned None for message {message.id}.")
@@ -139,7 +149,7 @@ class MediaService:
                 pct = (current * 100.0) / total
                 mb_cur = current / (1024 * 1024)
                 mb_tot = total / (1024 * 1024)
-                with contextlib.suppress(Exception):
+                try:
                     await status_msg.edit(
                         lex.media_uploading_progress.format(
                             file_name=resolved.name,
@@ -148,6 +158,8 @@ class MediaService:
                             mb_tot=mb_tot,
                         )
                     )
+                except RPCError as exc:
+                    logger.debug("Upload progress edit skipped by Telegram RPC", error=str(exc))
 
         try:
             await self._client.send_file(
@@ -158,15 +170,21 @@ class MediaService:
                 force_document=True,
                 progress_callback=_progress_cb,
             )
-        except Exception as exc:
-            with contextlib.suppress(Exception):
+        except (RPCError, OSError) as exc:
+            try:
                 await status_msg.edit(
                     lex.media_upload_failed.format(file_name=resolved.name, error=exc)
                 )
-            raise MediaTransferError(f"Failed to send file '{resolved}' to topic {topic_id}: {exc}") from exc
+            except RPCError as edit_exc:
+                logger.warning("Failed to update upload error status message", error=str(edit_exc))
+            raise MediaTransferError(
+                f"Failed to send file '{resolved}' to topic {topic_id}: {exc}"
+            ) from exc
 
-        with contextlib.suppress(Exception):
+        try:
             await status_msg.delete()
+        except RPCError as exc:
+            logger.debug("Could not delete upload status message", error=str(exc))
 
         logger.info(
             "Sent file to Telegram topic via MTProto",
@@ -181,3 +199,36 @@ class MediaService:
             "size_bytes": size_bytes,
             "topic_id": topic_id,
         }
+
+
+class TelethonForumGateway:
+    """Infrastructure adapter implementing ForumTopicGateway over Telethon MTProto."""
+
+    def __init__(self, client: TelegramClient, static_config: StaticConfig) -> None:
+        self._client = client
+        self._cfg = static_config
+
+    async def create_forum_topic(self, title: str) -> int:
+        updates: Updates = await self._client(
+            CreateForumTopicRequest(
+                channel=self._cfg.telegram.forum_chat_id,
+                title=title,
+            )
+        )
+        for upd in getattr(updates, "updates", []):
+            msg = getattr(upd, "message", None)
+            if msg is not None and hasattr(msg, "id"):
+                return int(msg.id)
+        raise AntigravityError(
+            "Failed to extract created topic_id from CreateForumTopicRequest response."
+        )
+
+    async def close_and_rename_forum_topic(self, topic_id: int, new_title: str) -> None:
+        await self._client(
+            EditForumTopicRequest(
+                channel=self._cfg.telegram.forum_chat_id,
+                topic_id=topic_id,
+                title=new_title,
+                closed=True,
+            )
+        )

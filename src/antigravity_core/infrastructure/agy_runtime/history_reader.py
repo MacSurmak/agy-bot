@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
+import structlog
+
 from antigravity_core.config.static_config import StaticConfig
+from antigravity_core.domain.exceptions import AgyProcessError
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,8 +50,15 @@ class AgyHistoryReader:
                     (str(conversation_id),),
                 )
                 row = cursor.fetchone()
-        except sqlite3.Error:
-            return None
+        except sqlite3.Error as exc:
+            logger.error(
+                "Failed to query agy conversation_summaries.db",
+                conversation_id=str(conversation_id),
+                error=str(exc),
+            )
+            raise AgyProcessError(
+                f"Failed to read conversation_summaries.db for {conversation_id}: {exc}"
+            ) from exc
 
         if row is None:
             return None
@@ -71,28 +83,32 @@ class AgyHistoryReader:
                     (limit,),
                 )
                 rows = cursor.fetchall()
-        except sqlite3.Error:
-            return []
+        except sqlite3.Error as exc:
+            logger.error(
+                "Failed to list root conversations from conversation_summaries.db",
+                error=str(exc),
+            )
+            raise AgyProcessError(
+                f"Failed to list root conversations from conversation_summaries.db: {exc}"
+            ) from exc
 
-        summaries: list[AgyConversationSummary] = []
-        for row in rows:
-            mapped = self._map_row(row)
-            if mapped is not None:
-                summaries.append(mapped)
-        return summaries
+        return [self._map_row(row) for row in rows]
 
     @staticmethod
-    def _map_row(row: tuple[object, ...]) -> AgyConversationSummary | None:
+    def _map_row(row: tuple[object, ...]) -> AgyConversationSummary:
         try:
             conv_uuid = UUID(str(row[0]))
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise AgyProcessError(
+                f"Corrupted conversation_id UUID in conversation_summaries.db: {row[0]!r}"
+            ) from exc
 
         raw_uris = str(row[6]) if row[6] is not None else "[]"
         try:
             parsed_uris = json.loads(raw_uris)
             uris = tuple(str(u) for u in parsed_uris) if isinstance(parsed_uris, list) else ()
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            logger.warning("Malformed workspace_uris JSON in conversation_summaries.db", error=str(exc))
             uris = ()
 
         return AgyConversationSummary(
@@ -120,8 +136,10 @@ class AgyHistoryReader:
 
         try:
             lines = transcript_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            return []
+        except OSError as exc:
+            raise AgyProcessError(
+                f"Failed to read transcript file {transcript_path}: {exc}"
+            ) from exc
 
         entries: list[dict[str, object]] = []
         for line in lines[-max_lines:]:
@@ -130,8 +148,10 @@ class AgyHistoryReader:
                 continue
             try:
                 obj = json.loads(stripped)
-                if isinstance(obj, dict):
-                    entries.append(obj)
-            except json.JSONDecodeError:
-                continue
+            except json.JSONDecodeError as exc:
+                raise AgyProcessError(
+                    f"Malformed JSONL entry in {transcript_path}: {exc}"
+                ) from exc
+            if isinstance(obj, dict):
+                entries.append(obj)
         return entries

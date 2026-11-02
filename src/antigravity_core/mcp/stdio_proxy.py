@@ -34,7 +34,7 @@ def _get_inherited_topic_id() -> int:
 async def _call_bot_ipc(method: str, params: dict[str, Any]) -> dict[str, Any]:
     socket_path = _require_env("AGY_CORE_IPC_SOCKET")
     topic_id = _get_inherited_topic_id()
-    account_slug = os.environ.get("AGY_ACCOUNT_SLUG", "unknown")
+    account_slug = _require_env("AGY_ACCOUNT_SLUG")
 
     request_envelope = {
         "method": method,

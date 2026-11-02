@@ -194,15 +194,17 @@ class TopicWorker:
                 text = line_bytes.decode("utf-8", errors="replace").rstrip()
                 if text:
                     self._stderr_tail.append(text)
-                    if len(self._stderr_tail) > 50:
+                    if len(self._stderr_tail) > self._cfg.runtime.stderr_tail_max_lines:
                         self._stderr_tail.pop(0)
         except asyncio.CancelledError:
             raise
-        except OSError:
+        except OSError as exc:
+            logger.debug("Worker stderr reader closed", topic_id=self._topic_id, error=str(exc))
             return
 
     def get_stderr_summary(self) -> str:
-        return "\n".join(self._stderr_tail[-15:])
+        limit = self._cfg.runtime.stderr_summary_lines
+        return "\n".join(self._stderr_tail[-limit:])
 
     async def execute_turn(
         self,
@@ -233,8 +235,9 @@ class TopicWorker:
         tools_by_step: dict[int, ToolCallSummary] = {}
         active_subagents: dict[str, SubagentState] = {}
 
+        watchdog_sec = float(settings.turn_timeout_sec) + self._cfg.runtime.turn_watchdog_grace_sec
         try:
-            async with asyncio.timeout(float(settings.turn_timeout_sec + 30)):
+            async with asyncio.timeout(watchdog_sec):
                 while True:
                     raw_line_bytes = await proc.stdout.readline()
                     if not raw_line_bytes:
@@ -256,6 +259,7 @@ class TopicWorker:
                         raw_line,
                         prev_cumulative_tokens=self._cumulative_tokens,
                         prev_cumulative_duration_sec=self._cumulative_duration_sec,
+                        target_hint_max_chars=self._cfg.limits.tool_target_hint_max_chars,
                     )
 
                     if isinstance(event, ParsedInitEvent):
@@ -274,6 +278,7 @@ class TopicWorker:
                         for sub in event.subagents:
                             active_subagents[sub.conversation_id] = sub
 
+                        tools_win = self._cfg.runtime.active_tools_window_size
                         progress_event = TurnProgressEvent(
                             conversation_id=event.conversation_id,
                             step_index=event.step_index,
@@ -281,7 +286,7 @@ class TopicWorker:
                             state=event.state,
                             thinking_snippet=latest_thinking,
                             text_accumulated=accumulated_text,
-                            active_tools=tuple(tools_by_step.values())[-8:],
+                            active_tools=tuple(tools_by_step.values())[-tools_win:],
                             active_subagents=tuple(active_subagents.values()),
                         )
                         await on_progress(progress_event)

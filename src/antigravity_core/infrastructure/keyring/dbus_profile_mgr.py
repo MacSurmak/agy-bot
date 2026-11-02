@@ -82,10 +82,10 @@ class KeyringProfileManager:
             dbus_pid = await self._start_dbus_daemon(socket_path)
 
         base_env: dict[str, str] = {
-            "PATH": os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
+            "PATH": self._cfg.paths.system_path_env,
             "HOME": str(self._cfg.paths.agy_home_dir.parent),
-            "USER": os.environ.get("USER", "root"),
-            "LOGNAME": os.environ.get("LOGNAME", "root"),
+            "USER": self._cfg.paths.system_user,
+            "LOGNAME": self._cfg.paths.system_logname,
             "XDG_DATA_HOME": str(xdg_dir),
             "XDG_RUNTIME_DIR": str(self._cfg.paths.runtime_dir),
             "DBUS_SESSION_BUS_ADDRESS": f"unix:path={socket_path}",
@@ -139,8 +139,7 @@ class KeyringProfileManager:
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
         )
-        # Wait up to 2 seconds for socket file creation
-        for _ in range(40):
+        for _ in range(self._cfg.runtime.dbus_socket_poll_attempts):
             if socket_path.exists():
                 return proc.pid
             if proc.returncode is not None:
@@ -149,7 +148,7 @@ class KeyringProfileManager:
                     f"dbus-daemon exited prematurely with code {proc.returncode}: "
                     f"{stderr_bytes.decode('utf-8', errors='replace')}"
                 )
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(self._cfg.runtime.dbus_socket_poll_interval_sec)
 
         raise KeyringInitializationError(
             f"Timed out waiting for dbus-daemon to create socket at {socket_path}"
@@ -362,10 +361,11 @@ class KeyringProfileManager:
             raise AccountAuthFlowError("Failed to capture stdout for agy login process.")
 
         accumulated = ""
+        chunk_size = self._cfg.runtime.oauth_stdout_chunk_bytes
         try:
             async with asyncio.timeout(self._cfg.runtime.command_exec_timeout_sec):
                 while True:
-                    chunk = await proc.stdout.read(256)
+                    chunk = await proc.stdout.read(chunk_size)
                     if not chunk:
                         break
                     accumulated += chunk.decode("utf-8", errors="replace")

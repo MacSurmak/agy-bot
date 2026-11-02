@@ -11,6 +11,7 @@ from antigravity_core.domain.models import (
     GoogleAccount,
     TurnResult,
     WorkerSignature,
+    WorkerTopicSnapshot,
 )
 from antigravity_core.infrastructure.agy_runtime.worker import (
     InitCallback,
@@ -29,15 +30,6 @@ class WorkerPoolSlot:
     worker: TopicWorker | None
     idle_timer_task: asyncio.Task[None] | None
     is_running_turn: bool
-
-
-@dataclass(frozen=True, slots=True)
-class WorkerTopicSnapshot:
-    topic_id: int
-    is_warm: bool
-    is_running_turn: bool
-    model_slug: str | None
-    account_slug: str | None
 
 
 class AgyWorkerPool:
@@ -212,6 +204,12 @@ class AgyWorkerPool:
         for slot in slots:
             self._cancel_idle_timer(slot)
             if slot.worker is not None:
-                with contextlib.suppress(Exception):
+                try:
                     await slot.worker.terminate_forcefully()
+                except OSError as exc:
+                    logger.warning(
+                        "Error terminating worker during pool shutdown",
+                        topic_id=slot.topic_id,
+                        error=str(exc),
+                    )
                 slot.worker = None
