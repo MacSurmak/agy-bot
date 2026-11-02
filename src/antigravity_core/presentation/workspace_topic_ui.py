@@ -340,6 +340,19 @@ class WorkspaceTopicUI:
                     except MessageNotModifiedError:
                         rendered_page_state[idx] = desired_state
                     except RPCError as exc:
+                        if is_final:
+                            # Ensure the cancel button is removed even if text edit hit a minor RPC limit
+                            try:
+                                await self._client.edit_message(
+                                    entity=self._cfg.telegram.forum_chat_id,
+                                    message=trace_msgs[idx].id,
+                                    buttons=None,
+                                )
+                            except RPCError as btn_exc:
+                                logger.debug(
+                                    "Could not clear cancel button on final trace page",
+                                    error=str(btn_exc),
+                                )
                         logger.debug(
                             "Trace page edit skipped",
                             topic_id=topic_id,
@@ -417,11 +430,24 @@ class WorkspaceTopicUI:
         )
         if final_pages:
             await _sync_trace_pages(final_pages, is_final=True)
+            # Delete any trailing trace messages that only held the temporary live draft preview
+            if len(trace_msgs) > len(final_pages):
+                extra_msgs = trace_msgs[len(final_pages) :]
+                del trace_msgs[len(final_pages) :]
+                for extra_msg in extra_msgs:
+                    try:
+                        await extra_msg.delete()
+                    except RPCError:
+                        try:
+                            await extra_msg.edit(buttons=None)
+                        except RPCError as edit_exc:
+                            logger.debug("Could not clear extra draft page", error=str(edit_exc))
         else:
-            try:
-                await trace_msgs[0].delete()
-            except RPCError as exc:
-                logger.debug("Could not delete empty status message", error=str(exc))
+            for msg in trace_msgs:
+                try:
+                    await msg.delete()
+                except RPCError as exc:
+                    logger.debug("Could not delete empty status message", error=str(exc))
 
         footer_bar = render_turn_footer(
             lex=lex,

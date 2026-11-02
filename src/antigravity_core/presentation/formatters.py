@@ -53,6 +53,14 @@ def _utf16_len(text: str) -> int:
     return len(add_surrogate(text))
 
 
+def _pad_wide_bar(text: str) -> str:
+    clean = text.strip()
+    if len(clean) >= _WIDE_BUBBLE_TARGET_COLS:
+        return clean
+    pad_len = max(2, _WIDE_BUBBLE_TARGET_COLS - len(clean) - 1)
+    return f"{clean} " + ("─" * pad_len)
+
+
 def _split_text_preserving_lines(text: str, chunk_size: int) -> list[str]:
     if len(text) <= chunk_size:
         return [text]
@@ -191,12 +199,10 @@ def _assemble_collapsible_trace_message(
     quote_blocks: list[str],
 ) -> tuple[str, list[TypeMessageEntity]]:
     """Builds plain text with a full-width MessageEntityPre header bar and collapsible quote entities."""
-    clean_header = (
-        header_line.replace("**", "").replace("`", "").ljust(_WIDE_BUBBLE_TARGET_COLS)
-    )
+    clean_header = _pad_wide_bar(header_line.replace("**", "").replace("`", ""))
     header_u16 = _utf16_len(clean_header)
     entities: list[TypeMessageEntity] = [
-        MessageEntityPre(offset=0, length=header_u16, language="")
+        MessageEntityPre(offset=0, length=header_u16, language="trace")
     ]
     parts: list[str] = [clean_header]
     current_utf16_offset = header_u16
@@ -374,7 +380,7 @@ def render_turn_footer(
         f"📊 +{tok_k:.1f}k ток (сессия: {cum_k:.1f}k, кэш: {cache_k:.1f}k) │ "
         f"🧠 {model_slug} │ 👤 {account_slug}"
     )
-    lines = [stats_line.ljust(_WIDE_BUBBLE_TARGET_COLS)]
+    lines = [_pad_wide_bar(stats_line)]
 
     if result.account_switched_from and result.account_switched_to:
         failover_clean = (
@@ -573,7 +579,7 @@ def render_Formatted_response_chunks(
 
         # Attach wide preformatted bar at the bottom of every chunk so Telegram Desktop expands bubble to full width
         if idx < total_chunks:
-            bar_text = f"📄 Часть {idx}/{total_chunks}".ljust(_WIDE_BUBBLE_TARGET_COLS)
+            bar_text = _pad_wide_bar(f"📄 Часть {idx}/{total_chunks}")
         else:
             bar_text = footer_bar_text
 
@@ -584,7 +590,7 @@ def render_Formatted_response_chunks(
             MessageEntityPre(
                 offset=bar_offset,
                 length=bar_len,
-                language="",
+                language="stats",
             )
         )
         full_chunk_text = f"{clean_body}{sep}{bar_text}"
