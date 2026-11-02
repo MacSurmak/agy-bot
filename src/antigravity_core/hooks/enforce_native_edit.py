@@ -91,7 +91,15 @@ def evaluate_command_line(command_line: str) -> dict[str, str]:
     # Strip inline script bodies before checking shell '>' redirection so 'if x > 10' in python -c is not mistaken for file redirection
     shell_only = _INLINE_SCRIPT_BODY_RE.sub(" ", normalized)
 
+    # Allow standard daemon stdout/stderr log redirection when launching background processes via nohup
+    is_nohup_daemon = bool(re.search(r"\bnohup\b", normalized))
+
     for pattern, label in _FORBIDDEN_PATTERNS:
+        if is_nohup_daemon and label in (
+            "output redirection (>) to file",
+            "append redirection (>>)",
+        ):
+            continue
         target_str = normalized if label == "inline python file write" else shell_only
         if pattern.search(target_str) is not None:
             return {
@@ -165,6 +173,23 @@ def main() -> None:
     args = tool_call.get("args")
     if not isinstance(args, dict):
         sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+        return
+
+    if tool_name == "schedule":
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "decision": "deny",
+                    "reason": (
+                        "FORBIDDEN: Do NOT use the built-in 'schedule' tool because it blocks the current turn. "
+                        "You MUST use the non-blocking MCP tool 'schedule_task' from server 'telegram-core' "
+                        "(call_mcp_tool with ServerName='telegram-core', ToolName='schedule_task', "
+                        "schedule_kind='ONE_SHOT', trigger_spec='+5m')."
+                    ),
+                }
+            )
+            + "\n"
+        )
         return
 
     if tool_name in ("find_by_name", "grep_search"):
