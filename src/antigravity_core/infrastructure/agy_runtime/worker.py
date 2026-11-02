@@ -12,7 +12,7 @@ import structlog
 
 from antigravity_core.config.dynamic_settings import DynamicSettings
 from antigravity_core.config.static_config import StaticConfig
-from antigravity_core.domain.enums import ExecutionMode, TurnStatus
+from antigravity_core.domain.enums import ExecutionMode, StepState, TurnStatus
 from antigravity_core.domain.exceptions import AgyProcessError, QuotaExhaustedError
 from antigravity_core.domain.models import (
     SubagentState,
