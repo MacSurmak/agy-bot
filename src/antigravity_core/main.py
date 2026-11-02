@@ -232,13 +232,7 @@ async def run_service(static_config: StaticConfig) -> None:
 
 def run() -> None:
     try:
-        config_env = os.environ.get("ANTIGRAVITY_CONFIG", "").strip()
-        if not config_env:
-            raise StartupValidationError(
-                "Environment variable ANTIGRAVITY_CONFIG must be explicitly set to the path of config.yaml."
-            )
-        config_path = Path(config_env)
-        static_cfg = load_static_config(config_path)
+        static_cfg = load_static_config()
         configure_structlog(static_cfg.paths.log_file_path)
         asyncio.run(run_service(static_cfg))
     except (StartupValidationError, AntigravityError) as exc:

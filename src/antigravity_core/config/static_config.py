@@ -1,24 +1,39 @@
+from dataclasses import dataclass
+import getpass
+import os
 from pathlib import Path
+import shutil
+import sys
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
+from antigravity_core.config.constants import (
+    CONTROL_PANEL_TOPIC_ID,
+    DB_MAX_OVERFLOW,
+    DB_POOL_SIZE,
+    DB_POOL_TIMEOUT_SEC,
+    DEFAULT_POSTGRES_HOST,
+    DEFAULT_POSTGRES_PORT,
+    DEFAULT_SYSTEM_PATH,
+    LimitsStaticConfig,
+    RemotesStaticConfig,
+    RuntimeStaticConfig,
+)
 from antigravity_core.domain.exceptions import StartupValidationError
 
 
-class TelegramStaticConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+class _TelegramYamlInput(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     api_id: int
     api_hash: str
     bot_token: str
-    session_file_path: Path
     owner_telegram_id: int
     forum_chat_id: int
-    control_panel_topic_id: int
 
-    @field_validator("api_id", "owner_telegram_id", "control_panel_topic_id")
+    @field_validator("api_id", "owner_telegram_id")
     @classmethod
     def _validate_positive_id(cls, value: int) -> int:
         if value <= 0:
@@ -35,7 +50,7 @@ class TelegramStaticConfig(BaseModel):
 
 
 class SecurityStaticConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     fernet_master_key: str
 
@@ -48,41 +63,35 @@ class SecurityStaticConfig(BaseModel):
         return stripped
 
 
-class DatabaseStaticConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+class _MinimalYamlConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
+    telegram: _TelegramYamlInput
+    security: SecurityStaticConfig
+
+
+@dataclass(frozen=True, slots=True)
+class TelegramStaticConfig:
+    api_id: int
+    api_hash: str
+    bot_token: str
+    session_file_path: Path
+    owner_telegram_id: int
+    forum_chat_id: int
+    control_panel_topic_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseStaticConfig:
     dsn: str
     sync_dsn: str
     pool_size: int
     max_overflow: int
     pool_timeout_sec: float
 
-    @field_validator("dsn", "sync_dsn")
-    @classmethod
-    def _validate_dsn(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped.startswith("postgresql"):
-            raise ValueError(f"Database DSN must start with 'postgresql', got '{value}'.")
-        return stripped
 
-    @field_validator("pool_size", "max_overflow")
-    @classmethod
-    def _validate_positive_int(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError(f"Pool integer parameter must be positive, got {value}.")
-        return value
-
-    @field_validator("pool_timeout_sec")
-    @classmethod
-    def _validate_positive_float(cls, value: float) -> float:
-        if value <= 0.0:
-            raise ValueError(f"pool_timeout_sec must be positive, got {value}.")
-        return value
-
-
-class PathsStaticConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
+@dataclass(frozen=True, slots=True)
+class PathsStaticConfig:
     venv_python_path: Path
     agy_binary_path: Path
     agy_home_dir: Path
@@ -98,173 +107,9 @@ class PathsStaticConfig(BaseModel):
     ipc_socket_path: Path
     log_file_path: Path
 
-    @field_validator(
-        "venv_python_path",
-        "agy_binary_path",
-        "agy_home_dir",
-        "ssh_config_dir",
-        "workspaces_root_dir",
-        "remotes_mount_dir",
-        "inbox_dir",
-        "profiles_data_dir",
-        "runtime_dir",
-        "ipc_socket_path",
-        "log_file_path",
-    )
-    @classmethod
-    def _validate_absolute_path(cls, value: Path) -> Path:
-        if not value.is_absolute():
-            raise ValueError(f"Configured path must be absolute, got '{value}'.")
-        return value
 
-    @field_validator("system_path_env", "system_user", "system_logname")
-    @classmethod
-    def _validate_non_empty_sys_str(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("System environment string cannot be empty.")
-        return stripped
-
-
-class RemotesStaticConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    sshfs_mount_options: str
-    ssh_connect_timeout_sec: int
-    ssh_check_grace_sec: int
-    sshfs_mount_grace_sec: int
-
-    @field_validator("sshfs_mount_options")
-    @classmethod
-    def _validate_sshfs_options(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("sshfs_mount_options cannot be empty.")
-        opts = {part.strip() for part in stripped.split(",")}
-        if "kernel_cache" in opts:
-            raise ValueError(
-                "Forbidden 'kernel_cache' in sshfs_mount_options; must use 'auto_cache' (Errata Patch #3)."
-            )
-        if "auto_cache" not in opts:
-            raise ValueError("sshfs_mount_options must include 'auto_cache' (Errata Patch #3).")
-        return stripped
-
-    @field_validator(
-        "ssh_connect_timeout_sec",
-        "ssh_check_grace_sec",
-        "sshfs_mount_grace_sec",
-    )
-    @classmethod
-    def _validate_ssh_timeout(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError(f"SSH timeout parameter must be positive, got {value}.")
-        return value
-
-
-class RuntimeStaticConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    agy_sqlite_busy_timeout_ms: int
-    mcp_stdio_timeout_sec: int
-    hook_timeout_sec: int
-    process_kill_grace_sec: float
-    ipc_request_timeout_sec: float
-    command_exec_timeout_sec: float
-    turn_watchdog_grace_sec: float
-    dbus_socket_poll_attempts: int
-    dbus_socket_poll_interval_sec: float
-    oauth_stdout_chunk_bytes: int
-    stderr_tail_max_lines: int
-    stderr_summary_lines: int
-    active_tools_window_size: int
-    scheduler_misfire_grace_sec: int
-    invite_ttl_hours: int
-    invite_token_bytes: int
-    keyring_password_bytes: int
-    effort_supported_prefixes: tuple[str, ...]
-
-    @field_validator("effort_supported_prefixes")
-    @classmethod
-    def _validate_effort_prefixes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        cleaned = tuple(item.strip().lower() for item in value if item.strip())
-        if not cleaned:
-            raise ValueError("effort_supported_prefixes must contain at least one prefix.")
-        return cleaned
-
-    @field_validator(
-        "agy_sqlite_busy_timeout_ms",
-        "mcp_stdio_timeout_sec",
-        "hook_timeout_sec",
-        "dbus_socket_poll_attempts",
-        "oauth_stdout_chunk_bytes",
-        "stderr_tail_max_lines",
-        "stderr_summary_lines",
-        "active_tools_window_size",
-        "scheduler_misfire_grace_sec",
-        "invite_ttl_hours",
-        "invite_token_bytes",
-        "keyring_password_bytes",
-    )
-    @classmethod
-    def _validate_positive_runtime_int(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError(f"Runtime integer parameter must be positive, got {value}.")
-        return value
-
-    @field_validator(
-        "process_kill_grace_sec",
-        "ipc_request_timeout_sec",
-        "command_exec_timeout_sec",
-        "turn_watchdog_grace_sec",
-        "dbus_socket_poll_interval_sec",
-    )
-    @classmethod
-    def _validate_positive_runtime_float(cls, value: float) -> float:
-        if value <= 0.0:
-            raise ValueError(f"Runtime timeout parameter must be positive, got {value}.")
-        return value
-
-
-class LimitsStaticConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    uuid_short_chars: int
-    tool_target_hint_max_chars: int
-    topic_title_max_chars: int
-    thinking_snippet_max_chars: int
-    draft_preview_max_chars: int
-    error_summary_max_chars: int
-    live_tools_display_limit: int
-    dashboard_tasks_display_limit: int
-    tasks_menu_display_limit: int
-    models_menu_display_limit: int
-    sessions_history_display_limit: int
-    workspace_dirs_display_limit: int
-
-    @field_validator(
-        "uuid_short_chars",
-        "tool_target_hint_max_chars",
-        "topic_title_max_chars",
-        "thinking_snippet_max_chars",
-        "draft_preview_max_chars",
-        "error_summary_max_chars",
-        "live_tools_display_limit",
-        "dashboard_tasks_display_limit",
-        "tasks_menu_display_limit",
-        "models_menu_display_limit",
-        "sessions_history_display_limit",
-        "workspace_dirs_display_limit",
-    )
-    @classmethod
-    def _validate_positive_limit(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError(f"Limit integer parameter must be strictly positive, got {value}.")
-        return value
-
-
-class StaticConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
+@dataclass(frozen=True, slots=True)
+class StaticConfig:
     telegram: TelegramStaticConfig
     security: SecurityStaticConfig
     database: DatabaseStaticConfig
@@ -274,28 +119,175 @@ class StaticConfig(BaseModel):
     limits: LimitsStaticConfig
 
 
-def load_static_config(config_path: Path) -> StaticConfig:
-    if not config_path.is_file():
-        raise StartupValidationError(f"Static configuration file does not exist: {config_path}")
+def resolve_default_config_path() -> Path:
+    env_val = os.environ.get("ANTIGRAVITY_CONFIG", "").strip()
+    if env_val:
+        return Path(env_val).expanduser().resolve()
+    cwd_candidate = (Path.cwd() / "config.yaml").resolve()
+    if cwd_candidate.is_file():
+        return cwd_candidate
+    repo_root = Path(__file__).resolve().parents[3]
+    return repo_root / "config.yaml"
+
+
+def _load_dotenv_map(project_root: Path) -> dict[str, str]:
+    dotenv_vars: dict[str, str] = {}
+    env_file = project_root / ".env"
+    if env_file.is_file():
+        for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            dotenv_vars[key.strip()] = val.strip().strip("'\"")
+    return dotenv_vars
+
+
+def _resolve_database_config(
+    project_root: Path, parsed_yaml: dict[str, Any]
+) -> DatabaseStaticConfig:
+    dotenv_map = _load_dotenv_map(project_root)
+    pg_user = os.environ.get("POSTGRES_USER") or dotenv_map.get("POSTGRES_USER")
+    pg_pass = os.environ.get("POSTGRES_PASSWORD") or dotenv_map.get("POSTGRES_PASSWORD")
+    pg_db = os.environ.get("POSTGRES_DB") or dotenv_map.get("POSTGRES_DB")
+    pg_host = (
+        os.environ.get("POSTGRES_HOST")
+        or dotenv_map.get("POSTGRES_HOST")
+        or DEFAULT_POSTGRES_HOST
+    )
+    pg_port_raw = (
+        os.environ.get("POSTGRES_PORT")
+        or dotenv_map.get("POSTGRES_PORT")
+        or str(DEFAULT_POSTGRES_PORT)
+    )
+
+    if pg_user and pg_pass and pg_db:
+        dsn = f"postgresql+asyncpg://{pg_user}:{pg_pass}@{pg_host}:{pg_port_raw}/{pg_db}"
+        sync_dsn = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port_raw}/{pg_db}"
+        return DatabaseStaticConfig(
+            dsn=dsn,
+            sync_dsn=sync_dsn,
+            pool_size=DB_POOL_SIZE,
+            max_overflow=DB_MAX_OVERFLOW,
+            pool_timeout_sec=DB_POOL_TIMEOUT_SEC,
+        )
+
+    # Fallback if .env is absent and database section was explicitly provided in config.yaml
+    db_sec = parsed_yaml.get("database")
+    if isinstance(db_sec, dict) and db_sec.get("dsn"):
+        raw_dsn = str(db_sec["dsn"]).strip()
+        raw_sync = str(db_sec.get("sync_dsn") or raw_dsn.replace("+asyncpg", "")).strip()
+        return DatabaseStaticConfig(
+            dsn=raw_dsn,
+            sync_dsn=raw_sync,
+            pool_size=DB_POOL_SIZE,
+            max_overflow=DB_MAX_OVERFLOW,
+            pool_timeout_sec=DB_POOL_TIMEOUT_SEC,
+        )
+
+    raise StartupValidationError(
+        "Database credentials missing: set POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB in .env."
+    )
+
+
+def _resolve_agy_binary() -> Path:
+    found = shutil.which("agy")
+    if found:
+        return Path(found).resolve()
+    for candidate in (
+        Path.home() / ".local" / "bin" / "agy",
+        Path("/usr/local/bin/agy"),
+        Path("/usr/bin/agy"),
+    ):
+        if candidate.is_file():
+            return candidate.resolve()
+    raise StartupValidationError(
+        "Could not locate 'agy' binary in PATH or ~/.local/bin/agy."
+    )
+
+
+def _resolve_paths_config(project_root: Path) -> PathsStaticConfig:
+    runtime_root = (project_root / "runtime_data").resolve()
+    home_dir = Path.home().resolve()
+    current_user = getpass.getuser()
+    current_path = os.environ.get("PATH", "").strip() or DEFAULT_SYSTEM_PATH
+
+    return PathsStaticConfig(
+        venv_python_path=Path(sys.executable).resolve(),
+        agy_binary_path=_resolve_agy_binary(),
+        agy_home_dir=home_dir / ".gemini",
+        system_path_env=current_path,
+        system_user=current_user,
+        system_logname=current_user,
+        ssh_config_dir=home_dir / ".ssh" / "config.d",
+        workspaces_root_dir=runtime_root / "workspaces",
+        remotes_mount_dir=runtime_root / "remotes",
+        inbox_dir=runtime_root / "inbox",
+        profiles_data_dir=runtime_root / "profiles",
+        runtime_dir=runtime_root / "run",
+        ipc_socket_path=runtime_root / "run" / "bot_ipc.sock",
+        log_file_path=runtime_root / "logs" / "antigravity_core.jsonl",
+    )
+
+
+def load_static_config(config_path: Path | None = None) -> StaticConfig:
+    resolved_cfg_path = (
+        config_path.expanduser().resolve()
+        if config_path is not None
+        else resolve_default_config_path()
+    )
+    if not resolved_cfg_path.is_file():
+        raise StartupValidationError(
+            f"Configuration file does not exist: {resolved_cfg_path}"
+        )
 
     try:
-        raw_content = config_path.read_text(encoding="utf-8")
+        raw_content = resolved_cfg_path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise StartupValidationError(f"Failed to read configuration file {config_path}: {exc}") from exc
+        raise StartupValidationError(
+            f"Failed to read configuration file {resolved_cfg_path}: {exc}"
+        ) from exc
 
     try:
         parsed_yaml: Any = yaml.safe_load(raw_content)
     except yaml.YAMLError as exc:
-        raise StartupValidationError(f"Invalid YAML syntax in {config_path}: {exc}") from exc
+        raise StartupValidationError(
+            f"Invalid YAML syntax in {resolved_cfg_path}: {exc}"
+        ) from exc
 
     if not isinstance(parsed_yaml, dict):
         raise StartupValidationError(
-            f"Root of {config_path} must be a YAML mapping, got {type(parsed_yaml).__name__}."
+            f"Root of {resolved_cfg_path} must be a YAML mapping."
         )
 
     try:
-        return StaticConfig.model_validate(parsed_yaml)
+        minimal = _MinimalYamlConfig.model_validate(parsed_yaml)
     except ValidationError as exc:
         raise StartupValidationError(
-            f"Static configuration validation failed for {config_path}:\n{exc}"
+            f"Configuration validation failed for {resolved_cfg_path}:\n{exc}"
         ) from exc
+
+    project_root = resolved_cfg_path.parent
+    paths_cfg = _resolve_paths_config(project_root)
+    db_cfg = _resolve_database_config(project_root, parsed_yaml)
+    session_file = (project_root / "runtime_data" / "data" / "telethon_bot.session").resolve()
+
+    tg_cfg = TelegramStaticConfig(
+        api_id=minimal.telegram.api_id,
+        api_hash=minimal.telegram.api_hash,
+        bot_token=minimal.telegram.bot_token,
+        session_file_path=session_file,
+        owner_telegram_id=minimal.telegram.owner_telegram_id,
+        forum_chat_id=minimal.telegram.forum_chat_id,
+        control_panel_topic_id=CONTROL_PANEL_TOPIC_ID,
+    )
+
+    return StaticConfig(
+        telegram=tg_cfg,
+        security=minimal.security,
+        database=db_cfg,
+        paths=paths_cfg,
+        remotes=RemotesStaticConfig(),
+        runtime=RuntimeStaticConfig(),
+        limits=LimitsStaticConfig(),
+    )

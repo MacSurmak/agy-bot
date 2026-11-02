@@ -1,82 +1,14 @@
-# Static configuration for Antigravity Telegram Core.
-# Every field in this file is mandatory (Zero Implicit Defaults).
-# Copy to /srv/antigravity/app/config.yaml and set permissions to 0600.
+# Minimal static configuration for Antigravity Telegram Core.
+# Database credentials are read automatically from .env (POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB).
+# All runtime paths, Python interpreter, and agy binary paths are resolved automatically.
 
 telegram:
   api_id: 12345678
   api_hash: "0123456789abcdef0123456789abcdef"
   bot_token: "1234567890:AAH_your_bot_token_here"
-  session_file_path: "/home/macsurmak/agy-bot/runtime_data/data/telethon_bot.session"
   owner_telegram_id: 123456789
   forum_chat_id: -1001234567890
-  control_panel_topic_id: 1
 
 security:
-  # Generate with: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
   fernet_master_key: "REPLACE_WITH_32_BYTE_URLSAFE_BASE64_FERNET_KEY="
-
-database:
-  dsn: "postgresql+asyncpg://antigravity:antigravity_local_pass@127.0.0.1:5432/antigravity_core"
-  sync_dsn: "postgresql://antigravity:antigravity_local_pass@127.0.0.1:5432/antigravity_core"
-  pool_size: 10
-  max_overflow: 20
-  pool_timeout_sec: 10.0
-
-paths:
-  venv_python_path: "/home/macsurmak/miniforge3/envs/agy-core/bin/python"
-  agy_binary_path: "/home/macsurmak/.local/bin/agy"
-  agy_home_dir: "/home/macsurmak/.gemini"
-  system_path_env: "/home/macsurmak/.local/bin:/home/macsurmak/miniforge3/envs/agy-core/bin:/usr/local/sbin:/usr/local/bin:/usr/bin"
-  system_user: "macsurmak"
-  system_logname: "macsurmak"
-  ssh_config_dir: "/home/macsurmak/.ssh/config.d"
-  workspaces_root_dir: "/home/macsurmak/agy-bot/runtime_data/workspaces"
-  remotes_mount_dir: "/home/macsurmak/agy-bot/runtime_data/remotes"
-  inbox_dir: "/home/macsurmak/agy-bot/runtime_data/inbox"
-  profiles_data_dir: "/home/macsurmak/agy-bot/runtime_data/profiles"
-  runtime_dir: "/home/macsurmak/agy-bot/runtime_data/run"
-  ipc_socket_path: "/home/macsurmak/agy-bot/runtime_data/run/bot_ipc.sock"
-  log_file_path: "/home/macsurmak/agy-bot/runtime_data/logs/antigravity_core.jsonl"
-
-remotes:
-  # Errata Patch #3: Safe auto_cache instead of kernel_cache so remote SSH edits are visible immediately
-  sshfs_mount_options: "reconnect,ServerAliveInterval=5,ServerAliveCountMax=2,ConnectTimeout=5,BatchMode=yes,idmap=user,cache=yes,auto_cache,attr_timeout=3,entry_timeout=5,negative_timeout=2,compression=yes"
-  ssh_connect_timeout_sec: 10
-  ssh_check_grace_sec: 5
-  sshfs_mount_grace_sec: 10
-
-runtime:
-  # Errata Patch #4: SQLite WAL busy_timeout in milliseconds for agy internal conversation_summaries.db
-  agy_sqlite_busy_timeout_ms: 5000
-  mcp_stdio_timeout_sec: 600
-  hook_timeout_sec: 5
-  process_kill_grace_sec: 3.0
-  ipc_request_timeout_sec: 120.0
-  command_exec_timeout_sec: 30.0
-  turn_watchdog_grace_sec: 30.0
-  dbus_socket_poll_attempts: 40
-  dbus_socket_poll_interval_sec: 0.05
-  oauth_stdout_chunk_bytes: 256
-  stderr_tail_max_lines: 50
-  stderr_summary_lines: 15
-  active_tools_window_size: 8
-  scheduler_misfire_grace_sec: 300
-  invite_ttl_hours: 24
-  invite_token_bytes: 18
-  keyring_password_bytes: 32
-  effort_supported_prefixes:
-    - "gemini"
-
-limits:
-  uuid_short_chars: 8
-  tool_target_hint_max_chars: 120
-  topic_title_max_chars: 120
-  thinking_snippet_max_chars: 280
-  draft_preview_max_chars: 600
-  error_summary_max_chars: 300
-  live_tools_display_limit: 6
-  dashboard_tasks_display_limit: 5
-  tasks_menu_display_limit: 10
-  models_menu_display_limit: 10
-  sessions_history_display_limit: 8
-  workspace_dirs_display_limit: 12

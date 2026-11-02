@@ -2,9 +2,14 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
-from antigravity_core.config.dynamic_settings import DynamicSettings, parse_dynamic_settings
+from antigravity_core.config.constants import DASHBOARD_MSG_ID_SETTING_KEY
+from antigravity_core.config.dynamic_settings import (
+    MANDATORY_SYSTEM_SETTING_KEYS,
+    DynamicSettings,
+    parse_dynamic_settings,
+)
 from antigravity_core.domain.enums import (
     EffortLevel,
     ExecutionMode,
@@ -150,13 +155,68 @@ class SettingsRepository:
             stmt = select(SystemSettingRow)
             rows = (await session.scalars(stmt)).all()
             raw_map: dict[str, Any] = {row.key: row.value_json for row in rows}
+
+            if "ui_language" not in raw_map:
+                now = datetime.now(tz=UTC)
+                lang_row = SystemSettingRow(
+                    key="ui_language",
+                    value_json="ru",
+                    description="Язык интерфейса Telegram (ru / en).",
+                    updated_at=now,
+                )
+                session.add(lang_row)
+                await session.flush()
+                raw_map["ui_language"] = "ru"
+
+            allowed_keys = {*MANDATORY_SYSTEM_SETTING_KEYS, DASHBOARD_MSG_ID_SETTING_KEY}
+            obsolete_keys = [k for k in raw_map if k not in allowed_keys]
+            if obsolete_keys:
+                await session.execute(
+                    delete(SystemSettingRow).where(SystemSettingRow.key.in_(obsolete_keys))
+                )
+                await session.flush()
+
             return parse_dynamic_settings(raw_map)
 
     async def list_all_with_descriptions(self) -> list[tuple[str, Any, str, datetime]]:
         async with self._db.session() as session:
-            stmt = select(SystemSettingRow).order_by(SystemSettingRow.key.asc())
+            stmt = (
+                select(SystemSettingRow)
+                .where(SystemSettingRow.key.in_(MANDATORY_SYSTEM_SETTING_KEYS))
+                .order_by(SystemSettingRow.key.asc())
+            )
             rows = (await session.scalars(stmt)).all()
             return [(r.key, r.value_json, r.description, r.updated_at) for r in rows]
+
+    async def get_dashboard_msg_id(self) -> int | None:
+        async with self._db.session() as session:
+            row = await session.get(SystemSettingRow, DASHBOARD_MSG_ID_SETTING_KEY)
+            if row is None or not isinstance(row.value_json, int):
+                return None
+            return int(row.value_json)
+
+    async def set_dashboard_msg_id(self, msg_id: int | None) -> None:
+        now = datetime.now(tz=UTC)
+        async with self._db.session() as session:
+            row = await session.get(SystemSettingRow, DASHBOARD_MSG_ID_SETTING_KEY)
+            if msg_id is None:
+                if row is not None:
+                    await session.delete(row)
+                    await session.flush()
+                return
+            if row is not None:
+                row.value_json = msg_id
+                row.updated_at = now
+            else:
+                session.add(
+                    SystemSettingRow(
+                        key=DASHBOARD_MSG_ID_SETTING_KEY,
+                        value_json=msg_id,
+                        description="Internal Control-Panel active dashboard message ID.",
+                        updated_at=now,
+                    )
+                )
+            await session.flush()
 
     async def update_setting(self, key: str, new_value: Any) -> DynamicSettings:
         async with self._db.session() as session:

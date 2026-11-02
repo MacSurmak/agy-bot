@@ -21,12 +21,7 @@ target_metadata = Base.metadata
 
 
 def _resolve_database_dsn() -> str:
-    env_config_path = os.environ.get("ANTIGRAVITY_CONFIG")
-    if not env_config_path:
-        raise StartupValidationError(
-            "Environment variable ANTIGRAVITY_CONFIG must point to config.yaml for Alembic migrations."
-        )
-    static_cfg = load_static_config(Path(env_config_path))
+    static_cfg = load_static_config()
     return static_cfg.database.dsn
 
 
