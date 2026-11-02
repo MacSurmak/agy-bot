@@ -10,14 +10,14 @@ readme = "00_master_architecture_and_specification.md"
 requires-python = ">=3.14"
 dependencies = [
     "telethon>=1.45.0",
-    "cryptg>=0.4.0",
+    "cryptg>=0.6.0",
     "pydantic>=2.14.2",
-    "pyyaml>=6.0.2",
+    "pyyaml>=6.0.3",
     "cryptography>=50.0.2",
     "sqlalchemy[asyncio]>=2.0.54",
     "asyncpg>=0.32.0",
     "alembic>=1.20.1",
-    "apscheduler>=3.10.4",
+    "apscheduler>=3.11.3",
     "mcp>=1.12.4",
     "structlog>=25.4.0",
 ]
@@ -26,9 +26,9 @@ dependencies = [
 dev = [
     "ruff>=0.17.3",
     "mypy>=2.4.0",
-    "types-PyYAML>=6.0.12",
-    "pytest>=8.3.0",
-    "pytest-asyncio>=0.24.0",
+    "types-PyYAML>=6.0.12.20250915",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1",
 ]
 
 [project.scripts]
