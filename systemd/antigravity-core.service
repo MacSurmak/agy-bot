@@ -1,0 +1,25 @@
+[Unit]
+Description=Antigravity Telegram Core (MTProto Orchestrator & Warm Worker Pool)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/srv/antigravity/app
+RuntimeDirectory=agy
+RuntimeDirectoryMode=0700
+Environment="ANTIGRAVITY_CONFIG=/srv/antigravity/app/config.yaml"
+Environment="PYTHONUNBUFFERED=1"
+ExecStartPre=/usr/bin/docker compose -f /srv/antigravity/app/docker-compose.yml up -d --wait
+ExecStartPre=/srv/antigravity/venv/bin/alembic -c /srv/antigravity/app/alembic.ini upgrade head
+ExecStart=/srv/antigravity/venv/bin/python -m antigravity_core.main
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

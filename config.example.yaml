@@ -1,0 +1,50 @@
+# Static configuration for Antigravity Telegram Core.
+# Every field in this file is mandatory (Zero Implicit Defaults).
+# Copy to /srv/antigravity/app/config.yaml and set permissions to 0600.
+
+telegram:
+  api_id: 12345678
+  api_hash: "0123456789abcdef0123456789abcdef"
+  bot_token: "1234567890:AAH_your_bot_token_here"
+  session_file_path: "/srv/antigravity/data/telethon_bot.session"
+  owner_telegram_id: 123456789
+  forum_chat_id: -1001234567890
+  control_panel_topic_id: 1
+
+security:
+  # Generate with: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  fernet_master_key: "REPLACE_WITH_32_BYTE_URLSAFE_BASE64_FERNET_KEY="
+
+database:
+  dsn: "postgresql+asyncpg://antigravity:strong_password_here@127.0.0.1:5432/antigravity_core"
+  sync_dsn: "postgresql://antigravity:strong_password_here@127.0.0.1:5432/antigravity_core"
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout_sec: 10.0
+
+paths:
+  venv_python_path: "/srv/antigravity/venv/bin/python"
+  agy_binary_path: "/usr/local/bin/agy"
+  agy_home_dir: "/root/.gemini"
+  ssh_config_dir: "/root/.ssh/config.d"
+  workspaces_root_dir: "/srv/antigravity/workspaces"
+  remotes_mount_dir: "/mnt/remotes"
+  inbox_dir: "/srv/antigravity/inbox"
+  profiles_data_dir: "/srv/antigravity/profiles"
+  runtime_dir: "/run/agy"
+  ipc_socket_path: "/run/agy/bot_ipc.sock"
+  log_file_path: "/srv/antigravity/logs/antigravity_core.jsonl"
+
+remotes:
+  # Errata Patch #3: Safe auto_cache instead of kernel_cache so remote SSH edits are visible immediately
+  sshfs_mount_options: "reconnect,ServerAliveInterval=5,ServerAliveCountMax=2,ConnectTimeout=5,BatchMode=yes,idmap=user,cache=yes,auto_cache,attr_timeout=3,entry_timeout=5,negative_timeout=2,compression=yes"
+  ssh_connect_timeout_sec: 10
+
+runtime:
+  # Errata Patch #4: SQLite WAL busy_timeout in milliseconds for agy internal conversation_summaries.db
+  agy_sqlite_busy_timeout_ms: 5000
+  mcp_stdio_timeout_sec: 600
+  hook_timeout_sec: 5
+  process_kill_grace_sec: 3.0
+  ipc_request_timeout_sec: 120.0
+  command_exec_timeout_sec: 30.0
