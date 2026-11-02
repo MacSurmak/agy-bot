@@ -29,7 +29,10 @@ from antigravity_core.domain.models import (
 from antigravity_core.lexicon.schema import UiLexicon
 
 _BINARY_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]+")
-_MAX_SINGLE_BLOCK_CHARS: int = 3100
+_MAX_SINGLE_BLOCK_CHARS: int = 2400
+_MAX_TOOL_OUTPUT_CHARS: int = 850
+_MAX_TOOL_OUTPUT_HEAD_LINES: int = 10
+_MAX_TOOL_OUTPUT_TAIL_LINES: int = 6
 _MAX_PAGE_UTF16_LEN: int = 3750
 _MAX_BLOCKS_PER_PAGE: int = 25
 _WIDE_BUBBLE_TARGET_COLS: int = 92
@@ -144,10 +147,29 @@ def render_new_session_divider(lex: UiLexicon, topic: ForumTopic) -> str:
     )
 
 
+def _compact_tool_output_head_tail(raw_output: str) -> str:
+    cleaned = _clean_binary_noise(raw_output)
+    lines = cleaned.splitlines()
+    max_lines = _MAX_TOOL_OUTPUT_HEAD_LINES + _MAX_TOOL_OUTPUT_TAIL_LINES + 2
+
+    if len(lines) > max_lines:
+        head = "\n".join(lines[:_MAX_TOOL_OUTPUT_HEAD_LINES])
+        tail = "\n".join(lines[-_MAX_TOOL_OUTPUT_TAIL_LINES:])
+        hidden_count = len(lines) - _MAX_TOOL_OUTPUT_HEAD_LINES - _MAX_TOOL_OUTPUT_TAIL_LINES
+        cleaned = f"{head}\n... [скрыто ещё {hidden_count} строк] ...\n{tail}"
+
+    if len(cleaned) > _MAX_TOOL_OUTPUT_CHARS:
+        half = (_MAX_TOOL_OUTPUT_CHARS - 40) // 2
+        hidden_chars = len(cleaned) - (half * 2)
+        cleaned = f"{cleaned[:half].rstrip()}\n... [скрыто {hidden_chars} симв.] ...\n{cleaned[-half:].lstrip()}"
+
+    return cleaned
+
+
 def _format_tool_blocks_untruncated(
     lex: UiLexicon, tool: ToolCallSummary
 ) -> list[str]:
-    """Formats a tool call into one or more self-contained collapsible quote blocks without truncation."""
+    """Formats each tool call into a single collapsible quote block with full parameters and head+tail output."""
     icon = (
         lex.live_progress_tool_done_icon
         if tool.state == StepState.DONE
@@ -167,11 +189,11 @@ def _format_tool_blocks_untruncated(
     body_sections: list[str] = []
 
     if tool.parameters_text:
-        p_clean = _clean_binary_noise(tool.parameters_text)
+        p_clean = _clean_binary_noise(tool.parameters_text)[:900]
         if p_clean:
             body_sections.append(f"{lex.trace_tool_params_label}\n{p_clean}")
     if tool.output_text:
-        o_clean = _clean_binary_noise(tool.output_text)
+        o_clean = _compact_tool_output_head_tail(tool.output_text)
         if o_clean:
             body_sections.append(f"{lex.trace_tool_output_label}\n{o_clean}")
 
@@ -179,19 +201,7 @@ def _format_tool_blocks_untruncated(
     if not full_body:
         return [base_header]
 
-    combined = f"{base_header}\n{full_body}"
-    if len(combined) <= _MAX_SINGLE_BLOCK_CHARS:
-        return [combined]
-
-    body_chunks = _split_text_preserving_lines(
-        full_body, _MAX_SINGLE_BLOCK_CHARS - len(base_header) - 30
-    )
-    total_parts = len(body_chunks)
-    blocks: list[str] = []
-    for idx, chunk in enumerate(body_chunks, start=1):
-        part_suffix = lex.trace_tool_part_suffix.format(part=idx, total=total_parts)
-        blocks.append(f"{base_header}{part_suffix}\n{chunk}")
-    return blocks
+    return [f"{base_header}\n{full_body}"]
 
 
 def _assemble_collapsible_trace_message(
@@ -287,30 +297,39 @@ def _paginate_quote_blocks(
     current_header = first_page_header
     current_utf16 = _utf16_len(current_header.replace("**", "").replace("`", ""))
 
+    raw_pages: list[list[str]] = []
+    current_blocks: list[str] = []
+    current_utf16 = _utf16_len(first_page_header.replace("**", "").replace("`", ""))
+
     for block in all_blocks:
         b_utf16 = _utf16_len(block) + 2
         if current_blocks and (
             current_utf16 + b_utf16 > _MAX_PAGE_UTF16_LEN
             or len(current_blocks) >= _MAX_BLOCKS_PER_PAGE
         ):
-            pages.append(
-                _assemble_collapsible_trace_message(current_header, current_blocks)
-            )
-            page_num += 1
-            current_header = lex.trace_page_continuation_header.format(
-                page_num=page_num
-            )
+            raw_pages.append(current_blocks)
             current_blocks = [block]
-            current_utf16 = _utf16_len(current_header) + b_utf16
+            current_utf16 = 80 + b_utf16
         else:
             current_blocks.append(block)
             current_utf16 += b_utf16
 
     if current_blocks:
-        pages.append(
-            _assemble_collapsible_trace_message(current_header, current_blocks)
-        )
-    return pages
+        raw_pages.append(current_blocks)
+
+    total_pages = len(raw_pages)
+    assembled_pages: list[tuple[str, list[TypeMessageEntity]]] = []
+    for idx, blocks in enumerate(raw_pages, start=1):
+        if idx == 1 and total_pages == 1:
+            hdr = first_page_header
+        elif idx < total_pages:
+            # Sealed earlier pages always get a clean static page title
+            hdr = lex.trace_page_continuation_header.format(page_num=idx)
+        else:
+            hdr = f"{first_page_header} [стр. {idx}]"
+        assembled_pages.append(_assemble_collapsible_trace_message(hdr, blocks))
+
+    return assembled_pages
 
 
 def build_live_progress_pages(
