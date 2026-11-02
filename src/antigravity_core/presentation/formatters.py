@@ -190,13 +190,16 @@ def _assemble_collapsible_trace_message(
     header_line: str,
     quote_blocks: list[str],
 ) -> tuple[str, list[TypeMessageEntity]]:
-    """Builds plain text and exact UTF-16 MessageEntityBlockquote(collapsed=True) entities."""
-    clean_header = header_line.replace("**", "").replace("`", "")
+    """Builds plain text with a full-width MessageEntityPre header bar and collapsible quote entities."""
+    clean_header = (
+        header_line.replace("**", "").replace("`", "").ljust(_WIDE_BUBBLE_TARGET_COLS)
+    )
+    header_u16 = _utf16_len(clean_header)
     entities: list[TypeMessageEntity] = [
-        MessageEntityBold(offset=0, length=_utf16_len(clean_header))
+        MessageEntityPre(offset=0, length=header_u16, language="")
     ]
     parts: list[str] = [clean_header]
-    current_utf16_offset = _utf16_len(clean_header)
+    current_utf16_offset = header_u16
 
     for block in quote_blocks:
         sep = "\n\n"
