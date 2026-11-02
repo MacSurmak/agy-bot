@@ -1,7 +1,7 @@
+from bisect import bisect_left
 from pathlib import Path
 import re
-
-from bisect import bisect_left
+import unicodedata
 from telethon.extensions import markdown
 from telethon.helpers import add_surrogate, del_surrogate
 from telethon.tl.types import (
@@ -41,7 +41,11 @@ _HEADING_RE = re.compile(r"^(\s*)(#{1,6})\s+(.+?)\s*$")
 _BULLET_RE = re.compile(r"^(\s*)[*-]\s+(.+)$")
 _HRULE_RE = re.compile(r"^\s*(?:---+|\*\*\*+|___+)\s*$")
 _QUOTE_LINE_RE = re.compile(r"^\s*>\s?(.*)$")
+_TABLE_ROW_RE = re.compile(r"^\s*\|.+\|\s*$")
+_TABLE_SEP_CELL_RE = re.compile(r"^:?-{2,}:?$")
+_CELL_MD_STRIP_RE = re.compile(r"(\*\*|__|~~|`|\*(?=\S)|(?<=\S)\*)")
 _SNAKE_CASE_UNDERSCORE_RE = re.compile(r"(?<=[a-zA-Z0-9а-яА-ЯёЁ])_(?=[a-zA-Z0-9а-яА-ЯёЁ])")
+_MAX_BOX_TABLE_WIDTH: int = 98
 
 _MD_QUOTE_START: str = "\x02"
 _MD_QUOTE_END: str = "\x03"
@@ -429,12 +433,96 @@ def render_turn_footer(
     return "\n".join(lines)
 
 
+def _char_display_width(ch: str) -> int:
+    if unicodedata.combining(ch):
+        return 0
+    if ch in ("\ufe0f", "\u200d"):
+        return 0
+    eaw = unicodedata.east_asian_width(ch)
+    if eaw in ("W", "F"):
+        return 2
+    cp = ord(ch)
+    if 0x2600 <= cp <= 0x27BF or 0x1F300 <= cp <= 0x1FAFF:
+        return 2
+    return 1
+
+
+def _str_display_width(text: str) -> int:
+    return sum(_char_display_width(ch) for ch in text)
+
+
+def _pad_display_width(text: str, target_width: int) -> str:
+    pad = max(0, target_width - _str_display_width(text))
+    return text + (" " * pad)
+
+
+def _clean_table_cell(raw_cell: str) -> str:
+    return _CELL_MD_STRIP_RE.sub("", raw_cell.strip()).strip()
+
+
+def _format_markdown_table_block(table_lines: list[str]) -> list[str]:
+    parsed_rows: list[list[str]] = []
+    for raw_line in table_lines:
+        inner = raw_line.strip().strip("|")
+        cells = [c.strip() for c in inner.split("|")]
+        if cells and all(_TABLE_SEP_CELL_RE.match(c) for c in cells if c):
+            continue
+        cleaned_cells = [_clean_table_cell(c) for c in cells]
+        if any(cleaned_cells):
+            parsed_rows.append(cleaned_cells)
+
+    if not parsed_rows:
+        return table_lines
+
+    num_cols = max(len(r) for r in parsed_rows)
+    normalized_rows: list[list[str]] = [
+        r + ([""] * (num_cols - len(r))) for r in parsed_rows
+    ]
+    col_widths = [
+        max(1, max(_str_display_width(row[col_idx]) for row in normalized_rows))
+        for col_idx in range(num_cols)
+    ]
+    total_box_width = sum(col_widths) + (3 * num_cols) + 1
+
+    if total_box_width <= _MAX_BOX_TABLE_WIDTH:
+        top_border = "┌" + "┬".join("─" * (w + 2) for w in col_widths) + "┐"
+        mid_border = "├" + "┼".join("─" * (w + 2) for w in col_widths) + "┤"
+        bot_border = "└" + "┴".join("─" * (w + 2) for w in col_widths) + "┘"
+
+        box_lines: list[str] = ["```table", top_border]
+        for row_idx, row in enumerate(normalized_rows):
+            padded_cells = [
+                _pad_display_width(row[c_i], col_widths[c_i])
+                for c_i in range(num_cols)
+            ]
+            box_lines.append("│ " + " │ ".join(padded_cells) + " │")
+            if row_idx == 0 and len(normalized_rows) > 1:
+                box_lines.append(mid_border)
+        box_lines.append(bot_border)
+        box_lines.append("```")
+        return box_lines
+
+    # Fallback for extra-wide tables: render each row as a structured card
+    headers = normalized_rows[0]
+    data_rows = normalized_rows[1:] if len(normalized_rows) > 1 else normalized_rows
+    card_lines: list[str] = []
+    for row in data_rows:
+        title_cell = row[0] if row else "—"
+        card_lines.append(f"▸ **{title_cell}**")
+        for c_i in range(1, num_cols):
+            col_name = headers[c_i] if c_i < len(headers) and headers[c_i] else f"#{c_i + 1}"
+            val = row[c_i] if row[c_i] else "—"
+            card_lines.append(f"  • {col_name}: `{val}`")
+    return card_lines
+
+
 def _preprocess_gfm_markdown(raw_md: str) -> str:
-    """Converts LLM CommonMark/GFM (headings, bullets, horizontal rules, blockquotes) into Telethon-compatible Markdown."""
+    """Converts LLM CommonMark/GFM (headings, bullets, tables, horizontal rules, blockquotes) into Telethon Markdown."""
     lines = raw_md.splitlines()
     out_lines: list[str] = []
     in_code_fence = False
     quote_buffer: list[str] = []
+    table_buffer: list[str] = []
 
     def _flush_quote_buffer() -> None:
         if not quote_buffer:
@@ -443,10 +531,17 @@ def _preprocess_gfm_markdown(raw_md: str) -> str:
         out_lines.append(f"{_MD_QUOTE_START}{joined_q}{_MD_QUOTE_END}")
         quote_buffer.clear()
 
+    def _flush_table_buffer() -> None:
+        if not table_buffer:
+            return
+        out_lines.extend(_format_markdown_table_block(table_buffer))
+        table_buffer.clear()
+
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("```"):
             _flush_quote_buffer()
+            _flush_table_buffer()
             in_code_fence = not in_code_fence
             out_lines.append(line)
             continue
@@ -454,6 +549,12 @@ def _preprocess_gfm_markdown(raw_md: str) -> str:
         if in_code_fence:
             out_lines.append(line)
             continue
+
+        if _TABLE_ROW_RE.match(line):
+            _flush_quote_buffer()
+            table_buffer.append(line)
+            continue
+        _flush_table_buffer()
 
         q_match = _QUOTE_LINE_RE.match(line)
         if q_match is not None:
@@ -487,6 +588,7 @@ def _preprocess_gfm_markdown(raw_md: str) -> str:
         out_lines.append("`".join(parts))
 
     _flush_quote_buffer()
+    _flush_table_buffer()
     return "\n".join(out_lines)
 
 
