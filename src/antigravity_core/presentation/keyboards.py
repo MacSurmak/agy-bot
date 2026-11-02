@@ -123,6 +123,47 @@ def build_settings_menu_keyboard(
     return rows
 
 
+def build_setting_options_keyboard(
+    lex: UiLexicon, key: str, options: list[tuple[str, str]], current_val: str
+) -> list[list[Button]]:
+    rows: list[list[Button]] = []
+    for label, val in options:
+        mark = "✅ " if val == current_val else ""
+        rows.append(
+            [
+                Button.inline(
+                    f"{mark}{label}",
+                    f"cp:set_val:{key}:{val}".encode("ascii"),
+                )
+            ]
+        )
+    rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:settings_menu")])
+    return rows
+
+
+def build_new_topic_folder_confirm_keyboard(
+    lex: UiLexicon, topic_id: int
+) -> list[list[Button]]:
+    return [
+        [
+            Button.inline(
+                lex.btn_ws_confirm_default_dir,
+                f"ws:confirm_dir:{topic_id}".encode("ascii"),
+            )
+        ],
+        [
+            Button.inline(
+                lex.btn_ws_pick_existing_dir,
+                f"ws:dirs:{topic_id}".encode("ascii"),
+            ),
+            Button.inline(
+                lex.btn_ws_enter_custom_dir,
+                f"ws:custom_dir:{topic_id}".encode("ascii"),
+            ),
+        ],
+    ]
+
+
 def build_topic_header_keyboard(lex: UiLexicon, topic: ForumTopic) -> list[list[Button]]:
     tid = topic.topic_id
     mode_label = (

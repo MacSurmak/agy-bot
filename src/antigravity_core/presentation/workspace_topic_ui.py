@@ -1,9 +1,10 @@
+from pathlib import Path
 import time
 from uuid import UUID
 
 import structlog
 from telethon import TelegramClient, events
-from telethon.errors import RPCError
+from telethon.errors import MessageNotModifiedError, RPCError
 
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.application.turn_orchestrator import TurnOrchestrator
@@ -15,6 +16,7 @@ from antigravity_core.infrastructure.agy_runtime.cli_inspector import (
     AgyCliInspector,
     is_valid_model_slug_syntax,
 )
+from antigravity_core.infrastructure.agy_runtime.history_reader import AgyHistoryReader
 from antigravity_core.infrastructure.agy_runtime.worker_pool import AgyWorkerPool
 from antigravity_core.infrastructure.database.repositories import (
     AccountRepository,
@@ -34,6 +36,7 @@ from antigravity_core.presentation.formatters import (
 from antigravity_core.presentation.keyboards import (
     build_live_progress_keyboard,
     build_model_picker_keyboard,
+    build_new_topic_folder_confirm_keyboard,
     build_session_history_keyboard,
     build_topic_account_picker_keyboard,
     build_topic_header_keyboard,
@@ -55,6 +58,7 @@ class WorkspaceTopicUI:
         turn_orchestrator: TurnOrchestrator,
         topic_lifecycle: TopicLifecycleService,
         cli_inspector: AgyCliInspector,
+        history_reader: AgyHistoryReader,
         settings_repo: SettingsRepository,
         topic_repo: TopicRepository,
         account_repo: AccountRepository,
@@ -66,10 +70,24 @@ class WorkspaceTopicUI:
         self._orchestrator = turn_orchestrator
         self._lifecycle = topic_lifecycle
         self._inspector = cli_inspector
+        self._history_reader = history_reader
         self._settings_repo = settings_repo
         self._topic_repo = topic_repo
         self._account_repo = account_repo
         self._session_repo = session_repo
+        self._awaiting_custom_dir_topics: set[int] = set()
+
+    async def initialize_created_topic(self, topic_id: int, assigned_dir: str) -> None:
+        await self._topic_repo.update_workspace_path(topic_id, assigned_dir)
+        await self.refresh_pinned_card(topic_id)
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
+        await self._client.send_message(
+            entity=self._cfg.telegram.forum_chat_id,
+            message=lex.ws_folder_confirm_prompt.format(workspace_path=assigned_dir),
+            reply_to=topic_id,
+            buttons=build_new_topic_folder_confirm_keyboard(lex, topic_id),
+        )
 
     async def ensure_topic_registered(self, topic_id: int) -> ForumTopic:
         existing = await self._topic_repo.get_topic(topic_id)
@@ -79,8 +97,8 @@ class WorkspaceTopicUI:
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
         default_account = await self._account_repo.get_default_account()
+        # Do not create the directory on disk until confirmed or first turn starts
         default_dir = self._cfg.paths.workspaces_root_dir / f"topic_{topic_id}"
-        default_dir.mkdir(parents=True, exist_ok=True)
 
         topic = await self._topic_repo.create_topic(
             topic_id=topic_id,
@@ -130,6 +148,8 @@ class WorkspaceTopicUI:
                     text=card_text,
                     buttons=buttons,
                 )
+                return
+            except MessageNotModifiedError:
                 return
             except RPCError as exc:
                 logger.debug(
@@ -242,6 +262,22 @@ class WorkspaceTopicUI:
     async def execute_batched_prompt(
         self, topic_id: int, reply_to_msg_id: int, prompt: str
     ) -> None:
+        if topic_id in self._awaiting_custom_dir_topics:
+            self._awaiting_custom_dir_topics.discard(topic_id)
+            settings = await self._settings_repo.load_settings()
+            lex = get_lexicon(settings.ui_language)
+            custom_path = Path(prompt.strip()).expanduser().resolve()
+            custom_path.mkdir(parents=True, exist_ok=True)
+            await self._topic_repo.update_workspace_path(topic_id, str(custom_path))
+            await self._pool.evict_topic_worker(topic_id)
+            await self.refresh_pinned_card(topic_id)
+            await self._client.send_message(
+                entity=self._cfg.telegram.forum_chat_id,
+                message=lex.ws_dir_confirmed_msg.format(workspace_path=custom_path),
+                reply_to=reply_to_msg_id,
+            )
+            return
+
         topic = await self.ensure_topic_registered(topic_id)
         account = await self._account_repo.get_by_id(topic.assigned_account_id)
         settings = await self._settings_repo.load_settings()
@@ -331,7 +367,23 @@ class WorkspaceTopicUI:
                 buttons=build_turn_response_keyboard(lex, updated_topic) if is_last else None,
             )
 
+        await self._auto_sync_topic_title_if_generic(updated_topic, result.conversation_id)
         await self.refresh_pinned_card(topic_id)
+
+    async def _auto_sync_topic_title_if_generic(
+        self, topic: ForumTopic, conversation_id: UUID
+    ) -> None:
+        if not topic.title.startswith(("💬", "Рабочий топик #", "Workspace #")):
+            return
+        try:
+            summary = self._history_reader.get_conversation_summary(conversation_id)
+        except AgyProcessError:
+            return
+        if summary is not None and summary.title.strip() and summary.title != "Untitled Session":
+            try:
+                await self._lifecycle.rename_topic(topic.topic_id, summary.title.strip())
+            except RPCError as exc:
+                logger.debug("Could not auto-rename forum topic", topic_id=topic.topic_id, error=str(exc))
 
     async def deliver_scheduled_report(self, topic_id: int, report_text: str) -> None:
         settings = await self._settings_repo.load_settings()
@@ -354,6 +406,20 @@ class WorkspaceTopicUI:
 
         if action == "close_sub":
             await event.delete()
+            return
+
+        if action == "confirm_dir":
+            topic = await self._topic_repo.get_topic_strict(topic_id)
+            Path(topic.workspace_path).mkdir(parents=True, exist_ok=True)
+            await event.edit(
+                lex.ws_dir_confirmed_msg.format(workspace_path=topic.workspace_path),
+                buttons=None,
+            )
+            return
+
+        if action == "custom_dir":
+            self._awaiting_custom_dir_topics.add(topic_id)
+            await event.edit(lex.ws_custom_dir_prompt, buttons=None)
             return
 
         if action == "new":

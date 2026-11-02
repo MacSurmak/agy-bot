@@ -3,17 +3,17 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
 from uuid import UUID
 
 import structlog
 from telethon import TelegramClient, events
-from telethon.errors import RPCError
+from telethon.errors import MessageNotModifiedError, RPCError
 
 from antigravity_core.application.scheduler_service import TemporalSchedulerService
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.config.static_config import StaticConfig
-from antigravity_core.domain.enums import ExecutionMode, TopicKind, UserRole
+from antigravity_core.domain.enums import EffortLevel, ExecutionMode, TopicKind, UserRole
+from antigravity_core.domain.exceptions import AgyProcessError
 from antigravity_core.infrastructure.agy_runtime.cli_inspector import AgyCliInspector
 from antigravity_core.infrastructure.agy_runtime.worker_pool import AgyWorkerPool
 from antigravity_core.infrastructure.crypto.fernet_vault import FernetVault
@@ -28,13 +28,14 @@ from antigravity_core.infrastructure.keyring.dbus_profile_mgr import (
     PendingOAuthSession,
 )
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
-from antigravity_core.lexicon import UiLexicon, get_lexicon
+from antigravity_core.lexicon import SUPPORTED_LANGUAGES, UiLexicon, get_lexicon
 from antigravity_core.presentation.formatters import render_control_panel_dashboard
 from antigravity_core.presentation.keyboards import (
     build_account_auth_keyboard,
     build_control_panel_keyboard,
     build_default_account_picker_keyboard,
     build_oauth_url_keyboard,
+    build_setting_options_keyboard,
     build_settings_menu_keyboard,
     build_tasks_management_keyboard,
 )
@@ -84,30 +85,49 @@ class ControlPanelUI:
         self._account_repo = account_repo
         self._host_repo = host_repo
         self._access_repo = access_repo
-        self._dashboard_msg_id: int | None = None
         self._state: _ControlPanelInteractiveState | None = None
 
     async def _load_lexicon(self) -> UiLexicon:
         settings = await self._settings_repo.load_settings()
         return get_lexicon(settings.ui_language)
 
-    async def render_and_pin_dashboard(self) -> None:
+    @staticmethod
+    async def _safe_edit_event(
+        event: events.CallbackQuery.Event, text: str, buttons: object
+    ) -> None:
+        try:
+            await event.edit(text, buttons=buttons)
+        except MessageNotModifiedError:
+            await event.answer()
+
+    async def render_and_pin_dashboard(self, recreate_at_bottom: bool = False) -> None:
         lex, text = await self._build_dashboard_text()
         buttons = build_control_panel_keyboard(lex)
         cp_topic_id = self._cfg.telegram.control_panel_topic_id
+        stored_msg_id = await self._settings_repo.get_dashboard_msg_id()
 
-        if self._dashboard_msg_id is not None:
+        if stored_msg_id is not None and not recreate_at_bottom:
             try:
                 await self._client.edit_message(
                     entity=self._cfg.telegram.forum_chat_id,
-                    message=self._dashboard_msg_id,
+                    message=stored_msg_id,
                     text=text,
                     buttons=buttons,
                 )
                 return
+            except MessageNotModifiedError:
+                return
             except RPCError as exc:
-                logger.debug("Could not edit existing dashboard message; sending new", error=str(exc))
-                self._dashboard_msg_id = None
+                logger.debug("Stored dashboard message no longer editable; recreating", error=str(exc))
+
+        if stored_msg_id is not None:
+            try:
+                await self._client.delete_messages(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message_ids=[stored_msg_id],
+                )
+            except RPCError as exc:
+                logger.debug("Could not delete old dashboard message", error=str(exc))
 
         msg = await self._client.send_message(
             entity=self._cfg.telegram.forum_chat_id,
@@ -115,14 +135,14 @@ class ControlPanelUI:
             reply_to=cp_topic_id,
             buttons=buttons,
         )
-        self._dashboard_msg_id = msg.id
+        await self._settings_repo.set_dashboard_msg_id(msg.id)
         try:
             await self._client.pin_message(
                 entity=self._cfg.telegram.forum_chat_id,
                 message=msg.id,
                 notify=False,
             )
-        except Exception as exc:
+        except RPCError as exc:
             logger.warning("Could not pin Control-Panel dashboard message", error=str(exc))
 
     async def _build_dashboard_text(self) -> tuple[UiLexicon, str]:
@@ -153,16 +173,11 @@ class ControlPanelUI:
 
         if raw_text in ("/start", "/panel", "/dashboard"):
             self._state = None
-            await self.render_and_pin_dashboard()
+            await self.render_and_pin_dashboard(recreate_at_bottom=True)
             return
 
         if self._state is None:
-            lex = await self._load_lexicon()
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=lex.cp_reserved_notice,
-                reply_to=cp_topic_id,
-            )
+            await self.render_and_pin_dashboard(recreate_at_bottom=True)
             return
 
         state = self._state
@@ -176,24 +191,13 @@ class ControlPanelUI:
             await self._process_oauth_code_input(state.pending_oauth, raw_text)
             return
 
-        if state.mode == "await_new_topic":
-            self._state = None
-            await self._process_new_topic_input(raw_text)
-            return
-
-        if state.mode == "await_setting_value" and state.setting_key is not None:
-            key = state.setting_key
-            self._state = None
-            await self._process_setting_update_input(key, raw_text)
-            return
-
     async def handle_callback(self, event: events.CallbackQuery.Event, data_str: str) -> None:
         lex = await self._load_lexicon()
 
         if data_str == "cp:refresh":
             self._state = None
             lex, text = await self._build_dashboard_text()
-            await event.edit(text, buttons=build_control_panel_keyboard(lex))
+            await self._safe_edit_event(event, text, build_control_panel_keyboard(lex))
             return
 
         if data_str == "cp:probe_quotas":
@@ -206,25 +210,60 @@ class ControlPanelUI:
                 except Exception as exc:
                     logger.warning("Quota probe failed", account=acc.slug, error=str(exc))
             lex, text = await self._build_dashboard_text()
-            await event.edit(text, buttons=build_control_panel_keyboard(lex))
+            await self._safe_edit_event(event, text, build_control_panel_keyboard(lex))
             return
 
         if data_str == "cp:auth_menu":
             accounts = await self._account_repo.list_accounts()
-            await event.edit(
+            await self._safe_edit_event(
+                event,
                 lex.cp_auth_menu_prompt,
-                buttons=build_account_auth_keyboard(lex, accounts),
+                build_account_auth_keyboard(lex, accounts),
             )
             return
 
         if data_str == "cp:register_new_acc":
-            self._state = _ControlPanelInteractiveState(
-                mode="await_new_account",
-                setting_key=None,
-                pending_oauth=None,
+            existing = await self._account_repo.list_accounts()
+            next_idx = len(existing) + 1
+            slug = f"acc_{next_idx}"
+            email_label = f"Google Account #{next_idx}"
+            xdg_dir = str((self._cfg.paths.profiles_data_dir / slug).resolve())
+            dbus_sock = str((self._cfg.paths.runtime_dir / f"bus_{slug}.sock").resolve())
+            keyring_password = secrets.token_urlsafe(self._cfg.runtime.keyring_password_bytes)
+            encrypted_pass = self._vault.encrypt_text(keyring_password)
+
+            account = await self._account_repo.create_account(
+                slug=slug,
+                email_label=email_label,
+                xdg_data_dir=xdg_dir,
+                dbus_socket_path=dbus_sock,
+                encrypted_keyring_pass=encrypted_pass,
+                is_default=(next_idx == 1),
+                priority=next_idx,
             )
-            await event.respond(lex.cp_register_new_acc_prompt)
-            await event.answer()
+            await event.answer(lex.cp_toast_launching_oauth)
+            try:
+                pending = await self._keyring_mgr.start_remote_oauth_flow(account)
+            except Exception as exc:
+                max_err = self._cfg.limits.error_summary_max_chars
+                err_detail = f"{type(exc).__name__}: {exc}"[:max_err]
+                logger.error("OAuth flow start failed", account_slug=account.slug, error=err_detail, exc_info=True)
+                await event.respond(lex.cp_oauth_start_failed.format(slug=account.slug, error=err_detail))
+                return
+
+            self._state = _ControlPanelInteractiveState(
+                mode="await_oauth_code",
+                setting_key=None,
+                pending_oauth=pending,
+            )
+            await event.respond(
+                lex.cp_oauth_instructions.format(
+                    slug=account.slug,
+                    email_label=account.email_label,
+                    auth_url=pending.auth_url,
+                ),
+                buttons=build_oauth_url_keyboard(lex, pending.auth_url),
+            )
             return
 
         if data_str.startswith("cp:oauth_start:"):
@@ -264,9 +303,10 @@ class ControlPanelUI:
 
         if data_str == "cp:switch_default_acc":
             accounts = await self._account_repo.list_accounts()
-            await event.edit(
+            await self._safe_edit_event(
+                event,
                 lex.cp_switch_default_acc_prompt,
-                buttons=build_default_account_picker_keyboard(lex, accounts),
+                build_default_account_picker_keyboard(lex, accounts),
             )
             return
 
@@ -274,7 +314,7 @@ class ControlPanelUI:
             acc_id = int(data_str.split(":")[2])
             await self._account_repo.set_default_account(acc_id)
             lex, text = await self._build_dashboard_text()
-            await event.edit(text, buttons=build_control_panel_keyboard(lex))
+            await self._safe_edit_event(event, text, build_control_panel_keyboard(lex))
             await event.answer(lex.cp_toast_default_acc_updated)
             return
 
@@ -292,28 +332,19 @@ class ControlPanelUI:
                             lex.cp_remount_failed.format(alias=host.alias, error=err_short)
                         )
             lex, text = await self._build_dashboard_text()
-            await event.edit(text, buttons=build_control_panel_keyboard(lex))
+            await self._safe_edit_event(event, text, build_control_panel_keyboard(lex))
             return
 
         if data_str == "cp:new_topic":
-            self._state = _ControlPanelInteractiveState(
-                mode="await_new_topic",
-                setting_key=None,
-                pending_oauth=None,
-            )
-            await event.respond(
-                lex.cp_new_topic_prompt.format(
-                    workspaces_root_dir=self._cfg.paths.workspaces_root_dir
-                )
-            )
-            await event.answer()
+            await self._create_topic_immediately(event, lex)
             return
 
         if data_str == "cp:tasks_menu":
             tasks = await self._scheduler.list_tasks(topic_id=None)
-            await event.edit(
+            await self._safe_edit_event(
+                event,
                 lex.cp_tasks_menu_prompt.format(count=len(tasks)),
-                buttons=build_tasks_management_keyboard(lex, self._cfg.limits, tasks),
+                build_tasks_management_keyboard(lex, self._cfg.limits, tasks),
             )
             return
 
@@ -321,39 +352,31 @@ class ControlPanelUI:
             task_uuid = UUID(data_str.split(":", 2)[2])
             await self._scheduler.cancel_task(task_uuid)
             tasks = await self._scheduler.list_tasks(topic_id=None)
-            await event.edit(
+            await self._safe_edit_event(
+                event,
                 lex.cp_tasks_menu_updated.format(count=len(tasks)),
-                buttons=build_tasks_management_keyboard(lex, self._cfg.limits, tasks),
+                build_tasks_management_keyboard(lex, self._cfg.limits, tasks),
             )
             await event.answer(lex.cp_toast_task_canceled)
             return
 
         if data_str == "cp:settings_menu":
-            rows = await self._settings_repo.list_all_with_descriptions()
-            lines = [lex.cp_settings_menu_header]
-            keys: list[str] = []
-            for k, val, desc, _ in rows:
-                keys.append(k)
-                lines.append(
-                    lex.cp_settings_menu_item.format(
-                        key=k, value_json=json.dumps(val), description=desc
-                    )
-                )
-            await event.edit(
-                "\n".join(lines),
-                buttons=build_settings_menu_keyboard(lex, keys),
-            )
+            await self._render_settings_menu(event, lex)
             return
 
         if data_str.startswith("cp:edit_set:"):
             key = data_str.split(":", 2)[2]
-            self._state = _ControlPanelInteractiveState(
-                mode="await_setting_value",
-                setting_key=key,
-                pending_oauth=None,
+            await self._open_setting_selector(event, lex, key)
+            return
+
+        if data_str.startswith("cp:set_val:"):
+            _, _, key, raw_val = data_str.split(":", 3)
+            updated_settings = await self._settings_repo.update_setting(key, raw_val)
+            new_lex = get_lexicon(updated_settings.ui_language)
+            await event.answer(
+                new_lex.cp_setting_updated.format(key=key, value_json=raw_val)
             )
-            await event.respond(lex.cp_edit_setting_prompt.format(key=key))
-            await event.answer()
+            await self._render_settings_menu(event, new_lex)
             return
 
         if data_str == "cp:create_invite":
@@ -408,7 +431,7 @@ class ControlPanelUI:
             message=lex.cp_new_acc_created.format(slug=account.slug),
             reply_to=self._cfg.telegram.control_panel_topic_id,
         )
-        await self.render_and_pin_dashboard()
+        await self.render_and_pin_dashboard(recreate_at_bottom=True)
 
     async def _process_oauth_code_input(
         self, pending: PendingOAuthSession, verification_code: str
@@ -435,72 +458,115 @@ class ControlPanelUI:
                 message=lex.cp_oauth_failed.format(error=err_detail),
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
-        await self.render_and_pin_dashboard()
+        await self.render_and_pin_dashboard(recreate_at_bottom=True)
 
-    async def _process_new_topic_input(self, raw_text: str) -> None:
-        lex = await self._load_lexicon()
-        parts = [p.strip() for p in raw_text.split("|")]
-        title = parts[0] if parts else lex.cp_new_topic_default_title
-        workspace_path = (
-            parts[1]
-            if len(parts) >= 2 and parts[1]
-            else str(self._cfg.paths.workspaces_root_dir / title.lower().replace(" ", "_"))
-        )
-        kind_raw = parts[2].upper() if len(parts) >= 3 else "TASK"
-        kind = (
-            TopicKind.PERMANENT_WORKSPACE
-            if "PERM" in kind_raw
-            else TopicKind.TASK_TOPIC
-        )
-
+    async def _create_topic_immediately(
+        self, event: events.CallbackQuery.Event, lex: UiLexicon
+    ) -> None:
         try:
+            temp_title = f"💬 {lex.cp_new_topic_default_title}"
+            placeholder_dir = str(self._cfg.paths.workspaces_root_dir / "pending_topic")
             topic = await self._topic_lifecycle.create_forum_topic_with_card(
-                title=title,
-                kind=kind,
-                workspace_path=workspace_path,
-                execution_mode=ExecutionMode.FULL_ACCESS,
+                title=temp_title,
+                kind=TopicKind.PERMANENT_WORKSPACE,
+                workspace_path=placeholder_dir,
+                execution_mode=None,
             )
-            await self._workspace_ui.refresh_pinned_card(topic.topic_id)
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=lex.cp_new_topic_created.format(
-                    title=topic.title, topic_id=topic.topic_id
-                ),
-                reply_to=self._cfg.telegram.control_panel_topic_id,
+            # Assign clean topic_<id> path without creating the directory on disk yet
+            assigned_dir = str(
+                (self._cfg.paths.workspaces_root_dir / f"topic_{topic.topic_id}").resolve()
+            )
+            final_title = lex.ws_auto_topic_title.format(topic_id=topic.topic_id)
+            await self._topic_lifecycle.rename_topic(topic.topic_id, final_title)
+            await self._workspace_ui_init_new_topic(topic.topic_id, assigned_dir)
+            await event.answer(
+                lex.cp_new_topic_created.format(title=final_title, topic_id=topic.topic_id)
             )
         except Exception as exc:
             max_err = self._cfg.limits.error_summary_max_chars
             err_detail = f"{type(exc).__name__}: {exc}"[:max_err]
             logger.error("Failed to create forum topic", error=err_detail, exc_info=True)
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=lex.cp_new_topic_failed.format(error=err_detail),
-                reply_to=self._cfg.telegram.control_panel_topic_id,
+            await event.respond(lex.cp_new_topic_failed.format(error=err_detail))
+
+    async def _workspace_ui_init_new_topic(
+        self, topic_id: int, assigned_dir: str
+    ) -> None:
+        await self._workspace_ui.initialize_created_topic(topic_id, assigned_dir)
+
+    async def _render_settings_menu(
+        self, event: events.CallbackQuery.Event, lex: UiLexicon
+    ) -> None:
+        rows = await self._settings_repo.list_all_with_descriptions()
+        lines = [lex.cp_settings_menu_header]
+        keys: list[str] = []
+        for k, val, desc, _ in rows:
+            keys.append(k)
+            lines.append(
+                lex.cp_settings_menu_item.format(
+                    key=k, value_json=json.dumps(val), description=desc
+                )
             )
+        await self._safe_edit_event(
+            event,
+            "\n".join(lines),
+            build_settings_menu_keyboard(lex, keys),
+        )
 
-    async def _process_setting_update_input(self, key: str, raw_text: str) -> None:
-        try:
-            parsed_val: Any = json.loads(raw_text)
-        except json.JSONDecodeError:
-            parsed_val = raw_text.strip()
+    async def _open_setting_selector(
+        self, event: events.CallbackQuery.Event, lex: UiLexicon, key: str
+    ) -> None:
+        settings = await self._settings_repo.load_settings()
 
-        try:
-            updated_settings = await self._settings_repo.update_setting(key, parsed_val)
-            lex = get_lexicon(updated_settings.ui_language)
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=lex.cp_setting_updated.format(
-                    key=key, value_json=json.dumps(parsed_val)
+        if key == "ui_language":
+            lang_labels = {"ru": "🇷🇺 Русский (ru)", "en": "🇬🇧 English (en)"}
+            options = [(lang_labels.get(code, code), code) for code in SUPPORTED_LANGUAGES]
+            await self._safe_edit_event(
+                event,
+                f"🌐 **{key}**",
+                build_setting_options_keyboard(lex, key, options, settings.ui_language),
+            )
+            return
+
+        if key == "default_model":
+            try:
+                default_acc = await self._account_repo.get_default_account()
+                models = await self._inspector.list_available_models(default_acc)
+            except Exception as exc:
+                max_err = self._cfg.limits.error_summary_max_chars
+                err_short = str(exc)[:max_err]
+                await event.answer(err_short, alert=True)
+                return
+            options = [(m, m) for m in models[: self._cfg.limits.models_menu_display_limit]]
+            await self._safe_edit_event(
+                event,
+                f"🧠 **{key}**",
+                build_setting_options_keyboard(lex, key, options, settings.default_model),
+            )
+            return
+
+        if key == "default_effort":
+            options = [
+                (lvl.value, lvl.value)
+                for lvl in (EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH, EffortLevel.MAX)
+            ]
+            current_eff = settings.default_effort.value if settings.default_effort else ""
+            await self._safe_edit_event(
+                event,
+                f"💭 **{key}**",
+                build_setting_options_keyboard(lex, key, options, current_eff),
+            )
+            return
+
+        if key == "default_execution_mode":
+            options = [
+                ("⚡ FULL_ACCESS", ExecutionMode.FULL_ACCESS.value),
+                ("🛡 READ_ONLY (Plan)", ExecutionMode.READ_ONLY.value),
+            ]
+            await self._safe_edit_event(
+                event,
+                f"🛡 **{key}**",
+                build_setting_options_keyboard(
+                    lex, key, options, settings.default_execution_mode.value
                 ),
-                reply_to=self._cfg.telegram.control_panel_topic_id,
             )
-            await self.render_and_pin_dashboard()
-        except Exception as exc:
-            lex = await self._load_lexicon()
-            max_err = self._cfg.limits.error_summary_max_chars
-            err_short = str(exc)[:max_err]
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=lex.cp_setting_update_failed.format(key=key, error=err_short),
-                reply_to=self._cfg.telegram.control_panel_topic_id,
-            )
+            return

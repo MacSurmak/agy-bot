@@ -191,7 +191,20 @@ RU_LEXICON = UiLexicon(
     cp_setting_updated="✅ Параметр `{key}` обновлен: `{value_json}`.",
     cp_setting_update_failed="❌ Ошибка валидации параметра `{key}`:\n`{error}`",
     # Workspace Topic Interactive Messages & Toasts
-    ws_auto_topic_title="Рабочий топик #{topic_id}",
+    ws_auto_topic_title="💬 Новый диалог #{topic_id}",
+    ws_folder_confirm_prompt=(
+        "📂 **Выбор рабочей папки для топика**\n"
+        "По умолчанию назначена папка:\n`{workspace_path}`\n"
+        "*(папка будет создана только при подтверждении или первом запросе к агенту)*"
+    ),
+    ws_custom_dir_prompt=(
+        "✏️ **Отправьте следующим сообщением в этот топик полный путь к нужной папке** "
+        "(например: `/home/macsurmak/my-project`):"
+    ),
+    ws_dir_confirmed_msg="✅ Рабочая папка подтверждена и готова: `{workspace_path}`",
+    btn_ws_confirm_default_dir="✅ Оставить по умолчанию",
+    btn_ws_pick_existing_dir="📂 Выбрать из списка папок",
+    btn_ws_enter_custom_dir="✏️ Ввести свой путь",
     ws_turn_stopped_msg="⏹ Выполнение текущего хода остановлено.",
     ws_no_running_turn_msg="ℹ️ В этом топике сейчас нет активного хода.",
     ws_starting_turn_msg="⏳ **Запускаю ход** (`{model_slug}` на `{account_slug}`)...",

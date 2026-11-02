@@ -185,7 +185,20 @@ EN_LEXICON = UiLexicon(
     cp_setting_updated="✅ Updated setting `{key}` = `{value_json}`.",
     cp_setting_update_failed="❌ Validation failed for `{key}`:\n`{error}`",
     # Workspace Topic Interactive Messages & Toasts
-    ws_auto_topic_title="Workspace #{topic_id}",
+    ws_auto_topic_title="💬 New Chat #{topic_id}",
+    ws_folder_confirm_prompt=(
+        "📂 **Select Workspace Folder for Topic**\n"
+        "Default assigned path:\n`{workspace_path}`\n"
+        "*(folder is only created on disk when confirmed or on first prompt)*"
+    ),
+    ws_custom_dir_prompt=(
+        "✏️ **Send the full absolute path to your project folder as your next message in this topic** "
+        "(for example: `/home/macsurmak/my-project`):"
+    ),
+    ws_dir_confirmed_msg="✅ Workspace folder confirmed and ready: `{workspace_path}`",
+    btn_ws_confirm_default_dir="✅ Keep Default Folder",
+    btn_ws_pick_existing_dir="📂 Choose from Existing",
+    btn_ws_enter_custom_dir="✏️ Enter Custom Path",
     ws_turn_stopped_msg="⏹ Active turn stopped.",
     ws_no_running_turn_msg="ℹ️ No running turn in this topic.",
     ws_starting_turn_msg="⏳ **Starting turn** (`{model_slug}` on `{account_slug}`)...",

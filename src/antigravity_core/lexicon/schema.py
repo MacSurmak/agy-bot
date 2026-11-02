@@ -135,6 +135,12 @@ class UiLexicon:
 
     # Workspace Topic Interactive Messages & Toasts (workspace_topic_ui.py)
     ws_auto_topic_title: str
+    ws_folder_confirm_prompt: str
+    ws_custom_dir_prompt: str
+    ws_dir_confirmed_msg: str
+    btn_ws_confirm_default_dir: str
+    btn_ws_pick_existing_dir: str
+    btn_ws_enter_custom_dir: str
     ws_turn_stopped_msg: str
     ws_no_running_turn_msg: str
     ws_starting_turn_msg: str

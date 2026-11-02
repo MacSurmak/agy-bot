@@ -19,6 +19,7 @@ from antigravity_core.infrastructure.agy_runtime.cli_inspector import AgyCliInsp
 from antigravity_core.infrastructure.agy_runtime.environment_bootstrap import (
     AgyEnvironmentBootstrapper,
 )
+from antigravity_core.infrastructure.agy_runtime.history_reader import AgyHistoryReader
 from antigravity_core.infrastructure.agy_runtime.worker_pool import AgyWorkerPool
 from antigravity_core.infrastructure.crypto.fernet_vault import FernetVault
 from antigravity_core.infrastructure.database.engine import DatabaseManager
@@ -122,6 +123,7 @@ async def run_service(static_config: StaticConfig) -> None:
     # Step 6: Wire application services, WorkerPool, IPC server, and TemporalScheduler
     worker_pool = AgyWorkerPool(static_config, keyring_mgr)
     cli_inspector = AgyCliInspector(static_config, keyring_mgr)
+    history_reader = AgyHistoryReader(static_config)
     media_service = MediaService(client, static_config, settings_repo)
 
     turn_orchestrator = TurnOrchestrator(
@@ -149,6 +151,7 @@ async def run_service(static_config: StaticConfig) -> None:
         turn_orchestrator=turn_orchestrator,
         topic_lifecycle=topic_lifecycle,
         cli_inspector=cli_inspector,
+        history_reader=history_reader,
         settings_repo=settings_repo,
         topic_repo=topic_repo,
         account_repo=account_repo,
