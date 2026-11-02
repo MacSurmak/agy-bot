@@ -26,8 +26,8 @@ from antigravity_core.infrastructure.database.repositories import (
 )
 from antigravity_core.lexicon import get_lexicon
 from antigravity_core.presentation.formatters import (
-    build_final_execution_trace_message,
-    build_live_progress_message,
+    build_final_execution_trace_pages,
+    build_live_progress_pages,
     list_workspace_directories,
     render_new_session_divider,
     render_topic_header_card,
@@ -295,7 +295,6 @@ class WorkspaceTopicUI:
 
         start_ts = time.monotonic()
         last_edit_ts = start_ts
-        last_clean_live = ""
 
         status_msg = await self._client.send_message(
             entity=self._cfg.telegram.forum_chat_id,
@@ -305,13 +304,74 @@ class WorkspaceTopicUI:
             reply_to=reply_to_msg_id,
             buttons=build_live_progress_keyboard(lex, topic_id),
         )
+        trace_msgs = [status_msg]
+        rendered_page_state: dict[int, tuple[str, bool]] = {}
+
+        async def _sync_trace_pages(
+            pages: list[tuple[str, list[object]]], is_final: bool
+        ) -> None:
+            from telethon.tl.types import TypeMessageEntity
+
+            total_pages = len(pages)
+            for idx, (page_text, raw_ents) in enumerate(pages):
+                ents: list[TypeMessageEntity] = [
+                    e for e in raw_ents if isinstance(e, TypeMessageEntity)
+                ]
+                has_cancel_btn = (not is_final) and (idx == total_pages - 1)
+                desired_state = (page_text, has_cancel_btn)
+
+                if idx < len(trace_msgs):
+                    if rendered_page_state.get(idx) == desired_state:
+                        continue
+                    try:
+                        await self._client.edit_message(
+                            entity=self._cfg.telegram.forum_chat_id,
+                            message=trace_msgs[idx].id,
+                            text=page_text,
+                            formatting_entities=ents,
+                            buttons=(
+                                build_live_progress_keyboard(lex, topic_id)
+                                if has_cancel_btn
+                                else None
+                            ),
+                        )
+                        rendered_page_state[idx] = desired_state
+                    except MessageNotModifiedError:
+                        rendered_page_state[idx] = desired_state
+                    except RPCError as exc:
+                        logger.debug(
+                            "Trace page edit skipped",
+                            topic_id=topic_id,
+                            page=idx + 1,
+                            error=str(exc),
+                        )
+                else:
+                    try:
+                        new_msg = await self._client.send_message(
+                            entity=self._cfg.telegram.forum_chat_id,
+                            message=page_text,
+                            formatting_entities=ents,
+                            reply_to=topic_id,
+                            buttons=(
+                                build_live_progress_keyboard(lex, topic_id)
+                                if has_cancel_btn
+                                else None
+                            ),
+                        )
+                        trace_msgs.append(new_msg)
+                        rendered_page_state[idx] = desired_state
+                    except RPCError as exc:
+                        logger.warning(
+                            "Failed to send overflow trace page",
+                            topic_id=topic_id,
+                            page=idx + 1,
+                            error=str(exc),
+                        )
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
-            nonlocal last_edit_ts, last_clean_live
+            nonlocal last_edit_ts
             now = time.monotonic()
-            if (now - last_edit_ts) < settings.tg_edit_throttle_sec:
-                return
-            clean_live, live_entities = build_live_progress_message(
+            pages = build_live_progress_pages(
                 lex=lex,
                 limits=self._cfg.limits,
                 event=progress,
@@ -319,22 +379,12 @@ class WorkspaceTopicUI:
                 model_slug=topic.model_slug,
                 account_slug=account.slug,
             )
-            if clean_live == last_clean_live:
+            # Immediately sync when spilling over to a new message page; otherwise respect edit throttle
+            is_new_page_spillover = len(pages) > len(trace_msgs)
+            if not is_new_page_spillover and (now - last_edit_ts) < settings.tg_edit_throttle_sec:
                 return
             last_edit_ts = now
-            last_clean_live = clean_live
-            try:
-                await self._client.edit_message(
-                    entity=self._cfg.telegram.forum_chat_id,
-                    message=status_msg.id,
-                    text=clean_live,
-                    formatting_entities=live_entities,
-                    buttons=build_live_progress_keyboard(lex, topic_id),
-                )
-            except MessageNotModifiedError:
-                pass
-            except RPCError as exc:
-                logger.debug("Live progress message edit skipped", topic_id=topic_id, error=str(exc))
+            await _sync_trace_pages(pages, is_final=False)
 
         try:
             result = await self._orchestrator.execute_topic_turn(
@@ -347,7 +397,7 @@ class WorkspaceTopicUI:
             err_short = str(exc)[:max_err]
             logger.error("Turn execution failed", topic_id=topic_id, error=err_short)
             try:
-                await status_msg.edit(
+                await trace_msgs[-1].edit(
                     lex.ws_turn_error_msg.format(error=err_short), buttons=None
                 )
             except RPCError as edit_exc:
@@ -357,31 +407,18 @@ class WorkspaceTopicUI:
         updated_topic = await self._topic_repo.get_topic_strict(topic_id)
         updated_account = await self._account_repo.get_by_id(updated_topic.assigned_account_id)
 
-        # Finalize the execution trace inside the single status_msg (never spawning extra messages after media!)
-        final_trace = build_final_execution_trace_message(
+        final_pages = build_final_execution_trace_pages(
             lex=lex,
             limits=self._cfg.limits,
             result=result,
             model_slug=updated_topic.model_slug,
             account_slug=updated_account.slug,
         )
-        if final_trace is not None:
-            trace_text, trace_entities = final_trace
-            try:
-                await self._client.edit_message(
-                    entity=self._cfg.telegram.forum_chat_id,
-                    message=status_msg.id,
-                    text=trace_text,
-                    formatting_entities=trace_entities,
-                    buttons=None,
-                )
-            except MessageNotModifiedError:
-                pass
-            except RPCError as exc:
-                logger.debug("Could not finalize trace message", error=str(exc))
+        if final_pages:
+            await _sync_trace_pages(final_pages, is_final=True)
         else:
             try:
-                await status_msg.delete()
+                await trace_msgs[0].delete()
             except RPCError as exc:
                 logger.debug("Could not delete empty status message", error=str(exc))
 

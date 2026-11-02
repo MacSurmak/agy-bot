@@ -24,6 +24,8 @@ class UiLexicon:
     # Live Turn Progress & Permanent Execution Trace (formatters.py)
     live_progress_header: str
     trace_completed_header: str
+    trace_page_continuation_header: str
+    trace_tool_part_suffix: str
     live_progress_subagents_header: str
     live_progress_subagent_item: str
     live_progress_tools_header: str

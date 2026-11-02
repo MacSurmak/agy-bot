@@ -37,6 +37,8 @@ EN_LEXICON = UiLexicon(
     trace_completed_header=(
         "🛠 **Execution Trace** (`{model_slug}` | `{account_slug}` | `{elapsed_sec:.1f}s` | steps: `{steps_count}`)"
     ),
+    trace_page_continuation_header="🛠 Execution Trace (page {page_num})",
+    trace_tool_part_suffix=" [part {part}/{total}]",
     live_progress_subagents_header="🤖 **Subagents:**",
     live_progress_subagent_item="• `{role}` (`{type_name}` — `{conv_short}`)",
     live_progress_tools_header="🔧 **Tools & Actions:**",

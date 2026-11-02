@@ -26,17 +26,35 @@ from antigravity_core.domain.models import (
 from antigravity_core.lexicon.schema import UiLexicon
 
 _BINARY_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]+")
+_MAX_SINGLE_BLOCK_CHARS: int = 3100
+_MAX_PAGE_UTF16_LEN: int = 3750
+_MAX_BLOCKS_PER_PAGE: int = 25
 
 
-def _sanitize_trace_text(raw: str, max_len: int) -> str:
-    cleaned = _BINARY_CONTROL_RE.sub(" ", raw).strip()
-    if len(cleaned) <= max_len:
-        return cleaned
-    return cleaned[: max_len - 18].rstrip() + "\n... [сокращено]"
+def _clean_binary_noise(raw: str) -> str:
+    return _BINARY_CONTROL_RE.sub(" ", raw).strip()
 
 
 def _utf16_len(text: str) -> int:
     return len(add_surrogate(text))
+
+
+def _split_text_preserving_lines(text: str, chunk_size: int) -> list[str]:
+    if len(text) <= chunk_size:
+        return [text]
+    parts: list[str] = []
+    remaining = text
+    while len(remaining) > chunk_size:
+        idx = remaining.rfind("\n", 0, chunk_size)
+        if idx <= chunk_size // 3:
+            idx = chunk_size
+        chunk = remaining[:idx].rstrip()
+        if chunk:
+            parts.append(chunk)
+        remaining = remaining[idx:].lstrip("\n")
+    if remaining:
+        parts.append(remaining)
+    return parts
 
 
 def render_topic_header_card(
@@ -104,9 +122,10 @@ def render_new_session_divider(lex: UiLexicon, topic: ForumTopic) -> str:
     )
 
 
-def _format_tool_plain_block(
-    lex: UiLexicon, tool: ToolCallSummary, detail_budget: int
-) -> str:
+def _format_tool_blocks_untruncated(
+    lex: UiLexicon, tool: ToolCallSummary
+) -> list[str]:
+    """Formats a tool call into one or more self-contained collapsible quote blocks without truncation."""
     icon = (
         lex.live_progress_tool_done_icon
         if tool.state == StepState.DONE
@@ -119,28 +138,45 @@ def _format_tool_plain_block(
     )
     hint_str = ""
     if tool.target_hint:
-        clean_h = _sanitize_trace_text(tool.target_hint.replace("\n", " "), 80)
+        clean_h = _clean_binary_noise(tool.target_hint.replace("\n", " "))[:90]
         hint_str = f" → {clean_h}"
 
-    header_line = f"{icon} #{tool.step_index} {tool.tool_name}{dur}{hint_str}"
-    lines: list[str] = [header_line]
+    base_header = f"{icon} #{tool.step_index} {tool.tool_name}{dur}{hint_str}"
+    body_sections: list[str] = []
 
-    half_budget = max(40, detail_budget // 2)
     if tool.parameters_text:
-        p_clean = _sanitize_trace_text(tool.parameters_text, half_budget)
-        lines.append(f"{lex.trace_tool_params_label}\n{p_clean}")
+        p_clean = _clean_binary_noise(tool.parameters_text)
+        if p_clean:
+            body_sections.append(f"{lex.trace_tool_params_label}\n{p_clean}")
     if tool.output_text:
-        o_clean = _sanitize_trace_text(tool.output_text, half_budget)
-        lines.append(f"{lex.trace_tool_output_label}\n{o_clean}")
+        o_clean = _clean_binary_noise(tool.output_text)
+        if o_clean:
+            body_sections.append(f"{lex.trace_tool_output_label}\n{o_clean}")
 
-    return "\n".join(lines)
+    full_body = "\n".join(body_sections)
+    if not full_body:
+        return [base_header]
+
+    combined = f"{base_header}\n{full_body}"
+    if len(combined) <= _MAX_SINGLE_BLOCK_CHARS:
+        return [combined]
+
+    body_chunks = _split_text_preserving_lines(
+        full_body, _MAX_SINGLE_BLOCK_CHARS - len(base_header) - 30
+    )
+    total_parts = len(body_chunks)
+    blocks: list[str] = []
+    for idx, chunk in enumerate(body_chunks, start=1):
+        part_suffix = lex.trace_tool_part_suffix.format(part=idx, total=total_parts)
+        blocks.append(f"{base_header}{part_suffix}\n{chunk}")
+    return blocks
 
 
 def _assemble_collapsible_trace_message(
     header_line: str,
     quote_blocks: list[str],
 ) -> tuple[str, list[TypeMessageEntity]]:
-    """Builds plain text and exact UTF-16 MessageEntityBlockquote(collapsed=True) entities without markdown parsing."""
+    """Builds plain text and exact UTF-16 MessageEntityBlockquote(collapsed=True) entities."""
     clean_header = header_line.replace("**", "").replace("`", "")
     entities: list[TypeMessageEntity] = [
         MessageEntityBold(offset=0, length=_utf16_len(clean_header))
@@ -168,25 +204,29 @@ def _assemble_collapsible_trace_message(
     return "".join(parts), entities
 
 
-def _build_budgeted_quote_blocks(
+def _build_all_untruncated_blocks(
     lex: UiLexicon,
     limits: LimitsStaticConfig,
     thinking_text: str | None,
     subagents: tuple[SubagentState, ...],
     tools: tuple[ToolCallSummary, ...],
     draft_text: str | None,
-    total_char_budget: int = 3600,
 ) -> list[str]:
     quote_blocks: list[str] = []
-    remaining_budget = total_char_budget
 
     if thinking_text and thinking_text.strip():
-        t_budget = min(600, max(150, remaining_budget // 4))
         t_header = lex.trace_thinking_header.replace("**", "")
-        t_body = _sanitize_trace_text(thinking_text, t_budget)
-        block_str = f"{t_header}\n{t_body}"
-        quote_blocks.append(block_str)
-        remaining_budget -= len(block_str) + 4
+        t_clean = _clean_binary_noise(thinking_text)
+        t_chunks = _split_text_preserving_lines(
+            t_clean, _MAX_SINGLE_BLOCK_CHARS - len(t_header) - 20
+        )
+        for idx, chunk in enumerate(t_chunks, start=1):
+            suffix = (
+                lex.trace_tool_part_suffix.format(part=idx, total=len(t_chunks))
+                if len(t_chunks) > 1
+                else ""
+            )
+            quote_blocks.append(f"{t_header}{suffix}\n{chunk}")
 
     if subagents:
         short_len = limits.uuid_short_chars
@@ -195,65 +235,94 @@ def _build_budgeted_quote_blocks(
             sub_lines.append(
                 f"• {sub.role} ({sub.type_name} — {sub.conversation_id[:short_len]})"
             )
-        sub_block = "\n".join(sub_lines)
-        quote_blocks.append(sub_block)
-        remaining_budget -= len(sub_block) + 4
+        quote_blocks.append("\n".join(sub_lines))
+
+    for tool in tools:
+        quote_blocks.extend(_format_tool_blocks_untruncated(lex, tool))
 
     if draft_text and draft_text.strip():
-        d_budget = min(350, max(100, remaining_budget // 5))
-        d_body = _sanitize_trace_text(draft_text.strip()[-d_budget:], d_budget)
-        d_block = lex.live_progress_draft.replace("**", "").format(preview=d_body)
-        remaining_budget -= len(d_block) + 4
-    else:
-        d_block = None
-
-    if tools:
-        # Telegram allows max ~90 entities per message; if >35 tools, show the most recent 35 in full detail
-        visible_tools = tools[-35:] if len(tools) > 35 else tools
-        per_tool_budget = max(80, (remaining_budget // len(visible_tools)) - 70)
-        for tool in visible_tools:
-            quote_blocks.append(_format_tool_plain_block(lex, tool, per_tool_budget))
-
-    if d_block is not None:
-        quote_blocks.append(d_block)
+        d_lim = limits.draft_preview_max_chars
+        d_body = _clean_binary_noise(draft_text.strip()[-d_lim:])
+        quote_blocks.append(
+            lex.live_progress_draft.replace("**", "").format(preview=d_body)
+        )
 
     return quote_blocks
 
 
-def build_live_progress_message(
+def _paginate_quote_blocks(
+    lex: UiLexicon,
+    first_page_header: str,
+    all_blocks: list[str],
+) -> list[tuple[str, list[TypeMessageEntity]]]:
+    if not all_blocks:
+        return [_assemble_collapsible_trace_message(first_page_header, [])]
+
+    pages: list[tuple[str, list[TypeMessageEntity]]] = []
+    current_blocks: list[str] = []
+    page_num = 1
+    current_header = first_page_header
+    current_utf16 = _utf16_len(current_header.replace("**", "").replace("`", ""))
+
+    for block in all_blocks:
+        b_utf16 = _utf16_len(block) + 2
+        if current_blocks and (
+            current_utf16 + b_utf16 > _MAX_PAGE_UTF16_LEN
+            or len(current_blocks) >= _MAX_BLOCKS_PER_PAGE
+        ):
+            pages.append(
+                _assemble_collapsible_trace_message(current_header, current_blocks)
+            )
+            page_num += 1
+            current_header = lex.trace_page_continuation_header.format(
+                page_num=page_num
+            )
+            current_blocks = [block]
+            current_utf16 = _utf16_len(current_header) + b_utf16
+        else:
+            current_blocks.append(block)
+            current_utf16 += b_utf16
+
+    if current_blocks:
+        pages.append(
+            _assemble_collapsible_trace_message(current_header, current_blocks)
+        )
+    return pages
+
+
+def build_live_progress_pages(
     lex: UiLexicon,
     limits: LimitsStaticConfig,
     event: TurnProgressEvent,
     elapsed_sec: float,
     model_slug: str,
     account_slug: str,
-) -> tuple[str, list[TypeMessageEntity]]:
+) -> list[tuple[str, list[TypeMessageEntity]]]:
     header = lex.live_progress_header.format(
         model_slug=model_slug,
         account_slug=account_slug,
         elapsed_sec=elapsed_sec,
     )
-    blocks = _build_budgeted_quote_blocks(
+    all_blocks = _build_all_untruncated_blocks(
         lex=lex,
         limits=limits,
         thinking_text=event.thinking_text,
         subagents=event.active_subagents,
         tools=event.active_tools,
         draft_text=event.text_accumulated,
-        total_char_budget=3500,
     )
-    return _assemble_collapsible_trace_message(header, blocks)
+    return _paginate_quote_blocks(lex, header, all_blocks)
 
 
-def build_final_execution_trace_message(
+def build_final_execution_trace_pages(
     lex: UiLexicon,
     limits: LimitsStaticConfig,
     result: TurnResult,
     model_slug: str,
     account_slug: str,
-) -> tuple[str, list[TypeMessageEntity]] | None:
+) -> list[tuple[str, list[TypeMessageEntity]]]:
     if not result.thinking_text and not result.tool_calls and not result.subagents:
-        return None
+        return []
 
     header = lex.trace_completed_header.format(
         model_slug=model_slug,
@@ -261,16 +330,15 @@ def build_final_execution_trace_message(
         elapsed_sec=result.turn_delta_duration_sec,
         steps_count=len(result.tool_calls),
     )
-    blocks = _build_budgeted_quote_blocks(
+    all_blocks = _build_all_untruncated_blocks(
         lex=lex,
         limits=limits,
         thinking_text=result.thinking_text,
         subagents=result.subagents,
         tools=result.tool_calls,
         draft_text=None,
-        total_char_budget=3650,
     )
-    return _assemble_collapsible_trace_message(header, blocks)
+    return _paginate_quote_blocks(lex, header, all_blocks)
 
 
 def render_turn_footer(
