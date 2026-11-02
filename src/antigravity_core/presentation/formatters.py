@@ -31,10 +31,23 @@ from antigravity_core.domain.models import (
 from antigravity_core.lexicon.schema import UiLexicon
 
 _BINARY_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]+")
-_MAX_SINGLE_BLOCK_CHARS: int = 2400
-_MAX_TOOL_OUTPUT_CHARS: int = 850
-_MAX_TOOL_OUTPUT_HEAD_LINES: int = 10
-_MAX_TOOL_OUTPUT_TAIL_LINES: int = 6
+_AGY_TRUNCATION_NOTICE_RE = re.compile(
+    r"The tool's output was truncated due to being too long\.[^\n]*\n*"
+    r"(?:Here is a preview with the middle of the output truncated:\n*)?",
+    re.IGNORECASE,
+)
+_AGY_CMD_EXIT_ZERO_RE = re.compile(
+    r"^Command exited with code 0\.\s*(?:Command output:\s*)?",
+    re.IGNORECASE,
+)
+_AGY_CMD_EXIT_NONZERO_RE = re.compile(
+    r"^Command exited with code (\d+)\.\s*(?:Command output:\s*)?",
+    re.IGNORECASE,
+)
+_MAX_SINGLE_BLOCK_CHARS: int = 1800
+_MAX_TOOL_OUTPUT_CHARS: int = 480
+_MAX_TOOL_OUTPUT_HEAD_LINES: int = 6
+_MAX_TOOL_OUTPUT_TAIL_LINES: int = 4
 _MAX_PAGE_UTF16_LEN: int = 3750
 _MAX_BLOCKS_PER_PAGE: int = 25
 _WIDE_BUBBLE_TARGET_COLS: int = 92
@@ -155,19 +168,28 @@ def render_new_session_divider(lex: UiLexicon, topic: ForumTopic) -> str:
 
 def _compact_tool_output_head_tail(raw_output: str) -> str:
     cleaned = _clean_binary_noise(raw_output)
-    lines = cleaned.splitlines()
-    max_lines = _MAX_TOOL_OUTPUT_HEAD_LINES + _MAX_TOOL_OUTPUT_TAIL_LINES + 2
+    cleaned = _AGY_TRUNCATION_NOTICE_RE.sub("", cleaned).strip()
+    cleaned = _AGY_CMD_EXIT_ZERO_RE.sub("", cleaned).strip()
+    cleaned = _AGY_CMD_EXIT_NONZERO_RE.sub(r"[exit \1] ", cleaned).strip()
+
+    if cleaned in ("", "No output from the command."):
+        return ""
+
+    lines = [ln for ln in cleaned.splitlines() if ln.strip()]
+    max_lines = _MAX_TOOL_OUTPUT_HEAD_LINES + _MAX_TOOL_OUTPUT_TAIL_LINES + 1
 
     if len(lines) > max_lines:
         head = "\n".join(lines[:_MAX_TOOL_OUTPUT_HEAD_LINES])
         tail = "\n".join(lines[-_MAX_TOOL_OUTPUT_TAIL_LINES:])
         hidden_count = len(lines) - _MAX_TOOL_OUTPUT_HEAD_LINES - _MAX_TOOL_OUTPUT_TAIL_LINES
-        cleaned = f"{head}\n... [скрыто ещё {hidden_count} строк] ...\n{tail}"
+        cleaned = f"{head}\n... [+{hidden_count} стр.] ...\n{tail}"
+    else:
+        cleaned = "\n".join(lines)
 
     if len(cleaned) > _MAX_TOOL_OUTPUT_CHARS:
-        half = (_MAX_TOOL_OUTPUT_CHARS - 40) // 2
+        half = (_MAX_TOOL_OUTPUT_CHARS - 30) // 2
         hidden_chars = len(cleaned) - (half * 2)
-        cleaned = f"{cleaned[:half].rstrip()}\n... [скрыто {hidden_chars} симв.] ...\n{cleaned[-half:].lstrip()}"
+        cleaned = f"{cleaned[:half].rstrip()}\n... [+{hidden_chars} симв.] ...\n{cleaned[-half:].lstrip()}"
 
     return cleaned
 
@@ -175,7 +197,7 @@ def _compact_tool_output_head_tail(raw_output: str) -> str:
 def _format_tool_blocks_untruncated(
     lex: UiLexicon, tool: ToolCallSummary
 ) -> list[str]:
-    """Formats each tool call into a single collapsible quote block with full parameters and head+tail output."""
+    """Formats each tool call into a compact single collapsible quote block without boilerplate."""
     icon = (
         lex.live_progress_tool_done_icon
         if tool.state == StepState.DONE
@@ -186,18 +208,28 @@ def _format_tool_blocks_untruncated(
         if tool.duration_seconds is not None
         else ""
     )
-    hint_str = ""
-    if tool.target_hint:
-        clean_h = _clean_binary_noise(tool.target_hint.replace("\n", " "))[:90]
-        hint_str = f" → {clean_h}"
+    clean_h = (
+        _clean_binary_noise(tool.target_hint.replace("\n", " "))[:95]
+        if tool.target_hint
+        else ""
+    )
+    hint_str = f" → {clean_h}" if clean_h else ""
 
     base_header = f"{icon} #{tool.step_index} {tool.tool_name}{dur}{hint_str}"
     body_sections: list[str] = []
 
     if tool.parameters_text:
-        p_clean = _clean_binary_noise(tool.parameters_text)[:900]
-        if p_clean:
+        p_clean = _clean_binary_noise(tool.parameters_text)[:600]
+        # Avoid repeating single-line CommandLine/Path if it already fits completely in base_header
+        is_redundant_single_param = (
+            "\n" not in p_clean
+            and clean_h
+            and p_clean.endswith(clean_h)
+            and len(p_clean) <= len(clean_h) + 18
+        )
+        if p_clean and not is_redundant_single_param:
             body_sections.append(f"{lex.trace_tool_params_label}\n{p_clean}")
+
     if tool.output_text:
         o_clean = _compact_tool_output_head_tail(tool.output_text)
         if o_clean:

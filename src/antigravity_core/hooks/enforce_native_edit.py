@@ -35,9 +35,12 @@ _FORBIDDEN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
 )
 
-# Block recursive grep -r / grep -rn which hangs on huge/binary directories (/home, /var, docker, conda)
+# Block unguarded recursive grep -r / grep -rn (unless bounded by both timeout and --include)
 _RECURSIVE_GREP_RE = re.compile(
     r"\bgrep\s+(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b"
+)
+_INLINE_SCRIPT_BODY_RE = re.compile(
+    r"\b(?:python3?|awk|perl)\b[^\n]*?(?:-c\s+(['\"])[\s\S]*?\1|'[\s\S]*?')"
 )
 
 # Block local `cat <file>` (when command is not an ssh invocation and not reading /proc or /sys)
@@ -85,18 +88,25 @@ def normalize_and_strip_safe_redirects(command_line: str) -> str:
 
 def evaluate_command_line(command_line: str) -> dict[str, str]:
     normalized = normalize_and_strip_safe_redirects(command_line)
-    for pattern, _label in _FORBIDDEN_PATTERNS:
-        if pattern.search(normalized) is not None:
+    # Strip inline script bodies before checking shell '>' redirection so 'if x > 10' in python -c is not mistaken for file redirection
+    shell_only = _INLINE_SCRIPT_BODY_RE.sub(" ", normalized)
+
+    for pattern, label in _FORBIDDEN_PATTERNS:
+        target_str = normalized if label == "inline python file write" else shell_only
+        if pattern.search(target_str) is not None:
             return {
                 "decision": "deny",
                 "reason": _DENY_REASON,
             }
 
     if _RECURSIVE_GREP_RE.search(normalized) is not None:
-        return {
-            "decision": "deny",
-            "reason": _DENY_RECURSIVE_GREP_REASON,
-        }
+        has_timeout = "timeout " in normalized
+        has_include = "--include=" in normalized
+        if not (has_timeout and has_include):
+            return {
+                "decision": "deny",
+                "reason": _DENY_RECURSIVE_GREP_REASON,
+            }
 
     if _SSHFS_TRAVERSAL_RE.search(normalized) is not None:
         return {
