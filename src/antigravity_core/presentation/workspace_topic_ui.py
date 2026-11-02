@@ -416,8 +416,16 @@ class WorkspaceTopicUI:
         async def _bg_sync_pages(pages: list[tuple[str, list[object]]]) -> None:
             if sync_lock.locked():
                 return
-            async with sync_lock:
-                await _sync_trace_pages(pages, is_final=False)
+            try:
+                async with sync_lock:
+                    await _sync_trace_pages(pages, is_final=False)
+            except Exception as exc:
+                logger.error(
+                    "Background trace page sync failed",
+                    topic_id=topic_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
             nonlocal last_edit_ts

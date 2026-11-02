@@ -645,8 +645,8 @@ def _preprocess_gfm_markdown(raw_md: str) -> str:
 
 
 def split_markdown_preserving_blocks(text: str, max_chars: int) -> list[str]:
-    """Splits long Markdown text across chunks without breaking fenced code blocks."""
-    if len(text) <= max_chars:
+    """Splits long Markdown text across chunks by UTF-16 length without breaking fenced code blocks."""
+    if _utf16_len(text) <= max_chars:
         return [text]
 
     chunks: list[str] = []
@@ -654,17 +654,26 @@ def split_markdown_preserving_blocks(text: str, max_chars: int) -> list[str]:
     current_len = 0
     in_fence = False
     fence_header = "```"
+    safe_line_max = max(200, max_chars - 50)
 
-    for line in text.splitlines():
+    raw_lines: list[str] = []
+    for orig_line in text.splitlines():
+        if _utf16_len(orig_line) <= safe_line_max:
+            raw_lines.append(orig_line)
+        else:
+            for pos in range(0, len(orig_line), safe_line_max):
+                raw_lines.append(orig_line[pos : pos + safe_line_max])
+
+    for line in raw_lines:
         stripped = line.strip()
-        line_len = len(line) + 1
+        line_len = _utf16_len(line) + 1
 
         if current_len + line_len > max_chars and current_lines:
             if in_fence:
                 current_lines.append("```")
                 chunks.append("\n".join(current_lines).strip())
                 current_lines = [fence_header, line]
-                current_len = len(fence_header) + 1 + line_len
+                current_len = _utf16_len(fence_header) + 1 + line_len
             else:
                 chunks.append("\n".join(current_lines).strip())
                 current_lines = [line]

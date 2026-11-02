@@ -2,8 +2,25 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+import structlog
+
 from antigravity_core.infrastructure.database.repositories import SettingsRepository
 from antigravity_core.lexicon import get_lexicon
+
+logger = structlog.get_logger(__name__)
+
+
+def _log_task_exception_immediately(task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "Background batcher task failed with unhandled exception",
+            task_name=task.get_name(),
+            error=str(exc),
+            exc_info=exc,
+        )
 
 
 @dataclass(slots=True)
@@ -89,6 +106,7 @@ class MessageBatcher:
                 buf.debounce_task = asyncio.create_task(
                     self._delayed_flush(topic_id, wait_sec)
                 )
+                buf.debounce_task.add_done_callback(_log_task_exception_immediately)
 
         if flush_immediately_buffer is not None:
             await self._deliver_buffer(flush_immediately_buffer)
@@ -126,4 +144,12 @@ class MessageBatcher:
 
         combined_prompt = "\n\n".join(parts).strip()
         if combined_prompt:
-            await self._on_flush(buf.topic_id, last_msg_id, combined_prompt)
+            try:
+                await self._on_flush(buf.topic_id, last_msg_id, combined_prompt)
+            except Exception as exc:
+                logger.error(
+                    "Unhandled exception while executing flushed message batch",
+                    topic_id=buf.topic_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
