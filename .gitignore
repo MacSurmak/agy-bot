@@ -36,6 +36,7 @@ obj/
 .env.local
 *.pem
 *.key
+config.yaml
 
 # Logs & OS Files
 *.log
