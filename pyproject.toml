@@ -1,3 +1,17 @@
+# ==============================================================================
+# STRICT ARCHITECTURAL POLICY: ZERO LEGACY DEPENDENCIES OR SYNTAX (LATE-2026+)
+# ==============================================================================
+# 1. It is STRICTLY FORBIDDEN to introduce dependencies, pins, or APIs from 2025
+#    or early 2026 (e.g., Python 3.12/3.13, SQLAlchemy 2.0.x, MCP 1.x FastMCP,
+#    PostgreSQL 17, cryptg 0.4, pytest 8.x, or legacy typing imports).
+# 2. All dependencies MUST track the latest stable late-2026+ releases:
+#    - Python >= 3.14 (3.14 / 3.15 modern syntax & PEP 649 semantics)
+#    - PostgreSQL 18.6+
+#    - SQLAlchemy >= 2.1.6 (Active 2.1 series, async Mapped[...] only)
+#    - MCP SDK >= 2.3.0 (Strictly use `from mcp.server import MCPServer`)
+#    - Pydantic >= 2.14.2, Cryptography >= 50.0.2, Telethon >= 1.45.0
+# ==============================================================================
+
 [build-system]
 requires = ["setuptools>=84.0.0", "wheel"]
 build-backend = "setuptools.build_meta"

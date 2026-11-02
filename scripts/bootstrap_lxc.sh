@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Provisioning script for Ubuntu 26.04 LTS / Debian 13 LXC container on Proxmox VE (Python 3.14+).
+# ==============================================================================
+# STRICT ZERO-LEGACY POLICY (LATE-2026+ BASELINE):
+# Target OS: Ubuntu 26.04 LTS / Debian 13+ with Python 3.14 / 3.15+ and PostgreSQL 18.6+.
+# Using outdated 2025 / early-2026 runtimes (Python 3.12/3.13, PostgreSQL 17) is FORBIDDEN.
 # Requires LXC Options -> Features: nesting=1,fuse=1 enabled on the Proxmox host.
+# ==============================================================================
 
 if [[ "${EUID}" -ne 0 ]]; then
     echo "ERROR: bootstrap_lxc.sh must be executed as root inside the LXC container." >&2
