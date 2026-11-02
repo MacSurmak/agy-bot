@@ -344,6 +344,13 @@ class TopicWorker:
                         self._cumulative_tokens = event.cumulative_usage.total_tokens
                         self._cumulative_duration_sec = event.cumulative_duration_sec
 
+                        has_dangling_active_tool = any(
+                            t.state == StepState.ACTIVE for t in tools_by_step.values()
+                        )
+                        if event.status != TurnStatus.SUCCESS or has_dangling_active_tool:
+                            # Recycle worker process if turn was interrupted or cut off mid-tool by timeout
+                            await self.terminate_forcefully()
+
                         if event.status == TurnStatus.ERROR:
                             combined_err = (
                                 f"{event.error_message or ''}\n{self.get_stderr_summary()}".strip()

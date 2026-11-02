@@ -30,6 +30,7 @@ from antigravity_core.presentation.formatters import (
     build_final_execution_trace_pages,
     build_live_progress_pages,
     format_account_quota_lines,
+    format_wide_header_block,
     list_workspace_directories,
     render_Formatted_response_chunks,
     render_new_session_divider,
@@ -218,14 +219,14 @@ class WorkspaceTopicUI:
                 q_info = await self._inspector.fetch_account_quota(account)
                 await self._account_repo.update_quota_snapshot(account.id, q_info)
                 q_lines = format_account_quota_lines(q_info, lex)
+                hdr_q = format_wide_header_block(
+                    f"📊 Квоты аккаунта {account.slug} ({account.email_label})"
+                )
                 if q_lines:
-                    body = (
-                        f"📊 **Квоты аккаунта `{account.slug}` ({account.email_label}):**\n"
-                        + "\n".join(q_lines)
-                    )
+                    body = f"{hdr_q}\n" + "\n".join(q_lines)
                 else:
                     min_p = q_info.get("min_remaining_pct", "?")
-                    body = f"📊 **Квота `{account.slug}`:** остаток `{min_p}%`"
+                    body = f"{hdr_q}\nОстаток: `{min_p}%`"
                 await wait_msg.edit(body)
             except Exception as exc:
                 max_err = self._cfg.limits.error_summary_max_chars
@@ -499,20 +500,36 @@ class WorkspaceTopicUI:
             else lex.ws_empty_response_fallback.format(status=result.status.value)
         )
 
-        formatted_chunks = render_Formatted_response_chunks(
-            body_markdown=body_text,
-            footer_bar_text=footer_bar,
-            max_chars=settings.tg_max_message_chars,
-        )
-        for idx, (chunk_text, chunk_entities) in enumerate(formatted_chunks):
-            is_last = idx == len(formatted_chunks) - 1
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=chunk_text,
-                formatting_entities=chunk_entities,
-                reply_to=reply_to_msg_id if idx == 0 else topic_id,
-                buttons=build_turn_response_keyboard(lex, updated_topic) if is_last else None,
+        try:
+            formatted_chunks = render_Formatted_response_chunks(
+                body_markdown=body_text,
+                footer_bar_text=footer_bar,
+                max_chars=settings.tg_max_message_chars,
             )
+            for idx, (chunk_text, chunk_entities) in enumerate(formatted_chunks):
+                is_last = idx == len(formatted_chunks) - 1
+                await self._client.send_message(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message=chunk_text,
+                    formatting_entities=chunk_entities,
+                    reply_to=reply_to_msg_id if idx == 0 else topic_id,
+                    buttons=build_turn_response_keyboard(lex, updated_topic) if is_last else None,
+                )
+        except Exception as exc:
+            logger.error(
+                "Failed to render or send formatted response chunks; sending plain fallback",
+                topic_id=topic_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            for plain_chunk in split_message_chunks(
+                f"{body_text}\n\n{footer_bar}", settings.tg_max_message_chars
+            ):
+                await self._client.send_message(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message=plain_chunk,
+                    reply_to=topic_id,
+                )
 
         await self._auto_sync_topic_title_if_generic(updated_topic, result.conversation_id)
         await self.refresh_pinned_card(topic_id)

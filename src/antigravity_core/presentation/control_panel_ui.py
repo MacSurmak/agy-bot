@@ -28,7 +28,10 @@ from antigravity_core.infrastructure.keyring.dbus_profile_mgr import (
 )
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
 from antigravity_core.lexicon import SUPPORTED_LANGUAGES, UiLexicon, get_lexicon
-from antigravity_core.presentation.formatters import render_control_panel_dashboard
+from antigravity_core.presentation.formatters import (
+    format_wide_header_block,
+    render_control_panel_dashboard,
+)
 from antigravity_core.presentation.keyboards import (
     build_account_auth_keyboard,
     build_control_panel_keyboard,
@@ -214,9 +217,13 @@ class ControlPanelUI:
 
         if data_str == "cp:auth_menu":
             accounts = await self._account_repo.list_accounts()
+            prompt_lines = lex.cp_auth_menu_prompt.splitlines()
+            wide_prompt = "\n".join(
+                [format_wide_header_block(prompt_lines[0]), *prompt_lines[1:]]
+            )
             await self._safe_edit_event(
                 event,
-                lex.cp_auth_menu_prompt,
+                wide_prompt,
                 build_account_auth_keyboard(lex, accounts),
             )
             return
@@ -304,7 +311,7 @@ class ControlPanelUI:
             accounts = await self._account_repo.list_accounts()
             await self._safe_edit_event(
                 event,
-                lex.cp_switch_default_acc_prompt,
+                format_wide_header_block(lex.cp_switch_default_acc_prompt),
                 build_default_account_picker_keyboard(lex, accounts),
             )
             return
@@ -340,9 +347,11 @@ class ControlPanelUI:
 
         if data_str == "cp:tasks_menu":
             tasks = await self._scheduler.list_tasks(topic_id=None)
+            t_lines = lex.cp_tasks_menu_prompt.format(count=len(tasks)).splitlines()
+            wide_tasks = "\n".join([format_wide_header_block(t_lines[0]), *t_lines[1:]])
             await self._safe_edit_event(
                 event,
-                lex.cp_tasks_menu_prompt.format(count=len(tasks)),
+                wide_tasks,
                 build_tasks_management_keyboard(lex, self._cfg.limits, tasks),
             )
             return
@@ -509,7 +518,7 @@ class ControlPanelUI:
             ("🧠 Модель по умолчанию" if is_ru else "🧠 Default Model", settings.default_model),
             ("🛡 Режим прав по умолчанию" if is_ru else "🛡 Default Permissions", mode_display),
         ]
-        lines = [lex.cp_settings_menu_header]
+        lines = [format_wide_header_block(lex.cp_settings_menu_header.strip())]
         for label, val in items:
             lines.append(lex.cp_settings_menu_item.format(key="", value_json=val, description=label))
 
@@ -538,7 +547,7 @@ class ControlPanelUI:
             options = [(lang_labels.get(code, code), code) for code in SUPPORTED_LANGUAGES]
             await self._safe_edit_event(
                 event,
-                "🌐 **Выберите язык интерфейса / Select UI Language:**",
+                format_wide_header_block("🌐 Выберите язык интерфейса / Select UI Language"),
                 build_setting_options_keyboard(lex, key, options, settings.ui_language),
             )
             return
@@ -555,7 +564,7 @@ class ControlPanelUI:
             options = [(m, m) for m in models[: self._cfg.limits.models_menu_display_limit]]
             await self._safe_edit_event(
                 event,
-                lex.ws_select_model_prompt,
+                format_wide_header_block(lex.ws_select_model_prompt),
                 build_setting_options_keyboard(lex, key, options, settings.default_model),
             )
             return
@@ -574,7 +583,7 @@ class ControlPanelUI:
             ]
             await self._safe_edit_event(
                 event,
-                "🛡 **Режим прав по умолчанию / Default Permissions:**",
+                format_wide_header_block("🛡 Режим прав по умолчанию / Default Permissions"),
                 build_setting_options_keyboard(
                     lex, key, options, settings.default_execution_mode.value
                 ),

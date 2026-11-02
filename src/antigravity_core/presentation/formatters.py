@@ -76,11 +76,16 @@ def _utf16_len(text: str) -> int:
 
 
 def _pad_wide_bar(text: str) -> str:
-    clean = text.strip()
+    clean = text.replace("**", "").replace("`", "").strip()
     if len(clean) >= _WIDE_BUBBLE_TARGET_COLS:
         return clean
     pad_len = max(2, _WIDE_BUBBLE_TARGET_COLS - len(clean) - 1)
     return f"{clean} " + ("─" * pad_len)
+
+
+def format_wide_header_block(title: str) -> str:
+    """Wraps a header line in a 92-column preformatted block so Telegram Desktop expands the bubble."""
+    return f"```{_pad_wide_bar(title)}```"
 
 
 def _split_text_preserving_lines(text: str, chunk_size: int) -> list[str]:
@@ -140,7 +145,7 @@ def render_topic_header_card(
         else lex.topic_card_worker_cold.format(ttl_min=ttl_min)
     )
 
-    return lex.topic_card_template.format(
+    raw_card = lex.topic_card_template.format(
         title=topic.title,
         session_str=session_str,
         workspace_path=topic.workspace_path,
@@ -151,6 +156,11 @@ def render_topic_header_card(
         mode_str=mode_str,
         worker_str=worker_str,
     )
+    card_lines = raw_card.splitlines()
+    if len(card_lines) >= 2 and card_lines[1].startswith("━"):
+        header_bar = format_wide_header_block(card_lines[0])
+        return "\n".join([header_bar, *card_lines[2:]])
+    return raw_card
 
 
 def render_new_session_divider(lex: UiLexicon, topic: ForumTopic) -> str:
@@ -159,11 +169,15 @@ def render_new_session_divider(lex: UiLexicon, topic: ForumTopic) -> str:
         if topic.execution_mode == ExecutionMode.FULL_ACCESS
         else lex.new_session_mode_read_only
     )
-    return lex.new_session_divider_template.format(
+    raw_div = lex.new_session_divider_template.format(
         workspace_path=topic.workspace_path,
         model_slug=topic.model_slug,
         mode_label=mode_label,
     )
+    div_lines = [ln for ln in raw_div.splitlines() if not ln.startswith("═")]
+    if div_lines:
+        return "\n".join([format_wide_header_block(div_lines[0]), *div_lines[1:]])
+    return raw_div
 
 
 def _compact_tool_output_head_tail(raw_output: str) -> str:
@@ -523,7 +537,7 @@ def _format_markdown_table_block(table_lines: list[str]) -> list[str]:
         mid_border = "├" + "┼".join("─" * (w + 2) for w in col_widths) + "┤"
         bot_border = "└" + "┴".join("─" * (w + 2) for w in col_widths) + "┘"
 
-        box_lines: list[str] = [f"```{top_border}"]
+        box_lines: list[str] = ["```", top_border]
         for row_idx, row in enumerate(normalized_rows):
             padded_cells = [
                 _pad_display_width(row[c_i], col_widths[c_i])
@@ -532,7 +546,8 @@ def _format_markdown_table_block(table_lines: list[str]) -> list[str]:
             box_lines.append("│ " + " │ ".join(padded_cells) + " │")
             if row_idx == 0 and len(normalized_rows) > 1:
                 box_lines.append(mid_border)
-        box_lines.append(f"{bot_border}```")
+        box_lines.append(bot_border)
+        box_lines.append("```")
         return box_lines
 
     # Fallback for extra-wide tables: render each row as a structured card
@@ -570,36 +585,21 @@ def _preprocess_gfm_markdown(raw_md: str) -> str:
         out_lines.extend(_format_markdown_table_block(table_buffer))
         table_buffer.clear()
 
-    pending_fence_open = False
-
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("```"):
             _flush_quote_buffer()
             _flush_table_buffer()
             if stripped != "```" and stripped.endswith("```") and len(stripped) > 6:
-                # Single-line fenced block (such as ```┌───...───┐```)
                 out_lines.append(line)
                 continue
-            if not in_code_fence:
-                in_code_fence = True
-                pending_fence_open = True
-            else:
-                in_code_fence = False
-                if pending_fence_open:
-                    pending_fence_open = False
-                elif out_lines:
-                    out_lines[-1] = f"{out_lines[-1]}```"
-                else:
-                    out_lines.append("```")
+            in_code_fence = not in_code_fence
+            # Always emit clean '```' without language tags so Telethon markdown never prints 'bash'/'table' inside the block
+            out_lines.append("```")
             continue
 
         if in_code_fence:
-            if pending_fence_open:
-                out_lines.append(f"```{line}")
-                pending_fence_open = False
-            else:
-                out_lines.append(line)
+            out_lines.append(line)
             continue
 
         if _TABLE_ROW_RE.match(line):
@@ -694,14 +694,22 @@ def render_Formatted_response_chunks(
     footer_bar_text: str,
     max_chars: int,
 ) -> list[tuple[str, list[TypeMessageEntity]]]:
-    """Renders LLM Markdown response into formatted Telegram chunks with a full-width preformatted status bar."""
-    raw_chunks = split_markdown_preserving_blocks(body_markdown, max_chars - 220)
+    """Preprocesses GFM tables/headings first, then splits into safe chunks <= max_chars with full-width footer bars."""
+    preprocessed_full = _preprocess_gfm_markdown(body_markdown)
+    # Strip leading/trailing newlines right inside ``` fences so code blocks and tables have no empty top/bottom lines
+    preprocessed_full = re.sub(r"```\n+", "```", preprocessed_full)
+    preprocessed_full = re.sub(r"\n+```", "```", preprocessed_full)
+
+    # Re-expand ``` lines for safe chunk splitting, then strip inner newlines per chunk
+    chunk_ready = preprocessed_full.replace("```", "\n```\n")
+    raw_chunks = split_markdown_preserving_blocks(chunk_ready, max_chars - 260)
     total_chunks = len(raw_chunks)
     rendered_pages: list[tuple[str, list[TypeMessageEntity]]] = []
 
     for idx, raw_chunk in enumerate(raw_chunks, start=1):
-        preprocessed = _preprocess_gfm_markdown(raw_chunk)
-        parsed_text, raw_entities = markdown.parse(preprocessed)
+        tight_chunk = re.sub(r"```\n+", "```", raw_chunk)
+        tight_chunk = re.sub(r"\n+```", "```", tight_chunk)
+        parsed_text, raw_entities = markdown.parse(tight_chunk)
         s_text = add_surrogate(parsed_text)
 
         marker_positions: list[int] = [
@@ -785,9 +793,19 @@ def render_control_panel_dashboard(
     warm_count = sum(1 for s in pool_snapshots if s.is_warm)
     running_count = sum(1 for s in pool_snapshots if s.is_running_turn)
 
-    lines: list[str] = [
-        lex.dashboard_header.format(warm_count=warm_count, running_count=running_count)
-    ]
+    raw_hdr_lines = lex.dashboard_header.format(
+        warm_count=warm_count, running_count=running_count
+    ).splitlines()
+    if len(raw_hdr_lines) >= 2 and raw_hdr_lines[1].startswith("━"):
+        lines: list[str] = [
+            format_wide_header_block(raw_hdr_lines[0]),
+            *raw_hdr_lines[2:],
+        ]
+    else:
+        lines = [
+            format_wide_header_block(raw_hdr_lines[0]),
+            *raw_hdr_lines[1:],
+        ]
     for snap in pool_snapshots:
         if snap.is_warm:
             state_badge = (
