@@ -21,8 +21,9 @@ class UiLexicon:
     new_session_mode_read_only: str
     new_session_divider_template: str
 
-    # Live Turn Progress (formatters.py)
+    # Live Turn Progress & Permanent Execution Trace (formatters.py)
     live_progress_header: str
+    trace_completed_header: str
     live_progress_subagents_header: str
     live_progress_subagent_item: str
     live_progress_tools_header: str
@@ -31,6 +32,9 @@ class UiLexicon:
     live_progress_tool_duration_suffix: str
     live_progress_tool_hint_suffix: str
     live_progress_tool_item: str
+    trace_tool_params_label: str
+    trace_tool_output_label: str
+    trace_thinking_header: str
     live_progress_thinking: str
     live_progress_draft: str
 

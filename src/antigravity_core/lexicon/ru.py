@@ -30,21 +30,26 @@ RU_LEXICON = UiLexicon(
         "🧠 **Модель:** `{model_slug}` | 🛡 **Режим:** `{mode_label}`\n"
         "══════════════════════════════════════════"
     ),
-    # Live Turn Progress
+    # Live Turn Progress & Permanent Execution Trace
     live_progress_header=(
-        "⚙️ **Antigravity выполняет ход** (`{model_slug}` | `{account_slug}` | `{elapsed_sec:.1f}с`)\n"
-        "━━━━━━━━━━━━━━━━━━"
+        "⚙️ **Выполнение хода** (`{model_slug}` | `{account_slug}` | `{elapsed_sec:.1f}с`)"
     ),
-    live_progress_subagents_header="🤖 **Активные субагенты:**",
-    live_progress_subagent_item="  • `{role}` (`{type_name}` — `{conv_short}`)",
-    live_progress_tools_header="🔧 **Вызовы инструментов:**",
+    trace_completed_header=(
+        "🛠 **Журнал выполнения хода** (`{model_slug}` | `{account_slug}` | `{elapsed_sec:.1f}с` | шагов: `{steps_count}`)"
+    ),
+    live_progress_subagents_header="🤖 **Субагенты:**",
+    live_progress_subagent_item="• `{role}` (`{type_name}` — `{conv_short}`)",
+    live_progress_tools_header="🔧 **Инструменты и действия:**",
     live_progress_tool_done_icon="✅",
     live_progress_tool_active_icon="⏳",
     live_progress_tool_duration_suffix=" ({duration:.2f}с)",
     live_progress_tool_hint_suffix=" → `{hint}`",
-    live_progress_tool_item="  {icon} `{tool_name}`{hint}{dur}",
-    live_progress_thinking="\n💭 *Мысли:* _{snippet}_",
-    live_progress_draft="\n📝 **Черновик ответа:**\n{preview}",
+    live_progress_tool_item="{icon} **#{step_index}** `{tool_name}`{dur}{hint}",
+    trace_tool_params_label="📥 Параметры:",
+    trace_tool_output_label="📤 Вывод:",
+    trace_thinking_header="💭 **Мысли агента (Thinking):**",
+    live_progress_thinking="💭 **Мысли:**\n{snippet}",
+    live_progress_draft="📝 **Черновик ответа:**\n{preview}",
     # Turn Footer
     turn_footer_stats=(
         "\n\n━━━━━━━━━━━━━━━━━━\n"

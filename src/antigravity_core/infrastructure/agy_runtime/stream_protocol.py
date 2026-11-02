@@ -147,28 +147,57 @@ def _parse_step_update_event(
         raw_dur = body.get("duration_seconds")
         duration = float(raw_dur) if isinstance(raw_dur, int | float) else None
         target_hint: str | None = None
+        parameters_text: str | None = None
+        output_text: str | None = None
+
         tool_info = body.get("tool_info")
         if isinstance(tool_info, dict):
             params = tool_info.get("parameters")
-            if isinstance(params, dict):
+            if isinstance(params, dict) and params:
                 for key in (
                     "TargetFile",
                     "AbsolutePath",
                     "DirectoryPath",
                     "SearchPath",
                     "CommandLine",
+                    "Query",
+                    "Pattern",
                     "file_path",
                     "alias",
                 ):
                     if key in params and params[key] is not None:
-                        target_hint = str(params[key])[:target_hint_max_chars]
+                        raw_hint = str(params[key]).replace("\n", " ").strip()
+                        target_hint = raw_hint[:target_hint_max_chars]
                         break
+
+                param_lines: list[str] = []
+                for k, v in params.items():
+                    val_str = (
+                        json.dumps(v, ensure_ascii=False)
+                        if isinstance(v, dict | list)
+                        else str(v)
+                    )
+                    param_lines.append(f"{k}: {val_str}")
+                parameters_text = "\n".join(param_lines)
+
+            raw_out = tool_info.get("output")
+            if raw_out is not None:
+                out_str = (
+                    json.dumps(raw_out, ensure_ascii=False, indent=2)
+                    if isinstance(raw_out, dict | list)
+                    else str(raw_out).strip()
+                )
+                if out_str:
+                    output_text = out_str
+
         tool_summary = ToolCallSummary(
             step_index=step_index,
             tool_name=tool_name,
             state=state,
             duration_seconds=duration,
             target_hint=target_hint,
+            parameters_text=parameters_text,
+            output_text=output_text,
         )
 
     subagents_list: list[SubagentState] = []

@@ -230,7 +230,7 @@ class TopicWorker:
             ) from exc
 
         accumulated_text = ""
-        latest_thinking: str | None = None
+        accumulated_thinking = ""
         tools_by_step: dict[int, ToolCallSummary] = {}
         active_subagents: dict[str, SubagentState] = {}
 
@@ -270,23 +270,45 @@ class TopicWorker:
                     if isinstance(event, ParsedStepUpdateEvent):
                         self._conversation_id = event.conversation_id
                         if event.thinking_delta is not None:
-                            latest_thinking = event.thinking_delta
+                            if accumulated_thinking and not accumulated_thinking.endswith(
+                                ("\n", " ")
+                            ):
+                                accumulated_thinking += "\n"
+                            accumulated_thinking += event.thinking_delta
                         if event.text_delta is not None:
                             accumulated_text += event.text_delta
                         if event.tool_summary is not None:
-                            tools_by_step[event.tool_summary.step_index] = event.tool_summary
+                            prev_tool = tools_by_step.get(event.tool_summary.step_index)
+                            if prev_tool is not None:
+                                merged_params = (
+                                    event.tool_summary.parameters_text
+                                    or prev_tool.parameters_text
+                                )
+                                merged_output = (
+                                    event.tool_summary.output_text or prev_tool.output_text
+                                )
+                                merged_hint = (
+                                    event.tool_summary.target_hint or prev_tool.target_hint
+                                )
+                                tools_by_step[event.tool_summary.step_index] = replace(
+                                    event.tool_summary,
+                                    target_hint=merged_hint,
+                                    parameters_text=merged_params,
+                                    output_text=merged_output,
+                                )
+                            else:
+                                tools_by_step[event.tool_summary.step_index] = event.tool_summary
                         for sub in event.subagents:
                             active_subagents[sub.conversation_id] = sub
 
-                        tools_win = self._cfg.runtime.active_tools_window_size
                         progress_event = TurnProgressEvent(
                             conversation_id=event.conversation_id,
                             step_index=event.step_index,
                             step_type=event.step_type,
                             state=event.state,
-                            thinking_snippet=latest_thinking,
+                            thinking_text=accumulated_thinking.strip() or None,
                             text_accumulated=accumulated_text,
-                            active_tools=tuple(tools_by_step.values())[-tools_win:],
+                            active_tools=tuple(tools_by_step.values()),
                             active_subagents=tuple(active_subagents.values()),
                         )
                         await on_progress(progress_event)
@@ -307,7 +329,12 @@ class TopicWorker:
                                     model_slug=self._signature.model_slug,
                                     details=combined_err,
                                 )
-                        return event
+                        return replace(
+                            event,
+                            thinking_text=accumulated_thinking.strip() or None,
+                            tool_calls=tuple(tools_by_step.values()),
+                            subagents=tuple(active_subagents.values()),
+                        )
         except TimeoutError as exc:
             await self.terminate_forcefully()
             raise AgyProcessError(

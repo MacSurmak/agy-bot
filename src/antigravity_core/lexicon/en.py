@@ -30,21 +30,26 @@ EN_LEXICON = UiLexicon(
         "🧠 **Model:** `{model_slug}` | 🛡 **Mode:** `{mode_label}`\n"
         "══════════════════════════════════════════"
     ),
-    # Live Turn Progress
+    # Live Turn Progress & Permanent Execution Trace
     live_progress_header=(
-        "⚙️ **Antigravity Running** (`{model_slug}` | `{account_slug}` | `{elapsed_sec:.1f}s`)\n"
-        "━━━━━━━━━━━━━━━━━━"
+        "⚙️ **Executing Turn** (`{model_slug}` | `{account_slug}` | `{elapsed_sec:.1f}s`)"
     ),
-    live_progress_subagents_header="🤖 **Active Subagents:**",
-    live_progress_subagent_item="  • `{role}` (`{type_name}` — `{conv_short}`)",
-    live_progress_tools_header="🔧 **Tool Execution:**",
+    trace_completed_header=(
+        "🛠 **Execution Trace** (`{model_slug}` | `{account_slug}` | `{elapsed_sec:.1f}s` | steps: `{steps_count}`)"
+    ),
+    live_progress_subagents_header="🤖 **Subagents:**",
+    live_progress_subagent_item="• `{role}` (`{type_name}` — `{conv_short}`)",
+    live_progress_tools_header="🔧 **Tools & Actions:**",
     live_progress_tool_done_icon="✅",
     live_progress_tool_active_icon="⏳",
     live_progress_tool_duration_suffix=" ({duration:.2f}s)",
     live_progress_tool_hint_suffix=" → `{hint}`",
-    live_progress_tool_item="  {icon} `{tool_name}`{hint}{dur}",
-    live_progress_thinking="\n💭 *Thinking:* _{snippet}_",
-    live_progress_draft="\n📝 **Draft:**\n{preview}",
+    live_progress_tool_item="{icon} **#{step_index}** `{tool_name}`{dur}{hint}",
+    trace_tool_params_label="📥 Parameters:",
+    trace_tool_output_label="📤 Output:",
+    trace_thinking_header="💭 **Agent Thinking:**",
+    live_progress_thinking="💭 **Thinking:**\n{snippet}",
+    live_progress_draft="📝 **Draft:**\n{preview}",
     # Turn Footer
     turn_footer_stats=(
         "\n\n━━━━━━━━━━━━━━━━━━\n"

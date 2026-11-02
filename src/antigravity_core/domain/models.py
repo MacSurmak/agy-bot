@@ -141,6 +141,8 @@ class ToolCallSummary:
     state: StepState
     duration_seconds: float | None
     target_hint: str | None
+    parameters_text: str | None
+    output_text: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +151,7 @@ class TurnProgressEvent:
     step_index: int
     step_type: str
     state: StepState
-    thinking_snippet: str | None
+    thinking_text: str | None
     text_accumulated: str
     active_tools: tuple[ToolCallSummary, ...]
     active_subagents: tuple[SubagentState, ...]
@@ -177,6 +179,9 @@ class TurnResult:
     turn_delta_tokens: int
     account_switched_from: str | None
     account_switched_to: str | None
+    thinking_text: str | None = None
+    tool_calls: tuple[ToolCallSummary, ...] = ()
+    subagents: tuple[SubagentState, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

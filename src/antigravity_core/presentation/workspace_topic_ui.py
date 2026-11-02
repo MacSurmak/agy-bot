@@ -27,6 +27,8 @@ from antigravity_core.infrastructure.database.repositories import (
 from antigravity_core.lexicon import get_lexicon
 from antigravity_core.presentation.formatters import (
     list_workspace_directories,
+    parse_markdown_with_collapsible_quotes,
+    render_final_execution_trace_chunks,
     render_live_progress,
     render_new_session_divider,
     render_topic_header_card,
@@ -301,7 +303,7 @@ class WorkspaceTopicUI:
             if (now - last_edit_ts) < settings.tg_edit_throttle_sec:
                 return
             last_edit_ts = now
-            live_text = render_live_progress(
+            live_raw = render_live_progress(
                 lex=lex,
                 limits=self._cfg.limits,
                 event=progress,
@@ -309,11 +311,20 @@ class WorkspaceTopicUI:
                 model_slug=topic.model_slug,
                 account_slug=account.slug,
             )
+            # Keep live preview within single message bounds; full non-truncated trace is finalized on completion
+            if len(live_raw) > settings.tg_max_message_chars:
+                live_raw = live_raw[-settings.tg_max_message_chars :]
+            clean_live, live_entities = parse_markdown_with_collapsible_quotes(live_raw)
             try:
-                await status_msg.edit(
-                    live_text,
+                await self._client.edit_message(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message=status_msg.id,
+                    text=clean_live,
+                    formatting_entities=live_entities,
                     buttons=build_live_progress_keyboard(lex, topic_id),
                 )
+            except MessageNotModifiedError:
+                pass
             except RPCError as exc:
                 logger.debug("Live progress message edit skipped", topic_id=topic_id, error=str(exc))
 
@@ -335,13 +346,46 @@ class WorkspaceTopicUI:
                 logger.warning("Failed to update status message with turn error", error=str(edit_exc))
             return
 
-        try:
-            await status_msg.delete()
-        except RPCError as exc:
-            logger.debug("Could not delete live progress status message", error=str(exc))
-
         updated_topic = await self._topic_repo.get_topic_strict(topic_id)
         updated_account = await self._account_repo.get_by_id(updated_topic.assigned_account_id)
+
+        # Finalize and preserve the full execution trace in collapsible blockquotes (do NOT delete status_msg!)
+        trace_chunks = render_final_execution_trace_chunks(
+            lex=lex,
+            limits=self._cfg.limits,
+            result=result,
+            model_slug=updated_topic.model_slug,
+            account_slug=updated_account.slug,
+            max_chars=settings.tg_max_message_chars,
+        )
+        if trace_chunks:
+            first_text, first_entities = parse_markdown_with_collapsible_quotes(trace_chunks[0])
+            try:
+                await self._client.edit_message(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message=status_msg.id,
+                    text=first_text,
+                    formatting_entities=first_entities,
+                    buttons=None,
+                )
+            except MessageNotModifiedError:
+                pass
+            except RPCError as exc:
+                logger.debug("Could not finalize first trace message", error=str(exc))
+
+            for extra_trace in trace_chunks[1:]:
+                extra_text, extra_entities = parse_markdown_with_collapsible_quotes(extra_trace)
+                await self._client.send_message(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message=extra_text,
+                    formatting_entities=extra_entities,
+                    reply_to=topic_id,
+                )
+        else:
+            try:
+                await status_msg.delete()
+            except RPCError as exc:
+                logger.debug("Could not delete empty status message", error=str(exc))
 
         footer = render_turn_footer(
             lex=lex,
