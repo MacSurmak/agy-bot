@@ -1,0 +1,36 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/settings.json",
+  "agentMode": "accept-edits",
+  "toolPermission": "always-proceed",
+  "allowNonWorkspaceAccess": true,
+  "enableTerminalSandbox": false,
+  "artifactReviewPolicy": "always-proceed",
+  "disableSlashCommands": false,
+  "showTips": false,
+  "showFeedbackSurvey": false,
+  "notifications": false,
+  "historySize": -1,
+  "trustedWorkspaces": [
+    "/srv/antigravity/workspaces",
+    "/srv/antigravity/inbox",
+    "/mnt/remotes"
+  ],
+  "permissions": {
+    "allow": [
+      "read_file(*)",
+      "write_file(/srv/antigravity/workspaces)",
+      "write_file(/mnt/remotes)",
+      "write_file(/root/.gemini/config/rules)",
+      "write_file(/root/.gemini/config/skills)",
+      "command(*)",
+      "read_url(*)",
+      "mcp(telegram-core/*)",
+      "mcp(*)"
+    ],
+    "deny": [
+      "write_file(/etc/shadow)",
+      "write_file(/root/.ssh/authorized_keys)"
+    ],
+    "ask": []
+  }
+}
