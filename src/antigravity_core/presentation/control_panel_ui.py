@@ -233,8 +233,15 @@ class ControlPanelUI:
             try:
                 pending = await self._keyring_mgr.start_remote_oauth_flow(account)
             except Exception as exc:
+                err_detail = f"{type(exc).__name__}: {exc}"
+                logger.error(
+                    "OAuth flow start failed",
+                    account_slug=account.slug,
+                    error=err_detail,
+                    exc_info=True,
+                )
                 await event.respond(
-                    lex.cp_oauth_start_failed.format(slug=account.slug, error=exc)
+                    lex.cp_oauth_start_failed.format(slug=account.slug, error=err_detail)
                 )
                 return
 
@@ -410,9 +417,16 @@ class ControlPanelUI:
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
         except Exception as exc:
+            err_detail = f"{type(exc).__name__}: {exc}"
+            logger.error(
+                "OAuth verification failed",
+                account_slug=pending.account.slug,
+                error=err_detail,
+                exc_info=True,
+            )
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=lex.cp_oauth_failed.format(error=exc),
+                message=lex.cp_oauth_failed.format(error=err_detail),
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
         await self.render_and_pin_dashboard()
@@ -449,9 +463,11 @@ class ControlPanelUI:
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
         except Exception as exc:
+            err_detail = f"{type(exc).__name__}: {exc}"
+            logger.error("Failed to create forum topic", error=err_detail, exc_info=True)
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=lex.cp_new_topic_failed.format(error=exc),
+                message=lex.cp_new_topic_failed.format(error=err_detail),
                 reply_to=self._cfg.telegram.control_panel_topic_id,
             )
 

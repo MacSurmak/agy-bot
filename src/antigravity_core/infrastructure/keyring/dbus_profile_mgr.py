@@ -19,7 +19,8 @@ from antigravity_core.infrastructure.database.repositories import AccountReposit
 
 logger = structlog.get_logger(__name__)
 
-_OAUTH_URL_PATTERN = re.compile(r"(https://accounts\.google\.com/\S+)")
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\].*?\x07")
+_OAUTH_URL_PATTERN = re.compile(r"(https://accounts\.google\.com/[^\s\"'<>]+)")
 
 
 @dataclass(slots=True)
@@ -362,14 +363,26 @@ class KeyringProfileManager:
 
         accumulated = ""
         chunk_size = self._cfg.runtime.oauth_stdout_chunk_bytes
+        logger.info(
+            "Starting agy OAuth login subprocess",
+            account_slug=account.slug,
+            binary=str(self._cfg.paths.agy_binary_path),
+        )
         try:
             async with asyncio.timeout(self._cfg.runtime.command_exec_timeout_sec):
                 while True:
                     chunk = await proc.stdout.read(chunk_size)
                     if not chunk:
                         break
-                    accumulated += chunk.decode("utf-8", errors="replace")
-                    match = _OAUTH_URL_PATTERN.search(accumulated)
+                    decoded_chunk = chunk.decode("utf-8", errors="replace")
+                    accumulated += decoded_chunk
+                    clean_text = _ANSI_ESCAPE_RE.sub("", accumulated)
+                    logger.info(
+                        "agy login stdout chunk",
+                        account_slug=account.slug,
+                        chunk= _ANSI_ESCAPE_RE.sub("", decoded_chunk).strip(),
+                    )
+                    match = _OAUTH_URL_PATTERN.search(clean_text)
                     if match is not None:
                         return PendingOAuthSession(
                             account=account,
@@ -377,14 +390,28 @@ class KeyringProfileManager:
                             auth_url=match.group(1),
                         )
         except TimeoutError as exc:
-            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            clean_out = _ANSI_ESCAPE_RE.sub("", accumulated).strip()
+            logger.error(
+                "Timed out waiting for OAuth URL from agy login",
+                account_slug=account.slug,
+                output=clean_out,
+            )
             raise AccountAuthFlowError(
-                f"Timed out waiting for OAuth URL from agy login. Output so far:\n{accumulated}"
+                f"Timed out waiting for OAuth URL from agy login. Output: {clean_out or '<empty>'}"
             ) from exc
 
-        proc.kill()
+        await proc.wait()
+        clean_out = _ANSI_ESCAPE_RE.sub("", accumulated).strip()
+        logger.error(
+            "agy login exited without emitting an OAuth URL",
+            account_slug=account.slug,
+            returncode=proc.returncode,
+            output=clean_out,
+        )
         raise AccountAuthFlowError(
-            f"agy login exited without emitting an OAuth URL. Output:\n{accumulated}"
+            f"agy login exited (code {proc.returncode}) without OAuth URL. Output: {clean_out or '<empty>'}"
         )
 
     async def complete_remote_oauth_flow(

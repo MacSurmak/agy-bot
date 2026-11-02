@@ -46,11 +46,17 @@ logger = structlog.get_logger(__name__)
 
 def configure_structlog(log_file_path: Path) -> None:
     log_file_path.parent.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        format="%(message)s",
-        stream=sys.stdout,
-        level=logging.INFO,
-    )
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.handlers.clear()
+
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(logging.Formatter("%(message)s"))
+    root_logger.addHandler(stdout_handler)
+
+    file_handler = logging.FileHandler(log_file_path, encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter("%(message)s"))
+    root_logger.addHandler(file_handler)
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
