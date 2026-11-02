@@ -1,1 +1,1 @@
-"""PostgreSQL 17 database engine, ORM tables, and repositories."""
+"""PostgreSQL 18 database engine, ORM tables, and repositories."""

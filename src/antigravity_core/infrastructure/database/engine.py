@@ -45,7 +45,7 @@ class DatabaseManager:
                     )
         except SQLAlchemyError as exc:
             raise StartupValidationError(
-                f"Failed to connect to PostgreSQL 17 database: {exc}"
+                f"Failed to connect to PostgreSQL 18 database: {exc}"
             ) from exc
 
     @asynccontextmanager

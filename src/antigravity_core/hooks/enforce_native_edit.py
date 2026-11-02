@@ -30,7 +30,7 @@ _DENY_REASON = (
 )
 
 
-def normalize_and_ strip_safe_redirects(command_line: str) -> str:
+def normalize_and_strip_safe_redirects(command_line: str) -> str:
     cleaned = _SAFE_DEV_NULL_AMP_RE.sub(" ", command_line)
     cleaned = _SAFE_DEV_NULL_FD_RE.sub(" ", cleaned)
     cleaned = _SAFE_FD_DUP_RE.sub(" ", cleaned)

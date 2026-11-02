@@ -1,4 +1,4 @@
-"""Initial PostgreSQL 17 schema and mandatory dynamic settings seed.
+"""Initial PostgreSQL 18 schema and mandatory dynamic settings seed.
 
 Revision ID: 0001_initial_schema
 Revises:
