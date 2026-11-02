@@ -1,8 +1,12 @@
 import asyncio
 import contextlib
+import fcntl
 import os
+import pty
 import re
 import signal
+import struct
+import termios
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +39,7 @@ class _ActiveProfileRuntime:
 class PendingOAuthSession:
     account: GoogleAccount
     process: asyncio.subprocess.Process
+    pty_master_fd: int
     auth_url: str
 
 
@@ -329,6 +334,24 @@ class KeyringProfileManager:
                 f"{stderr_bytes.decode('utf-8', errors='replace')}"
             )
 
+    async def _clear_gemini_secret(self, env: dict[str, str]) -> None:
+        proc = await asyncio.create_subprocess_exec(
+            "secret-tool",
+            "clear",
+            "service",
+            "gemini",
+            "account",
+            "antigravity",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=env,
+        )
+        await asyncio.wait_for(
+            proc.wait(),
+            timeout=self._cfg.runtime.command_exec_timeout_sec,
+        )
+
     async def backup_account_token_to_db(self, account: GoogleAccount) -> bool:
         env = await self.ensure_account_bus(account)
         secret_val = await self._lookup_gemini_secret(env)
@@ -340,119 +363,169 @@ class KeyringProfileManager:
 
     async def start_remote_oauth_flow(self, account: GoogleAccount) -> PendingOAuthSession:
         env = await self.ensure_account_bus(account)
+        await self._clear_gemini_secret(env)
+
         oauth_env = {
             **env,
             "SSH_CONNECTION": "1",
+            "TERM": "xterm-256color",
             "BROWSER": "/bin/false",
         }
         oauth_env.pop("DISPLAY", None)
         oauth_env.pop("WAYLAND_DISPLAY", None)
 
-        proc = await asyncio.create_subprocess_exec(
-            str(self._cfg.paths.agy_binary_path),
-            "login",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=oauth_env,
-            start_new_session=True,
-        )
-        if proc.stdout is None:
-            proc.kill()
-            raise AccountAuthFlowError("Failed to capture stdout for agy login process.")
+        master_fd, slave_fd = pty.openpty()
+        # Set 2000-column PTY width so TUI never wraps long OAuth URLs across lines
+        winsize = struct.pack("HHHH", 50, 2000, 0, 0)
+        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+        os.set_blocking(master_fd, False)
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(self._cfg.paths.agy_binary_path),
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                env=oauth_env,
+                start_new_session=True,
+            )
+        except Exception:
+            os.close(master_fd)
+            raise
+        finally:
+            os.close(slave_fd)
 
         accumulated = ""
+        sent_method_enter = False
         chunk_size = self._cfg.runtime.oauth_stdout_chunk_bytes
+        poll_interval = self._cfg.runtime.dbus_socket_poll_interval_sec
+
         logger.info(
-            "Starting agy OAuth login subprocess",
+            "Started agy interactive PTY for Remote SSH OAuth flow",
             account_slug=account.slug,
-            binary=str(self._cfg.paths.agy_binary_path),
+            pid=proc.pid,
         )
         try:
             async with asyncio.timeout(self._cfg.runtime.command_exec_timeout_sec):
                 while True:
-                    chunk = await proc.stdout.read(chunk_size)
+                    try:
+                        chunk = os.read(master_fd, chunk_size)
+                    except BlockingIOError:
+                        if proc.returncode is not None:
+                            break
+                        await asyncio.sleep(poll_interval)
+                        continue
+                    except OSError:
+                        break
+
                     if not chunk:
                         break
+
                     decoded_chunk = chunk.decode("utf-8", errors="replace")
                     accumulated += decoded_chunk
                     clean_text = _ANSI_ESCAPE_RE.sub("", accumulated)
-                    logger.info(
-                        "agy login stdout chunk",
-                        account_slug=account.slug,
-                        chunk= _ANSI_ESCAPE_RE.sub("", decoded_chunk).strip(),
-                    )
+
+                    if (
+                        not sent_method_enter
+                        and (
+                            "Select login method" in clean_text
+                            or "Google OAuth" in clean_text
+                        )
+                    ):
+                        await asyncio.sleep(poll_interval)
+                        os.write(master_fd, b"\r")
+                        sent_method_enter = True
+                        logger.info(
+                            "Selected '1. Google OAuth' in agy TUI prompt",
+                            account_slug=account.slug,
+                        )
+
                     match = _OAUTH_URL_PATTERN.search(clean_text)
                     if match is not None:
+                        auth_url = match.group(1).strip()
+                        logger.info(
+                            "Captured OAuth URL from agy PTY",
+                            account_slug=account.slug,
+                            auth_url=auth_url,
+                        )
                         return PendingOAuthSession(
                             account=account,
                             process=proc,
-                            auth_url=match.group(1),
+                            pty_master_fd=master_fd,
+                            auth_url=auth_url,
                         )
         except TimeoutError as exc:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
+            self._cleanup_oauth_pty(proc, master_fd)
             clean_out = _ANSI_ESCAPE_RE.sub("", accumulated).strip()
             logger.error(
-                "Timed out waiting for OAuth URL from agy login",
+                "Timed out waiting for OAuth URL from agy PTY",
                 account_slug=account.slug,
                 output=clean_out,
             )
             raise AccountAuthFlowError(
-                f"Timed out waiting for OAuth URL from agy login. Output: {clean_out or '<empty>'}"
+                f"Timed out waiting for OAuth URL from agy PTY. Output: {clean_out or '<empty>'}"
             ) from exc
 
-        await proc.wait()
+        self._cleanup_oauth_pty(proc, master_fd)
         clean_out = _ANSI_ESCAPE_RE.sub("", accumulated).strip()
-        logger.error(
-            "agy login exited without emitting an OAuth URL",
-            account_slug=account.slug,
-            returncode=proc.returncode,
-            output=clean_out,
-        )
         raise AccountAuthFlowError(
-            f"agy login exited (code {proc.returncode}) without OAuth URL. Output: {clean_out or '<empty>'}"
+            f"agy PTY exited (code {proc.returncode}) without OAuth URL. Output: {clean_out or '<empty>'}"
         )
 
     async def complete_remote_oauth_flow(
         self, pending: PendingOAuthSession, verification_code: str
     ) -> None:
-        proc = pending.process
-        if proc.stdin is None or proc.stdout is None:
-            raise AccountAuthFlowError("OAuth login process pipes are closed.")
-
         clean_code = verification_code.strip()
         if not clean_code:
+            self._cleanup_oauth_pty(pending.process, pending.pty_master_fd)
             raise AccountAuthFlowError("Verification code cannot be empty.")
 
-        proc.stdin.write((clean_code + "\n").encode("utf-8"))
-        await proc.stdin.drain()
-        proc.stdin.close()
+        env = await self.ensure_account_bus(pending.account)
+        poll_interval = self._cfg.runtime.dbus_socket_poll_interval_sec
+        chunk_size = self._cfg.runtime.oauth_stdout_chunk_bytes
+        accumulated = ""
 
         try:
-            stdout_bytes = await asyncio.wait_for(
-                proc.stdout.read(),
-                timeout=self._cfg.runtime.command_exec_timeout_sec,
-            )
-            await asyncio.wait_for(
-                proc.wait(),
-                timeout=self._cfg.runtime.command_exec_timeout_sec,
-            )
-        except TimeoutError as exc:
-            proc.kill()
-            raise AccountAuthFlowError("Timed out waiting for agy login to finalize OAuth token.") from exc
+            os.write(pending.pty_master_fd, (clean_code + "\r").encode("utf-8"))
+            async with asyncio.timeout(self._cfg.runtime.command_exec_timeout_sec):
+                while True:
+                    try:
+                        chunk = os.read(pending.pty_master_fd, chunk_size)
+                        if chunk:
+                            accumulated += chunk.decode("utf-8", errors="replace")
+                    except (BlockingIOError, OSError):
+                        pass
 
-        if proc.returncode != 0:
-            output_text = stdout_bytes.decode("utf-8", errors="replace")
+                    if await self._has_gemini_secret(env):
+                        break
+
+                    if pending.process.returncode is not None:
+                        break
+
+                    await asyncio.sleep(poll_interval)
+        except TimeoutError as exc:
+            clean_out = _ANSI_ESCAPE_RE.sub("", accumulated).strip()
             raise AccountAuthFlowError(
-                f"agy login failed with exit code {proc.returncode}:\n{output_text}"
-            )
+                f"Timed out waiting for agy to store OAuth token in keyring. Output: {clean_out}"
+            ) from exc
+        finally:
+            self._cleanup_oauth_pty(pending.process, pending.pty_master_fd)
 
         backed_up = await self.backup_account_token_to_db(pending.account)
         if not backed_up:
+            clean_out = _ANSI_ESCAPE_RE.sub("", accumulated).strip()
             raise AccountAuthFlowError(
-                "agy login finished, but no secret was found in gnome-keyring for service=gemini account=antigravity."
+                f"agy did not store secret in gnome-keyring (service=gemini, account=antigravity). Output: {clean_out}"
             )
+
+    @staticmethod
+    def _cleanup_oauth_pty(proc: asyncio.subprocess.Process, master_fd: int) -> None:
+        with contextlib.suppress(OSError):
+            os.close(master_fd)
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
 
     async def shutdown_all(self) -> None:
         async with self._lock:
