@@ -8,21 +8,15 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
-from antigravity_core.application.turn_orchestrator import TurnOrchestrator
 from antigravity_core.config.static_config import StaticConfig
-from antigravity_core.domain.enums import NotifyPolicy, ScheduleKind, TurnStatus
+from antigravity_core.domain.enums import NotifyPolicy, ScheduleKind
 from antigravity_core.domain.exceptions import ConfigurationError
-from antigravity_core.domain.models import ScheduledTask, TurnProgressEvent
-from antigravity_core.infrastructure.database.repositories import (
-    ScheduleRepository,
-    SettingsRepository,
-    TopicRepository,
-)
-from antigravity_core.lexicon import get_lexicon
+from antigravity_core.domain.models import ScheduledTask
+from antigravity_core.infrastructure.database.repositories import ScheduleRepository
 
 logger = structlog.get_logger(__name__)
 
-ScheduledReportDeliverCallback = Callable[[int, str], Awaitable[None]]
+ScheduledWakeAgentCallback = Callable[[int, str, UUID | None], Awaitable[None]]
 
 _RELATIVE_TIME_RE = re.compile(r"^\+?\s*(\d+)\s*([smhd])$", re.IGNORECASE)
 
@@ -34,17 +28,11 @@ class TemporalSchedulerService:
         self,
         static_config: StaticConfig,
         schedule_repo: ScheduleRepository,
-        settings_repo: SettingsRepository,
-        topic_repo: TopicRepository,
-        turn_orchestrator: TurnOrchestrator,
-        deliver_report_cb: ScheduledReportDeliverCallback,
+        wake_agent_cb: ScheduledWakeAgentCallback,
     ) -> None:
         self._cfg = static_config
         self._schedule_repo = schedule_repo
-        self._settings_repo = settings_repo
-        self._topic_repo = topic_repo
-        self._orchestrator = turn_orchestrator
-        self._deliver_cb = deliver_report_cb
+        self._wake_agent_cb = wake_agent_cb
         self._scheduler = AsyncIOScheduler(timezone=UTC)
 
     async def start_and_hydrate(self) -> None:
@@ -163,20 +151,10 @@ class TemporalSchedulerService:
 
         now_iso = datetime.now(tz=UTC).isoformat()
         is_one_shot = task.schedule_kind == ScheduleKind.ONE_SHOT
-
-        if task.notify_policy == NotifyPolicy.ALERT_ONLY:
-            wake_prompt = (
-                f"[SILENT MONITORING TRIGGER | task_id={task.id} | time={now_iso}]\n"
-                f"Execute monitoring check: {task.instruction_prompt}\n"
-                "If all metrics and services are healthy and no anomaly is detected, "
-                "respond with EXACTLY one word: HEARTBEAT_OK (the bot will suppress notification). "
-                "If any anomaly, error, or threshold violation is found, provide a detailed alert report."
-            )
-        else:
-            wake_prompt = (
-                f"[SCHEDULED TASK TRIGGER | task_id={task.id} | time={now_iso}]\n"
-                f"Execute the scheduled task and report to the user:\n{task.instruction_prompt}"
-            )
+        wake_prompt = (
+            f"[SCHEDULED TASK TRIGGER | task_id={task.id} | time={now_iso}]\n"
+            f"Execute the scheduled task and report to the user:\n{task.instruction_prompt}"
+        )
 
         logger.info(
             "Firing scheduled task in parallel worker with live trace",
@@ -185,7 +163,8 @@ class TemporalSchedulerService:
             schedule_kind=task.schedule_kind.value,
         )
         await self._schedule_repo.mark_task_executed(task.id, deactivate=is_one_shot)
-        await self._deliver_cb(
+        await self._wake_agent_cb(
             task.topic_id,
             wake_prompt,
+            task.conversation_id,
         )

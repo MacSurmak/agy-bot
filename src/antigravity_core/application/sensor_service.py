@@ -11,14 +11,12 @@ from uuid import UUID, uuid4
 
 import structlog
 
-from antigravity_core.application.turn_orchestrator import TurnOrchestrator
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import (
     NotifyPolicy,
     SensorKind,
     SensorTriggerCondition,
     SensorWakeMode,
-    TurnStatus,
 )
 from antigravity_core.domain.exceptions import ConfigurationError
 from antigravity_core.domain.models import EventSensor
@@ -30,7 +28,8 @@ from antigravity_core.lexicon import get_lexicon
 
 logger = structlog.get_logger(__name__)
 
-SensorReportDeliverCallback = Callable[[int, str, str], Awaitable[None]]
+SensorWakeAgentCallback = Callable[[int, str, str, UUID | None], Awaitable[None]]
+SensorReflexDeliverCallback = Callable[[int, str, str], Awaitable[None]]
 
 
 class EventSensorService:
@@ -41,14 +40,14 @@ class EventSensorService:
         static_config: StaticConfig,
         sensor_repo: SensorRepository,
         settings_repo: SettingsRepository,
-        turn_orchestrator: TurnOrchestrator,
-        deliver_report_cb: SensorReportDeliverCallback,
+        wake_agent_cb: SensorWakeAgentCallback,
+        deliver_reflex_cb: SensorReflexDeliverCallback,
     ) -> None:
         self._cfg = static_config
         self._sensor_repo = sensor_repo
         self._settings_repo = settings_repo
-        self._orchestrator = turn_orchestrator
-        self._deliver_cb = deliver_report_cb
+        self._wake_agent_cb = wake_agent_cb
+        self._deliver_reflex_cb = deliver_reflex_cb
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
         self._procs: dict[UUID, asyncio.subprocess.Process] = {}
 
@@ -400,7 +399,9 @@ class EventSensorService:
                     )
                     if action_output:
                         reflex_summary.append(f"```\n{action_output[:2000]}\n```")
-                await self._deliver_cb(sensor.topic_id, sensor.name, "\n".join(reflex_summary))
+                await self._deliver_reflex_cb(
+                    sensor.topic_id, sensor.name, "\n".join(reflex_summary)
+                )
             return
 
         if (
@@ -421,7 +422,9 @@ class EventSensorService:
                 ]
                 if action_output:
                     msg_lines.append(f"```\n{action_output[:1500]}\n```")
-                await self._deliver_cb(sensor.topic_id, sensor.name, "\n".join(msg_lines))
+                await self._deliver_reflex_cb(
+                    sensor.topic_id, sensor.name, "\n".join(msg_lines)
+                )
             return
 
         # Stage 3: Wake up agy agent with both sensor event output and reflex dump output
@@ -443,27 +446,17 @@ class EventSensorService:
                 f"Captured reflex output / dump:\n{action_output[:3000]}\n\n"
             )
 
-        if sensor.notify_policy == NotifyPolicy.ALERT_ONLY:
-            wake_prompt = (
-                f"[EVENT SENSOR TRIGGERED | name='{sensor.name}' | condition={sensor.trigger_condition.value} | time={now_iso}]\n"
-                f"Sensor command: {sensor.command}\n"
-                f"Captured event output:\n{trimmed_capture}\n\n"
-                f"{reflex_section}"
-                f"Instruction: {sensor.instruction_prompt}\n"
-                "If upon inspection everything is normal and no user alert is required, "
-                "respond with EXACTLY one word: HEARTBEAT_OK."
-            )
-        else:
-            wake_prompt = (
-                f"[EVENT SENSOR TRIGGERED | name='{sensor.name}' | condition={sensor.trigger_condition.value} | time={now_iso}]\n"
-                f"Sensor command: {sensor.command}\n"
-                f"Captured event output:\n{trimmed_capture}\n\n"
-                f"{reflex_section}"
-                f"Execute instruction and report to the user:\n{sensor.instruction_prompt}"
-            )
+        wake_prompt = (
+            f"[EVENT SENSOR TRIGGERED | name='{sensor.name}' | condition={sensor.trigger_condition.value} | time={now_iso}]\n"
+            f"Sensor command: {sensor.command}\n"
+            f"Captured event output:\n{trimmed_capture}\n\n"
+            f"{reflex_section}"
+            f"Execute instruction and report to the user:\n{sensor.instruction_prompt}"
+        )
 
-        await self._deliver_cb(
+        await self._wake_agent_cb(
             sensor.topic_id,
-            f"WAKE_AGENT::{sensor.notify_policy.value}::{sensor.name}",
+            sensor.name,
             wake_prompt,
+            sensor.conversation_id,
         )

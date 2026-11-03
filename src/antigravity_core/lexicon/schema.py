@@ -52,6 +52,8 @@ class UiLexicon:
     response_chunk_bar: str
     sched_footer_bar: str
     sensor_footer_bar: str
+    wake_badge_timer: str
+    wake_badge_sensor: str
 
     # Control Panel Dashboard (formatters.py)
     dashboard_header: str

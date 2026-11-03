@@ -574,7 +574,7 @@ class WorkspaceTopicUI:
         topic_id: int,
         wake_prompt: str,
         badge_prefix: str,
-        suppress_if_heartbeat_ok: bool,
+        conversation_id: UUID | None,
     ) -> None:
         """Executes an automated wake-up turn (timer or sensor) with full live tool trace in the topic."""
         topic = await self.ensure_topic_registered(topic_id)
@@ -681,7 +681,7 @@ class WorkspaceTopicUI:
             result = await self._orchestrator.execute_scheduled_turn(
                 topic_id=topic_id,
                 prompt=wake_prompt,
-                conversation_id=topic.active_conversation_id,
+                conversation_id=conversation_id,
                 on_progress=_on_progress,
             )
         except Exception as exc:
@@ -694,12 +694,6 @@ class WorkspaceTopicUI:
             return
 
         cleaned_resp = result.response_text.strip()
-        if suppress_if_heartbeat_ok and cleaned_resp == "HEARTBEAT_OK":
-            for msg in trace_msgs:
-                with contextlib.suppress(RPCError):
-                    await msg.delete()
-            return
-
         updated_topic = await self._topic_repo.get_topic_strict(topic_id)
         updated_account = await self._account_repo.get_by_id(updated_topic.assigned_account_id)
 
@@ -751,40 +745,49 @@ class WorkspaceTopicUI:
             )
         await self.refresh_pinned_card(topic_id)
 
-    async def deliver_scheduled_report(self, topic_id: int, wake_prompt: str) -> None:
-        suppress_hb = wake_prompt.startswith("[SILENT MONITORING TRIGGER")
+    async def execute_scheduled_wake_turn(
+        self, topic_id: int, wake_prompt: str, conversation_id: UUID | None
+    ) -> None:
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
         await self._run_interactive_wake_turn(
             topic_id=topic_id,
             wake_prompt=wake_prompt,
-            badge_prefix="⏰ Таймер",
-            suppress_if_heartbeat_ok=suppress_hb,
+            badge_prefix=lex.wake_badge_timer,
+            conversation_id=conversation_id,
         )
 
-    async def deliver_sensor_report(
-        self, topic_id: int, sensor_name_or_directive: str, payload_text: str
+    async def execute_sensor_wake_turn(
+        self,
+        topic_id: int,
+        sensor_name: str,
+        wake_prompt: str,
+        conversation_id: UUID | None,
     ) -> None:
-        if sensor_name_or_directive.startswith("WAKE_AGENT::"):
-            _, policy_str, real_name = sensor_name_or_directive.split("::", 2)
-            await self._run_interactive_wake_turn(
-                topic_id=topic_id,
-                wake_prompt=payload_text,
-                badge_prefix=f"📡 Датчик: {real_name}",
-                suppress_if_heartbeat_ok=(policy_str == "ALERT_ONLY"),
-            )
-            return
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
+        await self._run_interactive_wake_turn(
+            topic_id=topic_id,
+            wake_prompt=wake_prompt,
+            badge_prefix=lex.wake_badge_sensor.format(sensor_name=sensor_name),
+            conversation_id=conversation_id,
+        )
 
+    async def deliver_sensor_reflex_report(
+        self, topic_id: int, sensor_name: str, reflex_report_text: str
+    ) -> None:
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
         topic = await self.ensure_topic_registered(topic_id)
         account = await self._account_repo.get_by_id(topic.assigned_account_id)
 
         sensor_bar = lex.sensor_footer_bar.format(
-            sensor_name=sensor_name_or_directive,
+            sensor_name=sensor_name,
             model_slug=topic.model_slug,
             account_slug=account.slug,
         )
         formatted_chunks = render_Formatted_response_chunks(
-            body_markdown=payload_text,
+            body_markdown=reflex_report_text,
             footer_bar_text=sensor_bar,
             max_chars=settings.tg_max_message_chars,
             lex=lex,

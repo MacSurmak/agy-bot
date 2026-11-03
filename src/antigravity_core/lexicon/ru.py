@@ -68,6 +68,8 @@ RU_LEXICON = UiLexicon(
     response_chunk_bar="📄 Часть {idx} из {total}",
     sched_footer_bar="⏰ Запланированная задача  │  🧠 {model_slug}  │  👤 {account_slug}",
     sensor_footer_bar="📡 Датчик: {sensor_name}  │  🧠 {model_slug}  │  👤 {account_slug}",
+    wake_badge_timer="⏰ Таймер",
+    wake_badge_sensor="📡 Датчик: {sensor_name}",
     # Control Panel Dashboard
     dashboard_header=(
         "🛠 **ANTIGRAVITY TELEGRAM CORE — ПАНЕЛЬ УПРАВЛЕНИЯ**\n"

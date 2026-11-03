@@ -66,6 +66,8 @@ EN_LEXICON = UiLexicon(
     response_chunk_bar="📄 Part {idx} of {total}",
     sched_footer_bar="⏰ Scheduled Task  │  🧠 {model_slug}  │  👤 {account_slug}",
     sensor_footer_bar="📡 Sensor: {sensor_name}  │  🧠 {model_slug}  │  👤 {account_slug}",
+    wake_badge_timer="⏰ Scheduled Timer",
+    wake_badge_sensor="📡 Sensor: {sensor_name}",
     # Control Panel Dashboard
     dashboard_header=(
         "🛠 **ANTIGRAVITY TELEGRAM CORE — CONTROL PANEL**\n"

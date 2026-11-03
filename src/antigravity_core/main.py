@@ -194,18 +194,15 @@ async def run_service(static_config: StaticConfig) -> None:
     scheduler_service = TemporalSchedulerService(
         static_config=static_config,
         schedule_repo=schedule_repo,
-        settings_repo=settings_repo,
-        topic_repo=topic_repo,
-        turn_orchestrator=turn_orchestrator,
-        deliver_report_cb=workspace_ui.deliver_scheduled_report,
+        wake_agent_cb=workspace_ui.execute_scheduled_wake_turn,
     )
 
     sensor_service = EventSensorService(
         static_config=static_config,
         sensor_repo=sensor_repo,
         settings_repo=settings_repo,
-        turn_orchestrator=turn_orchestrator,
-        deliver_report_cb=workspace_ui.deliver_sensor_report,
+        wake_agent_cb=workspace_ui.execute_sensor_wake_turn,
+        deliver_reflex_cb=workspace_ui.deliver_sensor_reflex_report,
     )
 
     ipc_server = CoreIpcServer(
