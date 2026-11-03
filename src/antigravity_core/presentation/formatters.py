@@ -44,6 +44,16 @@ _AGY_CMD_EXIT_NONZERO_RE = re.compile(
     r"^Command exited with code (\d+)\.\s*(?:Command output:\s*)?",
     re.IGNORECASE,
 )
+_BRAIN_PATH_RE = re.compile(
+    r"/home/[^/\s'\"]+/\.\w+/antigravity-cli/brain/[0-9a-fA-F\-]{36}/"
+)
+_REMOTES_PATH_RE = re.compile(
+    r"/home/[^/\s'\"]+/[^/\s'\"]+/runtime_data/remotes/"
+)
+_HOME_PATH_RE = re.compile(r"/home/[^/\s'\"]+/")
+_SINGLE_PARAM_PREFIX_RE = re.compile(
+    r"^(?:CommandLine|Path|TargetFile|AbsolutePath|DirectoryPath|SearchPath|file_path):\s*"
+)
 _MAX_SINGLE_BLOCK_CHARS: int = 1800
 _MAX_TOOL_OUTPUT_CHARS: int = 480
 _MAX_TOOL_OUTPUT_HEAD_LINES: int = 6
@@ -69,6 +79,12 @@ _UNDERSCORE_GUARD: str = "\x04"
 
 def _clean_binary_noise(raw: str) -> str:
     return _BINARY_CONTROL_RE.sub(" ", raw).strip()
+
+
+def _shorten_verbose_paths(text: str) -> str:
+    shortened = _BRAIN_PATH_RE.sub("~brain/", text)
+    shortened = _REMOTES_PATH_RE.sub("~remotes/", shortened)
+    return _HOME_PATH_RE.sub("~/", shortened)
 
 
 def _utf16_len(text: str) -> int:
@@ -218,46 +234,66 @@ def _compact_tool_output_head_tail(raw_output: str) -> str:
     return cleaned
 
 
+def _is_tool_output_error(cleaned_output: str) -> bool:
+    if not cleaned_output:
+        return False
+    if cleaned_output.startswith(("[exit ", "Error executing tool", "Error:")):
+        return True
+    return "Traceback (most recent call last):" in cleaned_output
+
+
 def _format_tool_blocks_untruncated(
-    lex: UiLexicon, tool: ToolCallSummary
+    lex: UiLexicon,
+    tool: ToolCallSummary,
+    is_superseded_or_final: bool = False,
 ) -> list[str]:
-    """Formats each tool call into a compact single collapsible quote block without boilerplate."""
-    icon = (
-        lex.live_progress_tool_done_icon
-        if tool.state == StepState.DONE
-        else lex.live_progress_tool_active_icon
+    """Formats each tool call into a compact single collapsible quote block without duplicate commands."""
+    o_clean = (
+        _compact_tool_output_head_tail(tool.output_text)
+        if tool.output_text
+        else ""
     )
+    has_err = _is_tool_output_error(o_clean) or (
+        tool.state == StepState.ACTIVE and is_superseded_or_final
+    )
+
+    if has_err:
+        icon = "❌"
+    elif tool.state == StepState.DONE:
+        icon = lex.live_progress_tool_done_icon
+    else:
+        icon = lex.live_progress_tool_active_icon
+
     dur = (
         f" ({tool.duration_seconds:.2f}с)"
         if tool.duration_seconds is not None
         else ""
     )
-    clean_h = (
-        _clean_binary_noise(tool.target_hint.replace("\n", " "))[:95]
+    raw_hint = (
+        _shorten_verbose_paths(_clean_binary_noise(tool.target_hint.replace("\n", " ")))
         if tool.target_hint
         else ""
     )
+    clean_h = raw_hint[:140]
     hint_str = f" → {clean_h}" if clean_h else ""
 
     base_header = f"{icon} #{tool.step_index} {tool.tool_name}{dur}{hint_str}"
     body_sections: list[str] = []
 
     if tool.parameters_text:
-        p_clean = _clean_binary_noise(tool.parameters_text)[:600]
-        # Avoid repeating single-line CommandLine/Path if it already fits completely in base_header
-        is_redundant_single_param = (
+        p_clean = _shorten_verbose_paths(_clean_binary_noise(tool.parameters_text))[:600]
+        p_stripped = _SINGLE_PARAM_PREFIX_RE.sub("", p_clean).strip()
+        # Omit parameters section if it is a single-line command/path already shown in the header
+        is_redundant_param = (
             "\n" not in p_clean
-            and clean_h
-            and p_clean.endswith(clean_h)
-            and len(p_clean) <= len(clean_h) + 18
+            and bool(clean_h)
+            and (p_stripped == clean_h or len(raw_hint) <= 140)
         )
-        if p_clean and not is_redundant_single_param:
-            body_sections.append(f"{lex.trace_tool_params_label}\n{p_clean}")
+        if p_clean and not is_redundant_param:
+            body_sections.append(f"{lex.trace_tool_params_label}\n{p_stripped}")
 
-    if tool.output_text:
-        o_clean = _compact_tool_output_head_tail(tool.output_text)
-        if o_clean:
-            body_sections.append(f"{lex.trace_tool_output_label}\n{o_clean}")
+    if o_clean:
+        body_sections.append(f"{lex.trace_tool_output_label}\n{o_clean}")
 
     full_body = "\n".join(body_sections)
     if not full_body:
@@ -306,6 +342,7 @@ def _build_all_untruncated_blocks(
     subagents: tuple[SubagentState, ...],
     tools: tuple[ToolCallSummary, ...],
     draft_text: str | None,
+    is_final: bool = False,
 ) -> list[str]:
     quote_blocks: list[str] = []
 
@@ -332,8 +369,14 @@ def _build_all_untruncated_blocks(
             )
         quote_blocks.append("\n".join(sub_lines))
 
+    max_step_idx = max((t.step_index for t in tools), default=0)
     for tool in tools:
-        quote_blocks.extend(_format_tool_blocks_untruncated(lex, tool))
+        superseded = is_final or (tool.step_index < max_step_idx)
+        quote_blocks.extend(
+            _format_tool_blocks_untruncated(
+                lex, tool, is_superseded_or_final=superseded
+            )
+        )
 
     if draft_text and draft_text.strip():
         d_lim = limits.draft_preview_max_chars
@@ -441,6 +484,7 @@ def build_final_execution_trace_pages(
         subagents=result.subagents,
         tools=result.tool_calls,
         draft_text=None,
+        is_final=True,
     )
     return _paginate_quote_blocks(lex, header, all_blocks)
 

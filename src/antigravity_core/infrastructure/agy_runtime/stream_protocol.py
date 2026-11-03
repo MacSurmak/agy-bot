@@ -155,8 +155,10 @@ def _parse_step_update_event(
             params = tool_info.get("parameters")
             if isinstance(params, dict) and params:
                 for key in (
+                    "Path",
                     "TargetFile",
                     "AbsolutePath",
+                    "FilePath",
                     "DirectoryPath",
                     "SearchPath",
                     "CommandLine",
