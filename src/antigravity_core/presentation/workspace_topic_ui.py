@@ -310,7 +310,8 @@ class WorkspaceTopicUI:
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
                 message=lex.ws_dir_confirmed_msg.format(workspace_path=custom_path),
-                reply_to=topic_id,
+                reply_to=reply_to_msg_id,
+                silent=True,
             )
             return
 
@@ -523,12 +524,14 @@ class WorkspaceTopicUI:
                 lex=lex,
             )
             for idx, (chunk_text, chunk_entities) in enumerate(formatted_chunks):
+                is_first = idx == 0
                 is_last = idx == len(formatted_chunks) - 1
                 await self._client.send_message(
                     entity=self._cfg.telegram.forum_chat_id,
                     message=chunk_text,
                     formatting_entities=chunk_entities,
-                    reply_to=topic_id,
+                    reply_to=reply_to_msg_id if is_first else topic_id,
+                    silent=not is_first,
                     buttons=build_turn_response_keyboard(lex, updated_topic) if is_last else None,
                 )
         except Exception as exc:
