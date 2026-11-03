@@ -198,7 +198,7 @@ def render_new_session_divider(lex: UiLexicon, topic: ForumTopic) -> str:
     return raw_div
 
 
-def _compact_tool_output_head_tail(raw_output: str) -> str:
+def _compact_tool_output_head_tail(raw_output: str, lex: UiLexicon) -> str:
     cleaned = _clean_binary_noise(raw_output)
     cleaned = _AGY_TRUNCATION_NOTICE_RE.sub("", cleaned).strip()
     cleaned = _AGY_CMD_EXIT_ZERO_RE.sub("", cleaned).strip()
@@ -214,14 +214,16 @@ def _compact_tool_output_head_tail(raw_output: str) -> str:
         head = "\n".join(lines[:_MAX_TOOL_OUTPUT_HEAD_LINES])
         tail = "\n".join(lines[-_MAX_TOOL_OUTPUT_TAIL_LINES:])
         hidden_count = len(lines) - _MAX_TOOL_OUTPUT_HEAD_LINES - _MAX_TOOL_OUTPUT_TAIL_LINES
-        cleaned = f"{head}\n... [+{hidden_count} стр.] ...\n{tail}"
+        marker = lex.trace_hidden_lines_marker.format(count=hidden_count)
+        cleaned = f"{head}\n{marker}\n{tail}"
     else:
         cleaned = "\n".join(lines)
 
     if len(cleaned) > _MAX_TOOL_OUTPUT_CHARS:
         half = (_MAX_TOOL_OUTPUT_CHARS - 30) // 2
         hidden_chars = len(cleaned) - (half * 2)
-        cleaned = f"{cleaned[:half].rstrip()}\n... [+{hidden_chars} симв.] ...\n{cleaned[-half:].lstrip()}"
+        c_marker = lex.trace_hidden_chars_marker.format(count=hidden_chars)
+        cleaned = f"{cleaned[:half].rstrip()}\n{c_marker}\n{cleaned[-half:].lstrip()}"
 
     return cleaned
 
@@ -241,7 +243,7 @@ def _format_tool_blocks_untruncated(
 ) -> list[str]:
     """Formats each tool call into a compact single collapsible quote block without duplicate commands."""
     o_clean = (
-        _compact_tool_output_head_tail(tool.output_text)
+        _compact_tool_output_head_tail(tool.output_text, lex)
         if tool.output_text
         else ""
     )
@@ -257,7 +259,7 @@ def _format_tool_blocks_untruncated(
         icon = lex.live_progress_tool_active_icon
 
     dur = (
-        f" ({tool.duration_seconds:.2f}с)"
+        lex.live_progress_tool_duration_suffix.format(duration=tool.duration_seconds)
         if tool.duration_seconds is not None
         else ""
     )
@@ -423,7 +425,9 @@ def _paginate_quote_blocks(
             # Sealed earlier pages always get a clean static page title
             hdr = lex.trace_page_continuation_header.format(page_num=idx)
         else:
-            hdr = f"{first_page_header} [стр. {idx}]"
+            hdr = lex.trace_active_page_suffix.format(
+                header=first_page_header, page_num=idx
+            )
         assembled_pages.append(_assemble_collapsible_trace_message(hdr, blocks))
 
     return assembled_pages
@@ -492,10 +496,13 @@ def render_turn_footer(
     cum_k = result.cumulative_usage.total_tokens / 1000.0
     cache_k = result.cumulative_usage.cache_read_tokens / 1000.0
 
-    stats_single_line = (
-        f"⏱ {result.turn_delta_duration_sec:.1f}с  │  "
-        f"📊 +{tok_k:.1f}k ток (сессия: {cum_k:.1f}k, кэш: {cache_k:.1f}k)  │  "
-        f"🧠 {model_slug}  │  👤 {account_slug}"
+    stats_single_line = lex.turn_footer_stats.format(
+        duration=result.turn_delta_duration_sec,
+        tok_k=tok_k,
+        cum_k=cum_k,
+        cache_k=cache_k,
+        model_slug=model_slug,
+        account_slug=account_slug,
     )
     lines = [make_wide_single_line_bar(stats_single_line)]
 
@@ -779,6 +786,7 @@ def render_Formatted_response_chunks(
     body_markdown: str,
     footer_bar_text: str,
     max_chars: int,
+    lex: UiLexicon | None = None,
 ) -> list[tuple[str, list[TypeMessageEntity]]]:
     """Preprocesses GFM tables/headings/LaTeX first, then splits into safe chunks with 1-line wide footer bars."""
     preprocessed_full = _preprocess_gfm_markdown(body_markdown)
@@ -843,7 +851,10 @@ def render_Formatted_response_chunks(
             entities = entities[:94]
 
         if idx < total_chunks:
-            bar_text = make_wide_single_line_bar(f"📄 Часть {idx} из {total_chunks}")
+            chunk_tpl = lex.response_chunk_bar if lex is not None else "📄 Часть {idx} из {total}"
+            bar_text = make_wide_single_line_bar(
+                chunk_tpl.format(idx=idx, total=total_chunks)
+            )
         else:
             bar_text = make_wide_single_line_bar(footer_bar_text)
 
@@ -984,11 +995,18 @@ def render_control_panel_dashboard(
         )
 
     active_sensors = sensors or []
-    lines.append(f"\n📡 **Активные датчики (Event Sensors):** `{len(active_sensors)}`")
+    lines.append(lex.dashboard_sensors_header.format(count=len(active_sensors)))
     for s in active_sensors[:tasks_lim]:
         mode_tag = "1x" if s.one_shot else f"↻ {s.poll_interval_sec}s"
         lines.append(
-            f"  • `{str(s.id)[:short_len]}` [Топик `{s.topic_id}`] **{s.name}** (`{s.sensor_kind.value}` | `{s.trigger_condition.value}` | {mode_tag})"
+            lex.dashboard_sensor_item.format(
+                short_id=str(s.id)[:short_len],
+                topic_id=s.topic_id,
+                name=s.name,
+                sensor_kind=s.sensor_kind.value,
+                condition=s.trigger_condition.value,
+                mode_tag=mode_tag,
+            )
         )
 
     lines.append(
@@ -1030,7 +1048,7 @@ def _render_mini_bar(pct: int, width: int = 8) -> str:
     return ("█" * filled) + ("░" * (width - filled))
 
 
-def _format_reset_countdown(iso_reset_time: str) -> str:
+def _format_reset_countdown(iso_reset_time: str, lex: UiLexicon) -> str:
     if not iso_reset_time:
         return ""
     try:
@@ -1043,10 +1061,10 @@ def _format_reset_countdown(iso_reset_time: str) -> str:
         hours, rem = divmod(rem, 3600)
         mins = rem // 60
         if days > 0:
-            return f" (↻ {days}д {hours}ч)"
+            return lex.quota_reset_days_hours.format(days=days, hours=hours)
         if hours > 0:
-            return f" (↻ {hours}ч {mins}м)"
-        return f" (↻ {mins}м)"
+            return lex.quota_reset_hours_mins.format(hours=hours, mins=mins)
+        return lex.quota_reset_mins.format(mins=mins)
     except ValueError:
         return ""
 
@@ -1065,7 +1083,7 @@ def format_account_quota_lines(
         if not isinstance(b, dict):
             return None
         pct = int(b.get("remaining_pct", 100))
-        rst = _format_reset_countdown(str(b.get("reset_time", "")))
+        rst = _format_reset_countdown(str(b.get("reset_time", "")), lex)
         return f"`{_render_mini_bar(pct)} {pct}%`{rst}"
 
     gem_5h = _fmt_bucket("gemini-5h")
@@ -1077,24 +1095,24 @@ def format_account_quota_lines(
     if gem_5h or gem_wk:
         parts_g = []
         if gem_5h:
-            parts_g.append(f"**5ч:** {gem_5h}")
+            parts_g.append(lex.quota_5h_label.format(bar=gem_5h))
         if gem_wk:
-            parts_g.append(f"**Нед:** {gem_wk}")
-        out.append("    ├─ 🧠 **Gemini:** " + " │ ".join(parts_g))
+            parts_g.append(lex.quota_weekly_label.format(bar=gem_wk))
+        out.append(lex.quota_gemini_prefix + " │ ".join(parts_g))
 
     if c_5h or c_wk:
         parts_c = []
         if c_5h:
-            parts_c.append(f"**5ч:** {c_5h}")
+            parts_c.append(lex.quota_5h_label.format(bar=c_5h))
         if c_wk:
-            parts_c.append(f"**Нед:** {c_wk}")
-        out.append("    └─ 🤖 **Claude/3P:** " + " │ ".join(parts_c))
+            parts_c.append(lex.quota_weekly_label.format(bar=c_wk))
+        out.append(lex.quota_claude_prefix + " │ ".join(parts_c))
 
     if not out:
         for b_key, b_val in raw_buckets.items():
             if isinstance(b_val, dict):
                 pct = int(b_val.get("remaining_pct", 100))
-                rst = _format_reset_countdown(str(b_val.get("reset_time", "")))
+                rst = _format_reset_countdown(str(b_val.get("reset_time", "")), lex)
                 win = str(b_val.get("window") or b_key)
                 out.append(f"    • `{win}`: `{_render_mini_bar(pct)} {pct}%`{rst}")
 

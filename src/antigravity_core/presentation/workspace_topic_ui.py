@@ -220,17 +220,21 @@ class WorkspaceTopicUI:
                 await self._account_repo.update_quota_snapshot(account.id, q_info)
                 q_lines = format_account_quota_lines(q_info, lex)
                 hdr_q = format_wide_header_block(
-                    f"📊 Квоты аккаунта {account.slug} ({account.email_label})"
+                    lex.ws_quota_card_header.format(
+                        slug=account.slug, email_label=account.email_label
+                    )
                 )
                 if q_lines:
                     body = f"{hdr_q}\n" + "\n".join(q_lines)
                 else:
                     min_p = q_info.get("min_remaining_pct", "?")
-                    body = f"{hdr_q}\nОстаток: `{min_p}%`"
+                    body = f"{hdr_q}\n" + lex.ws_quota_fallback_body.format(min_pct=min_p)
                 await wait_msg.edit(body)
             except Exception as exc:
                 max_err = self._cfg.limits.error_summary_max_chars
-                await wait_msg.edit(f"❌ Ошибка запроса квот: `{str(exc)[:max_err]}`")
+                await wait_msg.edit(
+                    lex.ws_quota_error_msg.format(error=str(exc)[:max_err])
+                )
             return True
 
         if cmd == "/model":
@@ -513,6 +517,7 @@ class WorkspaceTopicUI:
                 body_markdown=body_text,
                 footer_bar_text=footer_bar,
                 max_chars=settings.tg_max_message_chars,
+                lex=lex,
             )
             for idx, (chunk_text, chunk_entities) in enumerate(formatted_chunks):
                 is_last = idx == len(formatted_chunks) - 1
@@ -565,16 +570,18 @@ class WorkspaceTopicUI:
 
     async def deliver_scheduled_report(self, topic_id: int, report_text: str) -> None:
         settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
         topic = await self.ensure_topic_registered(topic_id)
         account = await self._account_repo.get_by_id(topic.assigned_account_id)
 
-        sched_bar = (
-            f"⏰ Запланированная задача  │  🧠 {topic.model_slug}  │  👤 {account.slug}"
+        sched_bar = lex.sched_footer_bar.format(
+            model_slug=topic.model_slug, account_slug=account.slug
         )
         formatted_chunks = render_Formatted_response_chunks(
             body_markdown=report_text,
             footer_bar_text=sched_bar,
             max_chars=settings.tg_max_message_chars,
+            lex=lex,
         )
         for chunk_text, chunk_entities in formatted_chunks:
             await self._client.send_message(
@@ -589,16 +596,20 @@ class WorkspaceTopicUI:
         self, topic_id: int, sensor_name: str, report_text: str
     ) -> None:
         settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
         topic = await self.ensure_topic_registered(topic_id)
         account = await self._account_repo.get_by_id(topic.assigned_account_id)
 
-        sensor_bar = (
-            f"📡 Сработал датчик: {sensor_name}  │  🧠 {topic.model_slug}  │  👤 {account.slug}"
+        sensor_bar = lex.sensor_footer_bar.format(
+            sensor_name=sensor_name,
+            model_slug=topic.model_slug,
+            account_slug=account.slug,
         )
         formatted_chunks = render_Formatted_response_chunks(
             body_markdown=report_text,
             footer_bar_text=sensor_bar,
             max_chars=settings.tg_max_message_chars,
+            lex=lex,
         )
         for chunk_text, chunk_entities in formatted_chunks:
             await self._client.send_message(

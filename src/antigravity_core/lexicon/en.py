@@ -1,6 +1,7 @@
 from antigravity_core.lexicon.schema import UiLexicon
 
 EN_LEXICON = UiLexicon(
+    language_self_name="🇬🇧 English",
     # Topic Header Card
     topic_card_session_with_stats="`{conv_short}...` ({turns_count} turns, {tok_k:.1f}k tok.)",
     topic_card_session_uuid_only="`{conv_short}...`",
@@ -38,7 +39,10 @@ EN_LEXICON = UiLexicon(
         "🛠 **Execution Trace** (`{model_slug}` | `{account_slug}` | `{elapsed_sec:.1f}s` | steps: `{steps_count}`)"
     ),
     trace_page_continuation_header="🛠 Execution Trace (page {page_num})",
+    trace_active_page_suffix="{header} [page {page_num}]",
     trace_tool_part_suffix=" [part {part}/{total}]",
+    trace_hidden_lines_marker="... [+{count} lines] ...",
+    trace_hidden_chars_marker="... [+{count} chars] ...",
     live_progress_subagents_header="🤖 **Subagents:**",
     live_progress_subagent_item="• `{role}` (`{type_name}` — `{conv_short}`)",
     live_progress_tools_header="🔧 **Tools & Actions:**",
@@ -52,14 +56,16 @@ EN_LEXICON = UiLexicon(
     trace_thinking_header="💭 **Agent Thinking:**",
     live_progress_thinking="💭 **Thinking:**\n{snippet}",
     live_progress_draft="📝 **Draft:**\n{preview}",
-    # Turn Footer
+    # Turn & Pagination Footers
     turn_footer_stats=(
-        "\n\n━━━━━━━━━━━━━━━━━━\n"
-        "⏱ `{duration:.1f}s` | 📊 `+{tok_k:.1f}k` tok (session: `{cum_k:.1f}k`, cache: `{cache_k:.1f}k`) | "
-        "🧠 `{model_slug}` | 👤 `{account_slug}`"
+        "⏱ {duration:.1f}s  │  📊 +{tok_k:.1f}k tok (session: {cum_k:.1f}k, cache: {cache_k:.1f}k)  │  "
+        "🧠 {model_slug}  │  👤 {account_slug}"
     ),
     turn_footer_failover="\n🔄 *Auto-Failover:* `{from_slug}` ➔ `{to_slug}` (quota threshold)",
     turn_footer_error_status="\n⚠️ **Status `{status}`:** `{error}`",
+    response_chunk_bar="📄 Part {idx} of {total}",
+    sched_footer_bar="⏰ Scheduled Task  │  🧠 {model_slug}  │  👤 {account_slug}",
+    sensor_footer_bar="📡 Sensor: {sensor_name}  │  🧠 {model_slug}  │  👤 {account_slug}",
     # Control Panel Dashboard
     dashboard_header=(
         "🛠 **ANTIGRAVITY TELEGRAM CORE — CONTROL PANEL**\n"
@@ -86,10 +92,19 @@ EN_LEXICON = UiLexicon(
     dashboard_host_item="  • `{alias}` (`{ssh_user}@{hostname_or_ip}:{ssh_port}`) → `{local_mount_path}` [{m_badge}]",
     dashboard_tasks_header="\n⏰ **Active Scheduled Tasks:** `{count}`",
     dashboard_task_item="  • `{short_id}` [Topic `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
+    dashboard_sensors_header="\n📡 **Active Event Sensors:** `{count}`",
+    dashboard_sensor_item="  • `{short_id}` [Topic `{topic_id}`] **{name}** (`{sensor_kind}` | `{condition}` | {mode_tag})",
     dashboard_settings_summary=(
         "\n⚙️ **Default Settings:**\n"
         "  • Language: `{ui_language}` | Model: `{default_model}` | Mode: `{default_execution_mode}`"
     ),
+    quota_5h_label="**5h:** {bar}",
+    quota_weekly_label="**Wk:** {bar}",
+    quota_gemini_prefix="    ├─ 🧠 **Gemini:** ",
+    quota_claude_prefix="    └─ 🤖 **Claude/3P:** ",
+    quota_reset_days_hours=" (↻ {days}d {hours}h)",
+    quota_reset_hours_mins=" (↻ {hours}h {mins}m)",
+    quota_reset_mins=" (↻ {mins}m)",
     # Workspace directory picker labels
     workspace_dir_root_label="📁 Root Workspaces",
     workspace_dir_local_label="📂 local/{name}",
@@ -109,8 +124,20 @@ EN_LEXICON = UiLexicon(
     btn_cp_register_new_acc="➕ Register New Account Profile",
     btn_cp_back_to_dashboard="⬅️ Back to Dashboard",
     btn_cp_default_acc_item="{mark}{slug} ({email_label})",
-    btn_cp_cancel_task_item="🗑 Cancel {short_id} (Topic {topic_id}: {trigger_spec})",
+    btn_cp_cancel_task_item="🗑 Timer {short_id} (Topic {topic_id}: {trigger_spec})",
+    btn_cp_cancel_sensor_item="🗑 Sensor {short_id}: {name} (Topic {topic_id})",
     btn_cp_edit_setting_item="✏️ Edit {key}",
+    btn_cp_set_language="🌐 UI Language",
+    btn_cp_set_model="🧠 Default Model",
+    btn_cp_set_mode="🛡 Default Permissions",
+    setting_label_ui_language="🌐 UI Language",
+    setting_label_default_model="🧠 Default Model",
+    setting_label_default_mode="🛡 Default Permissions",
+    cp_select_language_prompt="🌐 Select UI Language",
+    cp_select_mode_prompt="🛡 Select Default Permissions",
+    mode_option_full_access="⚡ Full Access (Read & Write)",
+    mode_option_read_only="🛡 Read-Only (Plan Mode)",
+    cp_toast_sensor_canceled="Sensor canceled.",
     btn_ws_new_session="🔄 New Session (/new)",
     btn_ws_past_sessions="🕰 Past Sessions",
     btn_ws_mode_full_to_plan="🛡 Mode: Full Write ⇄ Plan",
@@ -226,6 +253,9 @@ EN_LEXICON = UiLexicon(
     ws_account_switched_msg="✅ Switched Google Account for this topic.",
     ws_select_workspace_prompt="📂 **Select Workspace Directory:**",
     ws_workspace_updated_msg="✅ Workspace updated to `{workspace_path}`.",
+    ws_quota_card_header="📊 Quotas for {slug} ({email_label})",
+    ws_quota_fallback_body="Remaining: `{min_pct}%`",
+    ws_quota_error_msg="❌ Quota query failed: `{error}`",
     # Router Access & Invites
     router_invite_redeemed="✅ Invite token redeemed! You now have access.",
     router_invite_failed="❌ Invite redemption failed: `{error}`",
@@ -243,5 +273,15 @@ EN_LEXICON = UiLexicon(
     sched_report_header="⏰ **Scheduled Task Report** (`{trigger_spec}`)\n━━━━━━━━━━━━━━━━━━\n",
     sched_report_empty_status="Status: `{status}`",
     sched_report_failed="❌ **Scheduled Task Failed** (`{task_id}`):\n`{error}`",
+    sensor_reflex_never_report=(
+        "⚡ **Sensor Auto-Reflex Triggered: `{name}`**\n"
+        "• **Event:** `{event_output}`"
+    ),
+    sensor_reflex_action_line="• **Reflex Command (`exit {rc}`):** `{action_command}`",
+    sensor_reflex_handled_report=(
+        "⚡ **Sensor Auto-Reflex `{name}` Resolved Event (`exit 0`)**\n"
+        "• **Executed:** `{action_command}`"
+    ),
+    sensor_trigger_failed="❌ **Sensor Trigger Failed (`{name}`):**\n`{error}`",
     topic_archive_prefix="🗄 [Archive] ",
 )

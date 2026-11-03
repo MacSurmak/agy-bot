@@ -111,7 +111,11 @@ def build_tasks_management_keyboard(
         rows.append(
             [
                 Button.inline(
-                    f"🗑 Датчик {short_sid}: {sensor.name} (Топик {sensor.topic_id})",
+                    lex.btn_cp_cancel_sensor_item.format(
+                        short_id=short_sid,
+                        name=sensor.name,
+                        topic_id=sensor.topic_id,
+                    ),
                     f"cp:cancel_sensor:{sensor.id}".encode("ascii"),
                 )
             ]

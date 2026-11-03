@@ -361,18 +361,24 @@ class EventSensorService:
                 timeout_sec=60.0,
             )
 
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
+
         # Stage 2: Evaluate wake_mode (NEVER or ON_ACTION_FAILURE when reflex succeeded)
         if sensor.wake_mode == SensorWakeMode.NEVER:
             if sensor.notify_policy == NotifyPolicy.ALWAYS or (
                 action_rc is not None and action_rc != 0
             ):
                 reflex_summary = [
-                    f"⚡ **Сработал авто-рефлекс датчика `{sensor.name}`** (без вызова ИИ)",
-                    f"• **Событие:** `{captured_output[:600]}`",
+                    lex.sensor_reflex_never_report.format(
+                        name=sensor.name, event_output=captured_output[:600]
+                    )
                 ]
                 if sensor.action_command:
                     reflex_summary.append(
-                        f"• **Команда рефлекса (`exit {action_rc}`):** `{sensor.action_command}`"
+                        lex.sensor_reflex_action_line.format(
+                            rc=action_rc, action_command=sensor.action_command
+                        )
                     )
                     if action_output:
                         reflex_summary.append(f"```\n{action_output[:2000]}\n```")
@@ -391,8 +397,9 @@ class EventSensorService:
             )
             if sensor.notify_policy == NotifyPolicy.ALWAYS:
                 msg_lines = [
-                    f"⚡ **Авто-рефлекс датчика `{sensor.name}` успешно устранил событие** (`exit 0`, 0 токенов ИИ)",
-                    f"• **Выполнено:** `{sensor.action_command}`",
+                    lex.sensor_reflex_handled_report.format(
+                        name=sensor.name, action_command=sensor.action_command
+                    )
                 ]
                 if action_output:
                     msg_lines.append(f"```\n{action_output[:1500]}\n```")
@@ -437,9 +444,6 @@ class EventSensorService:
                 f"Execute instruction and report to the user:\n{sensor.instruction_prompt}"
             )
 
-        settings = await self._settings_repo.load_settings()
-        lex = get_lexicon(settings.ui_language)
-
         try:
             result = await self._orchestrator.execute_scheduled_turn(
                 topic_id=sensor.topic_id,
@@ -474,5 +478,5 @@ class EventSensorService:
             await self._deliver_cb(
                 sensor.topic_id,
                 sensor.name,
-                f"❌ **Ошибка при срабатывании датчика `{sensor.name}`:**\n`{exc}`",
+                lex.sensor_trigger_failed.format(name=sensor.name, error=exc),
             )

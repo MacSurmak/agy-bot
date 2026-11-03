@@ -391,7 +391,7 @@ class ControlPanelUI:
                 ),
                 build_tasks_management_keyboard(lex, self._cfg.limits, tasks, sensors),
             )
-            await event.answer("Датчик отключен.")
+            await event.answer(lex.cp_toast_sensor_canceled)
             return
 
         if data_str == "cp:settings_menu":
@@ -530,31 +530,31 @@ class ControlPanelUI:
     async def _render_settings_menu(
         self, event: events.CallbackQuery.Event, lex: UiLexicon
     ) -> None:
+        from telethon.tl.custom import Button
+
         settings = await self._settings_repo.load_settings()
-        is_ru = settings.ui_language == "ru"
-        lang_display = "🇷🇺 Русский" if is_ru else "🇬🇧 English"
         mode_display = (
-            ("⚡ Полный доступ (Запись)" if is_ru else "⚡ Full Write")
+            lex.mode_option_full_access
             if settings.default_execution_mode == ExecutionMode.FULL_ACCESS
-            else ("🛡 Только чтение (Plan)" if is_ru else "🛡 Read-Only (Plan)")
+            else lex.mode_option_read_only
         )
 
         items = [
-            ("🌐 Язык интерфейса" if is_ru else "🌐 UI Language", lang_display),
-            ("🧠 Модель по умолчанию" if is_ru else "🧠 Default Model", settings.default_model),
-            ("🛡 Режим прав по умолчанию" if is_ru else "🛡 Default Permissions", mode_display),
+            (lex.setting_label_ui_language, lex.language_self_name),
+            (lex.setting_label_default_model, settings.default_model),
+            (lex.setting_label_default_mode, mode_display),
         ]
         lines = [format_wide_header_block(lex.cp_settings_menu_header.strip())]
         for label, val in items:
-            lines.append(lex.cp_settings_menu_item.format(key="", value_json=val, description=label))
+            lines.append(
+                lex.cp_settings_menu_item.format(key="", value_json=val, description=label)
+            )
 
         btn_labels = [
-            ("🌐 Язык (Language)", "ui_language"),
-            ("🧠 Модель (Model)", "default_model"),
-            ("🛡 Режим прав (Permissions)", "default_execution_mode"),
+            (lex.btn_cp_set_language, "ui_language"),
+            (lex.btn_cp_set_model, "default_model"),
+            (lex.btn_cp_set_mode, "default_execution_mode"),
         ]
-        from telethon.tl.custom import Button
-
         rows: list[list[Button]] = [
             [Button.inline(lbl, f"cp:edit_set:{k}".encode("ascii"))]
             for lbl, k in btn_labels
@@ -569,11 +569,13 @@ class ControlPanelUI:
         settings = await self._settings_repo.load_settings()
 
         if key == "ui_language":
-            lang_labels = {"ru": "🇷🇺 Русский", "en": "🇬🇧 English"}
-            options = [(lang_labels.get(code, code), code) for code in SUPPORTED_LANGUAGES]
+            options = [
+                (get_lexicon(code).language_self_name, code)
+                for code in SUPPORTED_LANGUAGES
+            ]
             await self._safe_edit_event(
                 event,
-                format_wide_header_block("🌐 Выберите язык интерфейса / Select UI Language"),
+                format_wide_header_block(lex.cp_select_language_prompt),
                 build_setting_options_keyboard(lex, key, options, settings.ui_language),
             )
             return
@@ -596,20 +598,13 @@ class ControlPanelUI:
             return
 
         if key == "default_execution_mode":
-            is_ru = settings.ui_language == "ru"
             options = [
-                (
-                    "⚡ Полный доступ (Чтение и Запись)" if is_ru else "⚡ Full Access (Read & Write)",
-                    ExecutionMode.FULL_ACCESS.value,
-                ),
-                (
-                    "🛡 Только чтение (Режим Plan)" if is_ru else "🛡 Read-Only (Plan Mode)",
-                    ExecutionMode.READ_ONLY.value,
-                ),
+                (lex.mode_option_full_access, ExecutionMode.FULL_ACCESS.value),
+                (lex.mode_option_read_only, ExecutionMode.READ_ONLY.value),
             ]
             await self._safe_edit_event(
                 event,
-                format_wide_header_block("🛡 Режим прав по умолчанию / Default Permissions"),
+                format_wide_header_block(lex.cp_select_mode_prompt),
                 build_setting_options_keyboard(
                     lex, key, options, settings.default_execution_mode.value
                 ),

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 class UiLexicon:
     """Immutable schema for all user-facing strings, templates, and button captions."""
 
+    language_self_name: str
+
     # Topic Header Card (formatters.py)
     topic_card_session_with_stats: str
     topic_card_session_uuid_only: str
@@ -25,7 +27,10 @@ class UiLexicon:
     live_progress_header: str
     trace_completed_header: str
     trace_page_continuation_header: str
+    trace_active_page_suffix: str
     trace_tool_part_suffix: str
+    trace_hidden_lines_marker: str
+    trace_hidden_chars_marker: str
     live_progress_subagents_header: str
     live_progress_subagent_item: str
     live_progress_tools_header: str
@@ -40,10 +45,13 @@ class UiLexicon:
     live_progress_thinking: str
     live_progress_draft: str
 
-    # Turn Footer (formatters.py)
+    # Turn & Pagination Footers (formatters.py, workspace_topic_ui.py)
     turn_footer_stats: str
     turn_footer_failover: str
     turn_footer_error_status: str
+    response_chunk_bar: str
+    sched_footer_bar: str
+    sensor_footer_bar: str
 
     # Control Panel Dashboard (formatters.py)
     dashboard_header: str
@@ -67,7 +75,16 @@ class UiLexicon:
     dashboard_host_item: str
     dashboard_tasks_header: str
     dashboard_task_item: str
+    dashboard_sensors_header: str
+    dashboard_sensor_item: str
     dashboard_settings_summary: str
+    quota_5h_label: str
+    quota_weekly_label: str
+    quota_gemini_prefix: str
+    quota_claude_prefix: str
+    quota_reset_days_hours: str
+    quota_reset_hours_mins: str
+    quota_reset_mins: str
 
     # Workspace directory picker labels (formatters.py)
     workspace_dir_root_label: str
@@ -90,7 +107,19 @@ class UiLexicon:
     btn_cp_back_to_dashboard: str
     btn_cp_default_acc_item: str
     btn_cp_cancel_task_item: str
+    btn_cp_cancel_sensor_item: str
     btn_cp_edit_setting_item: str
+    btn_cp_set_language: str
+    btn_cp_set_model: str
+    btn_cp_set_mode: str
+    setting_label_ui_language: str
+    setting_label_default_model: str
+    setting_label_default_mode: str
+    cp_select_language_prompt: str
+    cp_select_mode_prompt: str
+    mode_option_full_access: str
+    mode_option_read_only: str
+    cp_toast_sensor_canceled: str
     btn_ws_new_session: str
     btn_ws_past_sessions: str
     btn_ws_mode_full_to_plan: str
@@ -166,6 +195,9 @@ class UiLexicon:
     ws_account_switched_msg: str
     ws_select_workspace_prompt: str
     ws_workspace_updated_msg: str
+    ws_quota_card_header: str
+    ws_quota_fallback_body: str
+    ws_quota_error_msg: str
 
     # Router Access & Invites (router.py)
     router_invite_redeemed: str
@@ -186,4 +218,8 @@ class UiLexicon:
     sched_report_header: str
     sched_report_empty_status: str
     sched_report_failed: str
+    sensor_reflex_never_report: str
+    sensor_reflex_action_line: str
+    sensor_reflex_handled_report: str
+    sensor_trigger_failed: str
     topic_archive_prefix: str

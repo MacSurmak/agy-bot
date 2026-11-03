@@ -1,6 +1,7 @@
 from antigravity_core.lexicon.schema import UiLexicon
 
 RU_LEXICON = UiLexicon(
+    language_self_name="🇷🇺 Русский",
     # Topic Header Card
     topic_card_session_with_stats="`{conv_short}...` ({turns_count} ход., {tok_k:.1f}k ток.)",
     topic_card_session_uuid_only="`{conv_short}...`",
@@ -38,7 +39,10 @@ RU_LEXICON = UiLexicon(
         "🛠 **Журнал выполнения хода** (`{model_slug}` | `{account_slug}` | `{elapsed_sec:.1f}с` | шагов: `{steps_count}`)"
     ),
     trace_page_continuation_header="🛠 Журнал выполнения хода (стр. {page_num})",
+    trace_active_page_suffix="{header} [стр. {page_num}]",
     trace_tool_part_suffix=" [часть {part}/{total}]",
+    trace_hidden_lines_marker="... [+{count} стр.] ...",
+    trace_hidden_chars_marker="... [+{count} симв.] ...",
     live_progress_subagents_header="🤖 **Субагенты:**",
     live_progress_subagent_item="• `{role}` (`{type_name}` — `{conv_short}`)",
     live_progress_tools_header="🔧 **Инструменты и действия:**",
@@ -52,16 +56,18 @@ RU_LEXICON = UiLexicon(
     trace_thinking_header="💭 **Мысли агента (Thinking):**",
     live_progress_thinking="💭 **Мысли:**\n{snippet}",
     live_progress_draft="📝 **Черновик ответа:**\n{preview}",
-    # Turn Footer
+    # Turn & Pagination Footers
     turn_footer_stats=(
-        "\n\n━━━━━━━━━━━━━━━━━━\n"
-        "⏱ `{duration:.1f}с` | 📊 `+{tok_k:.1f}k` ток (сессия: `{cum_k:.1f}k`, кэш: `{cache_k:.1f}k`) | "
-        "🧠 `{model_slug}` | 👤 `{account_slug}`"
+        "⏱ {duration:.1f}с  │  📊 +{tok_k:.1f}k ток (сессия: {cum_k:.1f}k, кэш: {cache_k:.1f}k)  │  "
+        "🧠 {model_slug}  │  👤 {account_slug}"
     ),
     turn_footer_failover=(
         "\n🔄 *Авто-переключение аккаунта:* `{from_slug}` ➔ `{to_slug}` (исчерпан порог квоты)"
     ),
     turn_footer_error_status="\n⚠️ **Статус `{status}`:** `{error}`",
+    response_chunk_bar="📄 Часть {idx} из {total}",
+    sched_footer_bar="⏰ Запланированная задача  │  🧠 {model_slug}  │  👤 {account_slug}",
+    sensor_footer_bar="📡 Датчик: {sensor_name}  │  🧠 {model_slug}  │  👤 {account_slug}",
     # Control Panel Dashboard
     dashboard_header=(
         "🛠 **ANTIGRAVITY TELEGRAM CORE — ПАНЕЛЬ УПРАВЛЕНИЯ**\n"
@@ -92,10 +98,19 @@ RU_LEXICON = UiLexicon(
     dashboard_host_item="  • `{alias}` (`{ssh_user}@{hostname_or_ip}:{ssh_port}`) → `{local_mount_path}` [{m_badge}]",
     dashboard_tasks_header="\n⏰ **Активные задачи планировщика:** `{count}`",
     dashboard_task_item="  • `{short_id}` [Топик `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
+    dashboard_sensors_header="\n📡 **Активные датчики (Event Sensors):** `{count}`",
+    dashboard_sensor_item="  • `{short_id}` [Топик `{topic_id}`] **{name}** (`{sensor_kind}` | `{condition}` | {mode_tag})",
     dashboard_settings_summary=(
         "\n⚙️ **Настройки по умолчанию:**\n"
         "  • Язык: `{ui_language}` | Модель: `{default_model}` | Режим: `{default_execution_mode}`"
     ),
+    quota_5h_label="**5ч:** {bar}",
+    quota_weekly_label="**Нед:** {bar}",
+    quota_gemini_prefix="    ├─ 🧠 **Gemini:** ",
+    quota_claude_prefix="    └─ 🤖 **Claude/3P:** ",
+    quota_reset_days_hours=" (↻ {days}д {hours}ч)",
+    quota_reset_hours_mins=" (↻ {hours}ч {mins}м)",
+    quota_reset_mins=" (↻ {mins}м)",
     # Workspace directory picker labels
     workspace_dir_root_label="📁 Корень рабочих папок",
     workspace_dir_local_label="📂 local/{name}",
@@ -115,8 +130,20 @@ RU_LEXICON = UiLexicon(
     btn_cp_register_new_acc="➕ Зарегистрировать новый профиль",
     btn_cp_back_to_dashboard="⬅️ Назад к дашборду",
     btn_cp_default_acc_item="{mark}{slug} ({email_label})",
-    btn_cp_cancel_task_item="🗑 Отменить {short_id} (Топик {topic_id}: {trigger_spec})",
+    btn_cp_cancel_task_item="🗑 Таймер {short_id} (Топик {topic_id}: {trigger_spec})",
+    btn_cp_cancel_sensor_item="🗑 Датчик {short_id}: {name} (Топик {topic_id})",
     btn_cp_edit_setting_item="✏️ Изменить {key}",
+    btn_cp_set_language="🌐 Язык интерфейса",
+    btn_cp_set_model="🧠 Модель по умолчанию",
+    btn_cp_set_mode="🛡 Режим прав по умолчанию",
+    setting_label_ui_language="🌐 Язык интерфейса",
+    setting_label_default_model="🧠 Модель по умолчанию",
+    setting_label_default_mode="🛡 Режим прав по умолчанию",
+    cp_select_language_prompt="🌐 Выберите язык интерфейса",
+    cp_select_mode_prompt="🛡 Выберите режим прав по умолчанию",
+    mode_option_full_access="⚡ Полный доступ (Чтение и Запись)",
+    mode_option_read_only="🛡 Только чтение (Режим Plan)",
+    cp_toast_sensor_canceled="Датчик отключен.",
     btn_ws_new_session="🔄 Новая сессия (/new)",
     btn_ws_past_sessions="🕰 Прошлые сессии",
     btn_ws_mode_full_to_plan="🛡 Режим: Запись разрешена ⇄ Plan",
@@ -232,6 +259,9 @@ RU_LEXICON = UiLexicon(
     ws_account_switched_msg="✅ Google-аккаунт для топика переключен.",
     ws_select_workspace_prompt="📂 **Выберите рабочую директорию топика:**",
     ws_workspace_updated_msg="✅ Рабочая папка изменена на `{workspace_path}`.",
+    ws_quota_card_header="📊 Квоты аккаунта {slug} ({email_label})",
+    ws_quota_fallback_body="Остаток: `{min_pct}%`",
+    ws_quota_error_msg="❌ Ошибка запроса квот: `{error}`",
     # Router Access & Invites
     router_invite_redeemed="✅ Инвайт-токен активирован! Доступ открыт.",
     router_invite_failed="❌ Ошибка активации инвайта: `{error}`",
@@ -249,5 +279,15 @@ RU_LEXICON = UiLexicon(
     sched_report_header="⏰ **Отчет по запланированной задаче** (`{trigger_spec}`)\n━━━━━━━━━━━━━━━━━━\n",
     sched_report_empty_status="Статус: `{status}`",
     sched_report_failed="❌ **Сбой запланированной задачи** (`{task_id}`):\n`{error}`",
+    sensor_reflex_never_report=(
+        "⚡ **Сработал авто-рефлекс датчика `{name}`**\n"
+        "• **Событие:** `{event_output}`"
+    ),
+    sensor_reflex_action_line="• **Команда рефлекса (`exit {rc}`):** `{action_command}`",
+    sensor_reflex_handled_report=(
+        "⚡ **Авто-рефлекс датчика `{name}` успешно отработал (`exit 0`)**\n"
+        "• **Выполнено:** `{action_command}`"
+    ),
+    sensor_trigger_failed="❌ **Ошибка при срабатывании датчика `{name}`:**\n`{error}`",
     topic_archive_prefix="🗄 [Архив] ",
 )
