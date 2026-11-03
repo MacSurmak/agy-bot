@@ -462,39 +462,8 @@ class EventSensorService:
                 f"Execute instruction and report to the user:\n{sensor.instruction_prompt}"
             )
 
-        try:
-            result = await self._orchestrator.execute_scheduled_turn(
-                topic_id=sensor.topic_id,
-                prompt=wake_prompt,
-                conversation_id=sensor.conversation_id,
-            )
-            cleaned_resp = result.response_text.strip()
-            if (
-                sensor.notify_policy == NotifyPolicy.ALERT_ONLY
-                and result.status == TurnStatus.SUCCESS
-                and cleaned_resp == "HEARTBEAT_OK"
-            ):
-                logger.info(
-                    "Sensor wake-up returned HEARTBEAT_OK; suppressing notification",
-                    sensor_id=str(sensor.id),
-                )
-                return
-
-            body = (
-                cleaned_resp
-                if cleaned_resp
-                else lex.sched_report_empty_status.format(status=result.status.value)
-            )
-            await self._deliver_cb(sensor.topic_id, sensor.name, body)
-        except Exception as exc:
-            logger.error(
-                "Sensor wake-up turn failed",
-                sensor_id=str(sensor.id),
-                error=str(exc),
-                exc_info=True,
-            )
-            await self._deliver_cb(
-                sensor.topic_id,
-                sensor.name,
-                lex.sensor_trigger_failed.format(name=sensor.name, error=exc),
-            )
+        await self._deliver_cb(
+            sensor.topic_id,
+            f"WAKE_AGENT::{sensor.notify_policy.value}::{sensor.name}",
+            wake_prompt,
+        )

@@ -178,42 +178,14 @@ class TemporalSchedulerService:
                 f"Execute the scheduled task and report to the user:\n{task.instruction_prompt}"
             )
 
-        settings = await self._settings_repo.load_settings()
-        lex = get_lexicon(settings.ui_language)
-
         logger.info(
-            "Firing scheduled task in parallel worker",
+            "Firing scheduled task in parallel worker with live trace",
             task_id=str(task.id),
             topic_id=task.topic_id,
             schedule_kind=task.schedule_kind.value,
         )
-        try:
-            result = await self._orchestrator.execute_scheduled_turn(
-                topic_id=task.topic_id,
-                prompt=wake_prompt,
-                conversation_id=task.conversation_id,
-            )
-            await self._schedule_repo.mark_task_executed(task.id, deactivate=is_one_shot)
-
-            cleaned_resp = result.response_text.strip()
-            if (
-                task.notify_policy == NotifyPolicy.ALERT_ONLY
-                and result.status == TurnStatus.SUCCESS
-                and cleaned_resp == "HEARTBEAT_OK"
-            ):
-                logger.info("Silent scheduled check returned HEARTBEAT_OK", task_id=str(task.id))
-                return
-
-            body = (
-                cleaned_resp
-                if cleaned_resp
-                else lex.sched_report_empty_status.format(status=result.status.value)
-            )
-            await self._deliver_cb(task.topic_id, body)
-        except Exception as exc:
-            logger.error("Scheduled task execution failed", task_id=str(task.id), error=str(exc))
-            await self._schedule_repo.mark_task_executed(task.id, deactivate=is_one_shot)
-            await self._deliver_cb(
-                task.topic_id,
-                lex.sched_report_failed.format(task_id=task.id, error=exc),
-            )
+        await self._schedule_repo.mark_task_executed(task.id, deactivate=is_one_shot)
+        await self._deliver_cb(
+            task.topic_id,
+            wake_prompt,
+        )

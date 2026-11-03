@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from pathlib import Path
 import time
 from uuid import UUID
@@ -568,45 +569,222 @@ class WorkspaceTopicUI:
             except RPCError as exc:
                 logger.debug("Could not auto-rename forum topic", topic_id=topic.topic_id, error=str(exc))
 
-    async def deliver_scheduled_report(self, topic_id: int, report_text: str) -> None:
-        settings = await self._settings_repo.load_settings()
-        lex = get_lexicon(settings.ui_language)
+    async def _run_interactive_wake_turn(
+        self,
+        topic_id: int,
+        wake_prompt: str,
+        badge_prefix: str,
+        suppress_if_heartbeat_ok: bool,
+    ) -> None:
+        """Executes an automated wake-up turn (timer or sensor) with full live tool trace in the topic."""
         topic = await self.ensure_topic_registered(topic_id)
         account = await self._account_repo.get_by_id(topic.assigned_account_id)
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
 
-        sched_bar = lex.sched_footer_bar.format(
-            model_slug=topic.model_slug, account_slug=account.slug
+        start_ts = time.monotonic()
+        last_edit_ts = start_ts
+
+        status_msg = await self._client.send_message(
+            entity=self._cfg.telegram.forum_chat_id,
+            message=f"{badge_prefix}\n"
+            + lex.ws_starting_turn_msg.format(
+                model_slug=topic.model_slug, account_slug=account.slug
+            ),
+            reply_to=topic_id,
+            buttons=build_live_progress_keyboard(lex, topic_id),
+        )
+        trace_msgs = [status_msg]
+        rendered_page_state: dict[int, tuple[str, bool]] = {}
+        sync_lock = asyncio.Lock()
+
+        async def _sync_trace_pages(
+            pages: list[tuple[str, list[object]]], is_final: bool
+        ) -> None:
+            from telethon.tl.types import TypeMessageEntity
+
+            total_pages = len(pages)
+            for idx, (page_text, raw_ents) in enumerate(pages):
+                ents: list[TypeMessageEntity] = [
+                    e for e in raw_ents if isinstance(e, TypeMessageEntity)
+                ]
+                has_cancel_btn = (not is_final) and (idx == total_pages - 1)
+                desired_state = (page_text, has_cancel_btn)
+
+                if idx < len(trace_msgs):
+                    if rendered_page_state.get(idx) == desired_state:
+                        continue
+                    try:
+                        await self._client.edit_message(
+                            entity=self._cfg.telegram.forum_chat_id,
+                            message=trace_msgs[idx].id,
+                            text=page_text,
+                            formatting_entities=ents,
+                            buttons=(
+                                build_live_progress_keyboard(lex, topic_id)
+                                if has_cancel_btn
+                                else None
+                            ),
+                        )
+                        rendered_page_state[idx] = desired_state
+                    except MessageNotModifiedError:
+                        rendered_page_state[idx] = desired_state
+                    except RPCError:
+                        if is_final:
+                            with contextlib.suppress(RPCError):
+                                await self._client.edit_message(
+                                    entity=self._cfg.telegram.forum_chat_id,
+                                    message=trace_msgs[idx].id,
+                                    buttons=None,
+                                )
+                else:
+                    with contextlib.suppress(RPCError):
+                        new_msg = await self._client.send_message(
+                            entity=self._cfg.telegram.forum_chat_id,
+                            message=page_text,
+                            formatting_entities=ents,
+                            reply_to=topic_id,
+                            buttons=(
+                                build_live_progress_keyboard(lex, topic_id)
+                                if has_cancel_btn
+                                else None
+                            ),
+                        )
+                        trace_msgs.append(new_msg)
+                        rendered_page_state[idx] = desired_state
+
+        async def _bg_sync_pages(pages: list[tuple[str, list[object]]]) -> None:
+            if sync_lock.locked():
+                return
+            with contextlib.suppress(Exception):
+                async with sync_lock:
+                    await _sync_trace_pages(pages, is_final=False)
+
+        async def _on_progress(progress: TurnProgressEvent) -> None:
+            nonlocal last_edit_ts
+            now = time.monotonic()
+            pages = build_live_progress_pages(
+                lex=lex,
+                limits=self._cfg.limits,
+                event=progress,
+                elapsed_sec=now - start_ts,
+                model_slug=topic.model_slug,
+                account_slug=account.slug,
+            )
+            is_new_page_spillover = len(pages) > len(trace_msgs)
+            if not is_new_page_spillover and (now - last_edit_ts) < settings.tg_edit_throttle_sec:
+                return
+            last_edit_ts = now
+            asyncio.create_task(_bg_sync_pages(pages))
+
+        try:
+            result = await self._orchestrator.execute_scheduled_turn(
+                topic_id=topic_id,
+                prompt=wake_prompt,
+                conversation_id=topic.active_conversation_id,
+                on_progress=_on_progress,
+            )
+        except Exception as exc:
+            max_err = self._cfg.limits.error_summary_max_chars
+            with contextlib.suppress(RPCError):
+                await trace_msgs[-1].edit(
+                    lex.ws_turn_error_msg.format(error=str(exc)[:max_err]),
+                    buttons=None,
+                )
+            return
+
+        cleaned_resp = result.response_text.strip()
+        if suppress_if_heartbeat_ok and cleaned_resp == "HEARTBEAT_OK":
+            for msg in trace_msgs:
+                with contextlib.suppress(RPCError):
+                    await msg.delete()
+            return
+
+        updated_topic = await self._topic_repo.get_topic_strict(topic_id)
+        updated_account = await self._account_repo.get_by_id(updated_topic.assigned_account_id)
+
+        final_pages = build_final_execution_trace_pages(
+            lex=lex,
+            limits=self._cfg.limits,
+            result=result,
+            model_slug=updated_topic.model_slug,
+            account_slug=updated_account.slug,
+        )
+        if final_pages:
+            async with sync_lock:
+                await _sync_trace_pages(final_pages, is_final=True)
+            if len(trace_msgs) > len(final_pages):
+                for extra_msg in trace_msgs[len(final_pages) :]:
+                    with contextlib.suppress(RPCError):
+                        await extra_msg.delete()
+        else:
+            for msg in trace_msgs:
+                with contextlib.suppress(RPCError):
+                    await msg.delete()
+
+        footer_bar = f"{badge_prefix}  │  " + render_turn_footer(
+            lex=lex,
+            limits=self._cfg.limits,
+            result=result,
+            model_slug=updated_topic.model_slug,
+            account_slug=updated_account.slug,
+        )
+        body_text = (
+            cleaned_resp
+            if cleaned_resp
+            else lex.ws_empty_response_fallback.format(status=result.status.value)
         )
         formatted_chunks = render_Formatted_response_chunks(
-            body_markdown=report_text,
-            footer_bar_text=sched_bar,
+            body_markdown=body_text,
+            footer_bar_text=footer_bar,
             max_chars=settings.tg_max_message_chars,
             lex=lex,
         )
-        for chunk_text, chunk_entities in formatted_chunks:
+        for idx, (chunk_text, chunk_entities) in enumerate(formatted_chunks):
+            is_last = idx == len(formatted_chunks) - 1
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
                 message=chunk_text,
                 formatting_entities=chunk_entities,
                 reply_to=topic_id,
+                buttons=build_turn_response_keyboard(lex, updated_topic) if is_last else None,
             )
         await self.refresh_pinned_card(topic_id)
 
+    async def deliver_scheduled_report(self, topic_id: int, wake_prompt: str) -> None:
+        suppress_hb = wake_prompt.startswith("[SILENT MONITORING TRIGGER")
+        await self._run_interactive_wake_turn(
+            topic_id=topic_id,
+            wake_prompt=wake_prompt,
+            badge_prefix="⏰ Таймер",
+            suppress_if_heartbeat_ok=suppress_hb,
+        )
+
     async def deliver_sensor_report(
-        self, topic_id: int, sensor_name: str, report_text: str
+        self, topic_id: int, sensor_name_or_directive: str, payload_text: str
     ) -> None:
+        if sensor_name_or_directive.startswith("WAKE_AGENT::"):
+            _, policy_str, real_name = sensor_name_or_directive.split("::", 2)
+            await self._run_interactive_wake_turn(
+                topic_id=topic_id,
+                wake_prompt=payload_text,
+                badge_prefix=f"📡 Датчик: {real_name}",
+                suppress_if_heartbeat_ok=(policy_str == "ALERT_ONLY"),
+            )
+            return
+
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
         topic = await self.ensure_topic_registered(topic_id)
         account = await self._account_repo.get_by_id(topic.assigned_account_id)
 
         sensor_bar = lex.sensor_footer_bar.format(
-            sensor_name=sensor_name,
+            sensor_name=sensor_name_or_directive,
             model_slug=topic.model_slug,
             account_slug=account.slug,
         )
         formatted_chunks = render_Formatted_response_chunks(
-            body_markdown=report_text,
+            body_markdown=payload_text,
             footer_bar_text=sensor_bar,
             max_chars=settings.tg_max_message_chars,
             lex=lex,

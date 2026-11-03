@@ -181,8 +181,10 @@ class AgyWorkerPool:
         prompt: str,
         settings: DynamicSettings,
         conversation_id_override: object = None,
+        on_progress: ProgressCallback | None = None,
+        initial_cumulative_tokens: int = 0,
     ) -> TurnResult:
-        """Executes an isolated background/scheduled turn in parallel without waiting on slot.turn_lock."""
+        """Executes an isolated background/scheduled turn in parallel with full live progress streaming."""
         from uuid import UUID
 
         conv_id = (
@@ -211,6 +213,7 @@ class AgyWorkerPool:
             signature=sig,
             static_config=self._cfg,
             account_env=account_env,
+            initial_cumulative_tokens=initial_cumulative_tokens,
         )
 
         async def _noop_init(_cid: UUID) -> None:
@@ -219,13 +222,17 @@ class AgyWorkerPool:
         async def _noop_prog(_ev: object) -> None:
             return
 
+        effective_prog: ProgressCallback = (
+            on_progress if on_progress is not None else _noop_prog
+        )
+
         try:
             await ephemeral_worker.start(settings)
             return await ephemeral_worker.execute_turn(
                 prompt=prompt,
                 settings=settings,
                 on_init=_noop_init,
-                on_progress=_noop_prog,
+                on_progress=effective_prog,
             )
         finally:
             if conv_id is not None:

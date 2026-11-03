@@ -115,18 +115,41 @@ class TurnOrchestrator:
         topic_id: int,
         prompt: str,
         conversation_id: UUID | None,
+        on_progress: ProgressCallback | None = None,
     ) -> TurnResult:
-        """Runs a scheduled task turn immediately in parallel without blocking an active user turn."""
+        """Runs a scheduled/sensor turn in parallel with full live progress callbacks and session metrics."""
         settings = await self._settings_repo.load_settings()
         topic = await self._topic_repo.get_topic_strict(topic_id)
         account = await self._account_repo.get_by_id(topic.assigned_account_id)
-        return await self._pool.execute_ephemeral_turn(
+
+        prev_tokens = 0
+        if conversation_id is not None:
+            existing_sess = await self._session_repo.get_session(conversation_id)
+            if existing_sess is not None:
+                prev_tokens = existing_sess.cumulative_tokens
+
+        result = await self._pool.execute_ephemeral_turn(
             topic=topic,
             account=account,
             prompt=prompt,
             settings=settings,
             conversation_id_override=conversation_id,
+            on_progress=on_progress,
+            initial_cumulative_tokens=prev_tokens,
         )
+        await self._session_repo.ensure_session_initialized(
+            conversation_id=result.conversation_id,
+            topic_id=topic.topic_id,
+            account_id=account.id,
+            workspace_path=topic.workspace_path,
+        )
+        await self._session_repo.record_turn_completion(
+            conversation_id=result.conversation_id,
+            account_id=account.id,
+            turn_delta_tokens=result.turn_delta_tokens,
+            turn_delta_duration_sec=result.turn_delta_duration_sec,
+        )
+        return result
 
     async def _run_single_attempt(
         self,
