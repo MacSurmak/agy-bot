@@ -11,6 +11,7 @@ from telethon import TelegramClient
 from antigravity_core.application.batcher import MessageBatcher
 from antigravity_core.application.ipc_server import CoreIpcServer
 from antigravity_core.application.scheduler_service import TemporalSchedulerService
+from antigravity_core.application.sensor_service import EventSensorService
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.application.turn_orchestrator import TurnOrchestrator
 from antigravity_core.config.static_config import StaticConfig, load_static_config
@@ -28,6 +29,7 @@ from antigravity_core.infrastructure.database.repositories import (
     AccountRepository,
     RemoteHostRepository,
     ScheduleRepository,
+    SensorRepository,
     SessionRepository,
     SettingsRepository,
     TopicRepository,
@@ -116,6 +118,7 @@ async def run_service(static_config: StaticConfig) -> None:
     topic_repo = TopicRepository(db_mgr)
     session_repo = SessionRepository(db_mgr)
     schedule_repo = ScheduleRepository(db_mgr)
+    sensor_repo = SensorRepository(db_mgr)
     access_repo = AccessControlRepository(db_mgr)
 
     await settings_repo.load_settings()
@@ -197,10 +200,19 @@ async def run_service(static_config: StaticConfig) -> None:
         deliver_report_cb=workspace_ui.deliver_scheduled_report,
     )
 
+    sensor_service = EventSensorService(
+        static_config=static_config,
+        sensor_repo=sensor_repo,
+        settings_repo=settings_repo,
+        turn_orchestrator=turn_orchestrator,
+        deliver_report_cb=workspace_ui.deliver_sensor_report,
+    )
+
     ipc_server = CoreIpcServer(
         static_config=static_config,
         media_service=media_service,
         scheduler_service=scheduler_service,
+        sensor_service=sensor_service,
         topic_lifecycle=topic_lifecycle,
         topic_repo=topic_repo,
         host_repo=host_repo,
@@ -216,6 +228,7 @@ async def run_service(static_config: StaticConfig) -> None:
         worker_pool=worker_pool,
         cli_inspector=cli_inspector,
         scheduler_service=scheduler_service,
+        sensor_service=sensor_service,
         topic_lifecycle=topic_lifecycle,
         workspace_ui=workspace_ui,
         settings_repo=settings_repo,
@@ -243,6 +256,7 @@ async def run_service(static_config: StaticConfig) -> None:
 
     await ipc_server.start()
     await scheduler_service.start_and_hydrate()
+    await sensor_service.start_and_hydrate()
     await control_panel_ui.render_and_pin_dashboard()
 
     stop_event = asyncio.Event()
@@ -255,6 +269,7 @@ async def run_service(static_config: StaticConfig) -> None:
         await stop_event.wait()
     finally:
         logger.info("Shutting down Antigravity Telegram Core...")
+        await sensor_service.stop()
         await scheduler_service.stop()
         await ipc_server.stop()
         await worker_pool.shutdown_all()

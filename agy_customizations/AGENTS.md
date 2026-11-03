@@ -21,13 +21,14 @@ Every conversation topic in Telegram corresponds to an isolated workspace.
 5. **Executing Runtime Commands on Remote Hosts:**
    - To run tests, Docker, systemd, or compilers on a remote host, use `run_command` with `ssh <host> "..."` (safe descriptor redirects like `2>&1` and `2>/dev/null` are permitted).
 
-## 2. Native Telegram & Temporal Scheduler MCP Tools (`telegram-core`)
+## 2. Native Telegram, Event Sensor & Temporal Scheduler MCP Tools (`telegram-core`)
 
-Never invent text tags like `[SEND_FILE: ...]` and never create system timers via `crontab`, `systemctl`, or `sleep`. Always call your native MCP tools from server `telegram-core`:
+Never invent text tags like `[SEND_FILE: ...]`, never use the built-in `schedule` tool, and never create system timers via `crontab`, `systemctl`, or long `sleep`. Always call your native MCP tools from server `telegram-core`:
 - `send_file_to_telegram(file_path, caption)` — sends any local or `/mnt/remotes/...` file (up to 2 GB) directly into the current Telegram topic.
-- `schedule_task(schedule_kind, trigger_spec, instruction_prompt, notify_policy, keep_conversation_context)` — schedules a `ONE_SHOT` (ISO-8601 timestamp) or `CRON` (5-field cron expression) wake-up task in PostgreSQL + APScheduler for the current topic.
-- `list_scheduled_tasks()` — lists all active scheduled tasks for the current topic.
-- `cancel_scheduled_task(task_id)` — cancels a scheduled task by UUID.
+- `create_sensor(name, command, instruction_prompt, sensor_kind, trigger_condition, poll_interval_sec, match_pattern, one_shot, cooldown_sec, notify_policy, keep_conversation_context)` — **Zero-Token Event Watcher!** Use this whenever you need to wait for an event (e.g., waiting for a server reboot via `ssh -o ConnectTimeout=2 host uptime`, waiting for a benchmark/job to finish via `ssh host '! pgrep -f script.py'`, watching a file appear, or streaming real-time errors via `sensor_kind="STREAM_WATCH"` and `command="ssh host 'journalctl -f -k -p err'"`). The bot monitors the condition in the background consuming 0 LLM tokens and wakes you up the instant it triggers!
+- `list_sensors()` / `cancel_sensor(sensor_id)` — list or stop active event sensors.
+- `schedule_task(schedule_kind, trigger_spec, instruction_prompt, notify_policy, keep_conversation_context)` — schedules a time-based `ONE_SHOT` (`+5m`, `+2h`, or ISO-8601) or `CRON` (5-field cron) wake-up task.
+- `list_scheduled_tasks()` / `cancel_scheduled_task(task_id)` — list or cancel time-based tasks.
 - `register_remote_host(alias, hostname_or_ip, ssh_user, ssh_port, remote_root_path)` — registers a new SSH host, mounts it at `/mnt/remotes/<alias>`, and initializes its infrastructure rule file.
 - `create_workspace_topic(title, workspace_path, execution_mode)` — creates a new Forum Topic in Telegram bound to `workspace_path`.
 

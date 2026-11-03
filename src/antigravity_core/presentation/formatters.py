@@ -17,6 +17,7 @@ from antigravity_core.config.dynamic_settings import DynamicSettings
 from antigravity_core.config.static_config import LimitsStaticConfig
 from antigravity_core.domain.enums import ExecutionMode, StepState, TurnStatus
 from antigravity_core.domain.models import (
+    EventSensor,
     ForumTopic,
     GoogleAccount,
     RemoteHost,
@@ -871,6 +872,7 @@ def render_control_panel_dashboard(
     pool_snapshots: list[WorkerTopicSnapshot],
     tasks: list[ScheduledTask],
     settings: DynamicSettings,
+    sensors: list[EventSensor] | None = None,
 ) -> str:
     warm_count = sum(1 for s in pool_snapshots if s.is_warm)
     running_count = sum(1 for s in pool_snapshots if s.is_running_turn)
@@ -979,6 +981,14 @@ def render_control_panel_dashboard(
                 trigger_spec=t.trigger_spec,
                 notify_policy=t.notify_policy.value,
             )
+        )
+
+    active_sensors = sensors or []
+    lines.append(f"\n📡 **Активные датчики (Event Sensors):** `{len(active_sensors)}`")
+    for s in active_sensors[:tasks_lim]:
+        mode_tag = "1x" if s.one_shot else f"↻ {s.poll_interval_sec}s"
+        lines.append(
+            f"  • `{str(s.id)[:short_len]}` [Топик `{s.topic_id}`] **{s.name}** (`{s.sensor_kind.value}` | `{s.trigger_condition.value}` | {mode_tag})"
         )
 
     lines.append(

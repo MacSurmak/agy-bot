@@ -10,6 +10,7 @@ from telethon import TelegramClient, events
 from telethon.errors import MessageNotModifiedError, RPCError
 
 from antigravity_core.application.scheduler_service import TemporalSchedulerService
+from antigravity_core.application.sensor_service import EventSensorService
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import ExecutionMode, TopicKind, UserRole
@@ -66,6 +67,7 @@ class ControlPanelUI:
         worker_pool: AgyWorkerPool,
         cli_inspector: AgyCliInspector,
         scheduler_service: TemporalSchedulerService,
+        sensor_service: EventSensorService,
         topic_lifecycle: TopicLifecycleService,
         workspace_ui: WorkspaceTopicUI,
         settings_repo: SettingsRepository,
@@ -81,6 +83,7 @@ class ControlPanelUI:
         self._pool = worker_pool
         self._inspector = cli_inspector
         self._scheduler = scheduler_service
+        self._sensors = sensor_service
         self._topic_lifecycle = topic_lifecycle
         self._workspace_ui = workspace_ui
         self._settings_repo = settings_repo
@@ -155,6 +158,7 @@ class ControlPanelUI:
         }
         pool_snapshots = await self._pool.get_pool_snapshots()
         tasks = await self._scheduler.list_tasks(topic_id=None)
+        sensors = await self._sensors.list_sensors(topic_id=None)
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
 
@@ -167,6 +171,7 @@ class ControlPanelUI:
             pool_snapshots=pool_snapshots,
             tasks=tasks,
             settings=settings,
+            sensors=sensors,
         )
 
     async def handle_text_input(self, event: events.NewMessage.Event) -> None:
@@ -347,12 +352,15 @@ class ControlPanelUI:
 
         if data_str == "cp:tasks_menu":
             tasks = await self._scheduler.list_tasks(topic_id=None)
-            t_lines = lex.cp_tasks_menu_prompt.format(count=len(tasks)).splitlines()
+            sensors = await self._sensors.list_sensors(topic_id=None)
+            t_lines = lex.cp_tasks_menu_prompt.format(
+                count=len(tasks) + len(sensors)
+            ).splitlines()
             wide_tasks = "\n".join([format_wide_header_block(t_lines[0]), *t_lines[1:]])
             await self._safe_edit_event(
                 event,
                 wide_tasks,
-                build_tasks_management_keyboard(lex, self._cfg.limits, tasks),
+                build_tasks_management_keyboard(lex, self._cfg.limits, tasks, sensors),
             )
             return
 
@@ -360,12 +368,30 @@ class ControlPanelUI:
             task_uuid = UUID(data_str.split(":", 2)[2])
             await self._scheduler.cancel_task(task_uuid)
             tasks = await self._scheduler.list_tasks(topic_id=None)
+            sensors = await self._sensors.list_sensors(topic_id=None)
             await self._safe_edit_event(
                 event,
-                lex.cp_tasks_menu_updated.format(count=len(tasks)),
-                build_tasks_management_keyboard(lex, self._cfg.limits, tasks),
+                format_wide_header_block(
+                    lex.cp_tasks_menu_updated.format(count=len(tasks) + len(sensors))
+                ),
+                build_tasks_management_keyboard(lex, self._cfg.limits, tasks, sensors),
             )
             await event.answer(lex.cp_toast_task_canceled)
+            return
+
+        if data_str.startswith("cp:cancel_sensor:"):
+            sensor_uuid = UUID(data_str.split(":", 2)[2])
+            await self._sensors.cancel_sensor(sensor_uuid)
+            tasks = await self._scheduler.list_tasks(topic_id=None)
+            sensors = await self._sensors.list_sensors(topic_id=None)
+            await self._safe_edit_event(
+                event,
+                format_wide_header_block(
+                    lex.cp_tasks_menu_updated.format(count=len(tasks) + len(sensors))
+                ),
+                build_tasks_management_keyboard(lex, self._cfg.limits, tasks, sensors),
+            )
+            await event.answer("Датчик отключен.")
             return
 
         if data_str == "cp:settings_menu":

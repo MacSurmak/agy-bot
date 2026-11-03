@@ -585,6 +585,30 @@ class WorkspaceTopicUI:
             )
         await self.refresh_pinned_card(topic_id)
 
+    async def deliver_sensor_report(
+        self, topic_id: int, sensor_name: str, report_text: str
+    ) -> None:
+        settings = await self._settings_repo.load_settings()
+        topic = await self.ensure_topic_registered(topic_id)
+        account = await self._account_repo.get_by_id(topic.assigned_account_id)
+
+        sensor_bar = (
+            f"📡 Сработал датчик: {sensor_name}  │  🧠 {topic.model_slug}  │  👤 {account.slug}"
+        )
+        formatted_chunks = render_Formatted_response_chunks(
+            body_markdown=report_text,
+            footer_bar_text=sensor_bar,
+            max_chars=settings.tg_max_message_chars,
+        )
+        for chunk_text, chunk_entities in formatted_chunks:
+            await self._client.send_message(
+                entity=self._cfg.telegram.forum_chat_id,
+                message=chunk_text,
+                formatting_entities=chunk_entities,
+                reply_to=topic_id,
+            )
+        await self.refresh_pinned_card(topic_id)
+
     async def handle_callback(self, event: events.CallbackQuery.Event, data_str: str) -> None:
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)

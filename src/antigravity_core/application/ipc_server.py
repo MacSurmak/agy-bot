@@ -8,9 +8,17 @@ from uuid import UUID
 import structlog
 
 from antigravity_core.application.scheduler_service import TemporalSchedulerService
+from antigravity_core.application.sensor_service import EventSensorService
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.config.static_config import StaticConfig
-from antigravity_core.domain.enums import ExecutionMode, NotifyPolicy, ScheduleKind, TopicKind
+from antigravity_core.domain.enums import (
+    ExecutionMode,
+    NotifyPolicy,
+    ScheduleKind,
+    SensorKind,
+    SensorTriggerCondition,
+    TopicKind,
+)
 from antigravity_core.infrastructure.database.repositories import (
     RemoteHostRepository,
     TopicRepository,
@@ -29,6 +37,7 @@ class CoreIpcServer:
         static_config: StaticConfig,
         media_service: MediaService,
         scheduler_service: TemporalSchedulerService,
+        sensor_service: EventSensorService,
         topic_lifecycle: TopicLifecycleService,
         topic_repo: TopicRepository,
         host_repo: RemoteHostRepository,
@@ -37,6 +46,7 @@ class CoreIpcServer:
         self._cfg = static_config
         self._media = media_service
         self._scheduler = scheduler_service
+        self._sensors = sensor_service
         self._topic_lifecycle = topic_lifecycle
         self._topic_repo = topic_repo
         self._host_repo = host_repo
@@ -169,6 +179,86 @@ class CoreIpcServer:
             task_uuid = UUID(str(params["task_id"]))
             canceled = await self._scheduler.cancel_task(task_uuid)
             return {"task_id": str(canceled.id), "status": "canceled"}
+
+        if method == "create_sensor":
+            topic = await self._topic_repo.get_topic_strict(topic_id)
+            keep_ctx = bool(params.get("keep_conversation_context", True))
+            conv_id = topic.active_conversation_id if keep_ctx else None
+
+            raw_s_kind = str(params.get("sensor_kind", "POLL_COMMAND")).strip().upper()
+            s_kind = (
+                SensorKind.STREAM_WATCH
+                if "STREAM" in raw_s_kind
+                else SensorKind.POLL_COMMAND
+            )
+
+            raw_cond = str(params.get("trigger_condition", "ON_EXIT_ZERO")).strip().upper()
+            if "NONZERO" in raw_cond or "FAIL" in raw_cond or "ERROR" in raw_cond:
+                t_cond = SensorTriggerCondition.ON_EXIT_NONZERO
+            elif "CHANGE" in raw_cond or "DIFF" in raw_cond:
+                t_cond = SensorTriggerCondition.ON_OUTPUT_CHANGE
+            elif "REGEX" in raw_cond or "MATCH" in raw_cond or s_kind == SensorKind.STREAM_WATCH:
+                t_cond = SensorTriggerCondition.ON_REGEX_MATCH
+            else:
+                t_cond = SensorTriggerCondition.ON_EXIT_ZERO
+
+            raw_policy = str(params.get("notify_policy", "ALWAYS")).strip().upper()
+            policy = (
+                NotifyPolicy.ALERT_ONLY
+                if "ALERT" in raw_policy
+                else NotifyPolicy.ALWAYS
+            )
+            match_pat_raw = str(params.get("match_pattern") or "").strip()
+
+            sensor = await self._sensors.create_new_sensor(
+                topic_id=topic_id,
+                conversation_id=conv_id,
+                name=str(params.get("name", "Event Sensor")),
+                sensor_kind=s_kind,
+                command=str(params["command"]),
+                trigger_condition=t_cond,
+                match_pattern=match_pat_raw if match_pat_raw else None,
+                poll_interval_sec=int(params.get("poll_interval_sec", 15)),
+                cooldown_sec=int(params.get("cooldown_sec", 300)),
+                one_shot=bool(params.get("one_shot", True)),
+                instruction_prompt=str(params["instruction_prompt"]),
+                notify_policy=policy,
+            )
+            return {
+                "sensor_id": str(sensor.id),
+                "name": sensor.name,
+                "sensor_kind": sensor.sensor_kind.value,
+                "trigger_condition": sensor.trigger_condition.value,
+                "one_shot": sensor.one_shot,
+                "status": "watching",
+            }
+
+        if method == "list_sensors":
+            sensors = await self._sensors.list_sensors(topic_id=topic_id)
+            return {
+                "topic_id": topic_id,
+                "sensors": [
+                    {
+                        "sensor_id": str(s.id),
+                        "name": s.name,
+                        "sensor_kind": s.sensor_kind.value,
+                        "command": s.command,
+                        "trigger_condition": s.trigger_condition.value,
+                        "poll_interval_sec": s.poll_interval_sec,
+                        "one_shot": s.one_shot,
+                        "triggers_count": s.triggers_count,
+                        "last_triggered_at": (
+                            s.last_triggered_at.isoformat() if s.last_triggered_at else None
+                        ),
+                    }
+                    for s in sensors
+                ],
+            }
+
+        if method == "cancel_sensor":
+            sensor_uuid = UUID(str(params["sensor_id"]))
+            canceled_s = await self._sensors.cancel_sensor(sensor_uuid)
+            return {"sensor_id": str(canceled_s.id), "name": canceled_s.name, "status": "canceled"}
 
         if method == "register_remote_host":
             alias = str(params["alias"]).strip()

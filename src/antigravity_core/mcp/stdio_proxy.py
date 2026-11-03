@@ -121,6 +121,53 @@ async def cancel_scheduled_task(task_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def create_sensor(
+    name: str,
+    command: str,
+    instruction_prompt: str,
+    sensor_kind: Literal["POLL_COMMAND", "STREAM_WATCH"] = "POLL_COMMAND",
+    trigger_condition: Literal[
+        "ON_EXIT_ZERO", "ON_EXIT_NONZERO", "ON_OUTPUT_CHANGE", "ON_REGEX_MATCH"
+    ] = "ON_EXIT_ZERO",
+    poll_interval_sec: int = 15,
+    match_pattern: str = "",
+    one_shot: bool = True,
+    cooldown_sec: int = 300,
+    notify_policy: Literal["ALWAYS", "ALERT_ONLY"] = "ALWAYS",
+    keep_conversation_context: bool = True,
+) -> dict[str, Any]:
+    """Create a zero-token background event sensor that wakes you up as soon as a condition or log stream matches."""
+    return await _call_bot_ipc(
+        "create_sensor",
+        {
+            "name": name,
+            "command": command,
+            "instruction_prompt": instruction_prompt,
+            "sensor_kind": sensor_kind,
+            "trigger_condition": trigger_condition,
+            "poll_interval_sec": poll_interval_sec,
+            "match_pattern": match_pattern,
+            "one_shot": one_shot,
+            "cooldown_sec": cooldown_sec,
+            "notify_policy": notify_policy,
+            "keep_conversation_context": keep_conversation_context,
+        },
+    )
+
+
+@mcp.tool()
+async def list_sensors() -> dict[str, Any]:
+    """List all active event sensors for the current Telegram topic."""
+    return await _call_bot_ipc("list_sensors", {})
+
+
+@mcp.tool()
+async def cancel_sensor(sensor_id: str) -> dict[str, Any]:
+    """Cancel and stop an active event sensor by its UUID."""
+    return await _call_bot_ipc("cancel_sensor", {"sensor_id": sensor_id})
+
+
+@mcp.tool()
 async def register_remote_host(
     alias: str,
     hostname_or_ip: str,

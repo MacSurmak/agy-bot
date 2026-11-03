@@ -5,6 +5,7 @@ from telethon.tl.custom import Button
 from antigravity_core.config.static_config import LimitsStaticConfig
 from antigravity_core.domain.enums import EffortLevel, ExecutionMode
 from antigravity_core.domain.models import (
+    EventSensor,
     ForumTopic,
     GoogleAccount,
     ScheduledTask,
@@ -85,7 +86,10 @@ def build_default_account_picker_keyboard(
 
 
 def build_tasks_management_keyboard(
-    lex: UiLexicon, limits: LimitsStaticConfig, tasks: list[ScheduledTask]
+    lex: UiLexicon,
+    limits: LimitsStaticConfig,
+    tasks: list[ScheduledTask],
+    sensors: list[EventSensor] | None = None,
 ) -> list[list[Button]]:
     rows: list[list[Button]] = []
     for task in tasks[: limits.tasks_menu_display_limit]:
@@ -99,6 +103,16 @@ def build_tasks_management_keyboard(
                         trigger_spec=task.trigger_spec,
                     ),
                     f"cp:cancel_task:{task.id}".encode("ascii"),
+                )
+            ]
+        )
+    for sensor in (sensors or [])[: limits.tasks_menu_display_limit]:
+        short_sid = str(sensor.id)[: limits.uuid_short_chars]
+        rows.append(
+            [
+                Button.inline(
+                    f"🗑 Датчик {short_sid}: {sensor.name} (Топик {sensor.topic_id})",
+                    f"cp:cancel_sensor:{sensor.id}".encode("ascii"),
                 )
             ]
         )
