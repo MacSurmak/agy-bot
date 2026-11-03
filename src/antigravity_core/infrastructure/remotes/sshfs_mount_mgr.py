@@ -17,9 +17,42 @@ class RemoteMountManager:
     def __init__(self, static_config: StaticConfig) -> None:
         self._cfg = static_config
 
+    def _ensure_main_ssh_config_include(self) -> None:
+        ssh_dir = self._cfg.paths.ssh_config_dir
+        main_ssh_config = ssh_dir.parent / "config"
+        include_line = f"Include {ssh_dir}/*.conf"
+
+        if not main_ssh_config.is_file():
+            main_ssh_config.parent.mkdir(parents=True, exist_ok=True)
+            main_ssh_config.write_text(f"{include_line}\n\n", encoding="utf-8")
+            os.chmod(main_ssh_config, 0o600)
+            return
+
+        existing_text = main_ssh_config.read_text(encoding="utf-8")
+        first_non_empty = next(
+            (
+                ln.strip()
+                for ln in existing_text.splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            ),
+            "",
+        )
+        if first_non_empty.startswith("Include ") and "config.d/" in first_non_empty:
+            return
+
+        cleaned_lines = [
+            ln
+            for ln in existing_text.splitlines()
+            if not (ln.strip().startswith("Include ") and "config.d/" in ln.strip())
+        ]
+        updated_text = f"{include_line}\n\n" + "\n".join(cleaned_lines).lstrip("\n") + "\n"
+        main_ssh_config.write_text(updated_text, encoding="utf-8")
+        os.chmod(main_ssh_config, 0o600)
+
     def write_ssh_config_entry(self, host: RemoteHost) -> Path:
         ssh_dir = self._cfg.paths.ssh_config_dir
         ssh_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_main_ssh_config_include()
         config_file = ssh_dir / f"{host.alias}.conf"
 
         content = (

@@ -29,6 +29,11 @@ from antigravity_core.domain.models import (
     WorkerTopicSnapshot,
 )
 from antigravity_core.lexicon.schema import UiLexicon
+from antigravity_core.presentation.tg_renderer import (
+    WIDE_BAR_LANG,
+    make_wide_single_line_bar,
+    normalize_latex_outside_code,
+)
 
 _BINARY_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]+")
 _AGY_TRUNCATION_NOTICE_RE = re.compile(
@@ -92,26 +97,12 @@ def _utf16_len(text: str) -> int:
 
 
 def _pad_wide_bar(text: str) -> str:
-    clean = text.replace("**", "").replace("`", "").strip()
-    lines = [ln.strip() for ln in clean.splitlines() if ln.strip()]
-    if not lines:
-        lines = ["─" * _WIDE_BUBBLE_TARGET_COLS]
-
-    first = lines[0]
-    if len(first) < _WIDE_BUBBLE_TARGET_COLS:
-        pad_len = max(2, _WIDE_BUBBLE_TARGET_COLS - len(first) - 1)
-        lines[0] = f"{first} " + ("─" * pad_len)
-
-    # Telegram Desktop downgrades single-line MessageEntityPre(language="") to inline code;
-    # having a second line forces block-level <pre> rendering and full-width bubble expansion.
-    if len(lines) == 1:
-        lines.append("─" * _WIDE_BUBBLE_TARGET_COLS)
-    return "\n".join(lines)
+    return make_wide_single_line_bar(text)
 
 
 def format_wide_header_block(title: str) -> str:
-    """Wraps a header line in a 92-column preformatted block so Telegram Desktop expands the bubble."""
-    return f"```{_pad_wide_bar(title)}```"
+    """Wraps a header line in a single-line wide preformatted block without any visible dashes."""
+    return f"```{make_wide_single_line_bar(title)}\n\u2060```"
 
 
 def _split_text_preserving_lines(text: str, chunk_size: int) -> list[str]:
@@ -306,11 +297,11 @@ def _assemble_collapsible_trace_message(
     header_line: str,
     quote_blocks: list[str],
 ) -> tuple[str, list[TypeMessageEntity]]:
-    """Builds plain text with a full-width MessageEntityPre header bar and collapsible quote entities."""
-    clean_header = _pad_wide_bar(header_line.replace("**", "").replace("`", ""))
+    """Builds plain text with a 1-line full-width MessageEntityPre header bar and collapsible quote entities."""
+    clean_header = make_wide_single_line_bar(header_line)
     header_u16 = _utf16_len(clean_header)
     entities: list[TypeMessageEntity] = [
-        MessageEntityPre(offset=0, length=header_u16, language="")
+        MessageEntityPre(offset=0, length=header_u16, language=WIDE_BAR_LANG)
     ]
     parts: list[str] = [clean_header]
     current_utf16_offset = header_u16
@@ -500,12 +491,12 @@ def render_turn_footer(
     cum_k = result.cumulative_usage.total_tokens / 1000.0
     cache_k = result.cumulative_usage.cache_read_tokens / 1000.0
 
-    stats_line_1 = (
-        f"⏱ {result.turn_delta_duration_sec:.1f}с │ "
-        f"📊 +{tok_k:.1f}k ток (сессия: {cum_k:.1f}k, кэш: {cache_k:.1f}k)"
+    stats_single_line = (
+        f"⏱ {result.turn_delta_duration_sec:.1f}с  │  "
+        f"📊 +{tok_k:.1f}k ток (сессия: {cum_k:.1f}k, кэш: {cache_k:.1f}k)  │  "
+        f"🧠 {model_slug}  │  👤 {account_slug}"
     )
-    stats_line_2 = f"🧠 {model_slug} │ 👤 {account_slug}"
-    lines = [_pad_wide_bar(f"{stats_line_1}\n{stats_line_2}")]
+    lines = [make_wide_single_line_bar(stats_single_line)]
 
     if result.account_switched_from and result.account_switched_to:
         failover_clean = (
@@ -675,8 +666,12 @@ def _preprocess_gfm_markdown(raw_md: str) -> str:
         _flush_quote_buffer()
 
         if _HRULE_RE.match(line):
-            out_lines.append("─" * 38)
+            # Omit crooked horizontal rules; leave a clean paragraph break
+            if out_lines and out_lines[-1] != "":
+                out_lines.append("")
             continue
+
+        line = normalize_latex_outside_code(line)
 
         h_match = _HEADING_RE.match(line)
         if h_match is not None:
@@ -758,26 +753,40 @@ def split_markdown_preserving_blocks(text: str, max_chars: int) -> list[str]:
     return [c for c in chunks if c]
 
 
+def _tighten_fenced_blocks_preserving_outer_newlines(md_text: str) -> str:
+    """Removes empty lines strictly INSIDE ```...``` blocks while keeping outer paragraph newlines intact."""
+    parts = md_text.split("```")
+    if len(parts) < 3:
+        return md_text
+
+    rebuilt: list[str] = [parts[0]]
+    for idx in range(1, len(parts), 2):
+        code_inner = parts[idx].strip("\n")
+        if "\n" not in code_inner:
+            code_inner = f"{code_inner}\n\u2060"
+        after_text = parts[idx + 1] if (idx + 1) < len(parts) else ""
+        if rebuilt[-1] and not rebuilt[-1].endswith("\n"):
+            rebuilt[-1] += "\n"
+        if after_text and not after_text.startswith("\n"):
+            after_text = "\n" + after_text
+        rebuilt.append(f"```{code_inner}```")
+        rebuilt.append(after_text)
+    return "".join(rebuilt)
+
+
 def render_Formatted_response_chunks(
     body_markdown: str,
     footer_bar_text: str,
     max_chars: int,
 ) -> list[tuple[str, list[TypeMessageEntity]]]:
-    """Preprocesses GFM tables/headings first, then splits into safe chunks <= max_chars with full-width footer bars."""
+    """Preprocesses GFM tables/headings/LaTeX first, then splits into safe chunks with 1-line wide footer bars."""
     preprocessed_full = _preprocess_gfm_markdown(body_markdown)
-    # Strip leading/trailing newlines right inside ``` fences so code blocks and tables have no empty top/bottom lines
-    preprocessed_full = re.sub(r"```\n+", "```", preprocessed_full)
-    preprocessed_full = re.sub(r"\n+```", "```", preprocessed_full)
-
-    # Re-expand ``` lines for safe chunk splitting, then strip inner newlines per chunk
-    chunk_ready = preprocessed_full.replace("```", "\n```\n")
-    raw_chunks = split_markdown_preserving_blocks(chunk_ready, max_chars - 260)
+    raw_chunks = split_markdown_preserving_blocks(preprocessed_full, max_chars - 260)
     total_chunks = len(raw_chunks)
     rendered_pages: list[tuple[str, list[TypeMessageEntity]]] = []
 
     for idx, raw_chunk in enumerate(raw_chunks, start=1):
-        tight_chunk = re.sub(r"```\n+", "```", raw_chunk)
-        tight_chunk = re.sub(r"\n+```", "```", tight_chunk)
+        tight_chunk = _tighten_fenced_blocks_preserving_outer_newlines(raw_chunk)
         parsed_text, raw_entities = markdown.parse(tight_chunk)
         s_text = add_surrogate(parsed_text)
 
@@ -833,9 +842,9 @@ def render_Formatted_response_chunks(
             entities = entities[:94]
 
         if idx < total_chunks:
-            bar_text = _pad_wide_bar(f"📄 Часть {idx}/{total_chunks}")
+            bar_text = make_wide_single_line_bar(f"📄 Часть {idx} из {total_chunks}")
         else:
-            bar_text = footer_bar_text
+            bar_text = make_wide_single_line_bar(footer_bar_text)
 
         sep = "\n\n"
         bar_offset = _utf16_len(clean_body) + _utf16_len(sep)
@@ -844,7 +853,7 @@ def render_Formatted_response_chunks(
             MessageEntityPre(
                 offset=bar_offset,
                 length=bar_len,
-                language="",
+                language=WIDE_BAR_LANG,
             )
         )
         full_chunk_text = f"{clean_body}{sep}{bar_text}"

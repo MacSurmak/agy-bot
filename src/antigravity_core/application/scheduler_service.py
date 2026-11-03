@@ -204,13 +204,12 @@ class TemporalSchedulerService:
                 logger.info("Silent scheduled check returned HEARTBEAT_OK", task_id=str(task.id))
                 return
 
-            header = lex.sched_report_header.format(trigger_spec=task.trigger_spec)
             body = (
                 cleaned_resp
                 if cleaned_resp
                 else lex.sched_report_empty_status.format(status=result.status.value)
             )
-            await self._deliver_cb(task.topic_id, header + body)
+            await self._deliver_cb(task.topic_id, body)
         except Exception as exc:
             logger.error("Scheduled task execution failed", task_id=str(task.id), error=str(exc))
             await self._schedule_repo.mark_task_executed(task.id, deactivate=is_one_shot)

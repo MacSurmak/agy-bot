@@ -565,11 +565,22 @@ class WorkspaceTopicUI:
 
     async def deliver_scheduled_report(self, topic_id: int, report_text: str) -> None:
         settings = await self._settings_repo.load_settings()
-        chunks = split_message_chunks(report_text, settings.tg_max_message_chars)
-        for chunk in chunks:
+        topic = await self.ensure_topic_registered(topic_id)
+        account = await self._account_repo.get_by_id(topic.assigned_account_id)
+
+        sched_bar = (
+            f"⏰ Запланированная задача  │  🧠 {topic.model_slug}  │  👤 {account.slug}"
+        )
+        formatted_chunks = render_Formatted_response_chunks(
+            body_markdown=report_text,
+            footer_bar_text=sched_bar,
+            max_chars=settings.tg_max_message_chars,
+        )
+        for chunk_text, chunk_entities in formatted_chunks:
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=chunk,
+                message=chunk_text,
+                formatting_entities=chunk_entities,
                 reply_to=topic_id,
             )
         await self.refresh_pinned_card(topic_id)
