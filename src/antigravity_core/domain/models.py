@@ -10,6 +10,7 @@ from antigravity_core.domain.enums import (
     ScheduleKind,
     SensorKind,
     SensorTriggerCondition,
+    SensorWakeMode,
     StepState,
     TopicKind,
     TopicStatus,
@@ -102,6 +103,8 @@ class EventSensor:
     command: str
     trigger_condition: SensorTriggerCondition
     match_pattern: str | None
+    action_command: str | None
+    wake_mode: SensorWakeMode
     poll_interval_sec: int
     cooldown_sec: int
     one_shot: bool

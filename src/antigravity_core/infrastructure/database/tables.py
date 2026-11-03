@@ -152,6 +152,8 @@ class EventSensorRow(Base):
     command: Mapped[str] = mapped_column(Text, nullable=False)
     trigger_condition: Mapped[str] = mapped_column(String(32), nullable=False)
     match_pattern: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_command: Mapped[str | None] = mapped_column(Text, nullable=True)
+    wake_mode: Mapped[str] = mapped_column(String(32), nullable=False)
     poll_interval_sec: Mapped[int] = mapped_column(Integer, nullable=False)
     cooldown_sec: Mapped[int] = mapped_column(Integer, nullable=False)
     one_shot: Mapped[bool] = mapped_column(Boolean, nullable=False)

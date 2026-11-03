@@ -17,6 +17,7 @@ from antigravity_core.domain.enums import (
     ScheduleKind,
     SensorKind,
     SensorTriggerCondition,
+    SensorWakeMode,
     TopicKind,
 )
 from antigravity_core.infrastructure.database.repositories import (
@@ -209,6 +210,14 @@ class CoreIpcServer:
                 else NotifyPolicy.ALWAYS
             )
             match_pat_raw = str(params.get("match_pattern") or "").strip()
+            action_cmd_raw = str(params.get("action_command") or "").strip()
+            raw_wake = str(params.get("wake_mode", "ALWAYS")).strip().upper()
+            if "FAIL" in raw_wake:
+                w_mode = SensorWakeMode.ON_ACTION_FAILURE
+            elif "NEVER" in raw_wake or "NONE" in raw_wake:
+                w_mode = SensorWakeMode.NEVER
+            else:
+                w_mode = SensorWakeMode.ALWAYS
 
             sensor = await self._sensors.create_new_sensor(
                 topic_id=topic_id,
@@ -218,6 +227,8 @@ class CoreIpcServer:
                 command=str(params["command"]),
                 trigger_condition=t_cond,
                 match_pattern=match_pat_raw if match_pat_raw else None,
+                action_command=action_cmd_raw if action_cmd_raw else None,
+                wake_mode=w_mode,
                 poll_interval_sec=int(params.get("poll_interval_sec", 15)),
                 cooldown_sec=int(params.get("cooldown_sec", 300)),
                 one_shot=bool(params.get("one_shot", True)),
@@ -229,6 +240,8 @@ class CoreIpcServer:
                 "name": sensor.name,
                 "sensor_kind": sensor.sensor_kind.value,
                 "trigger_condition": sensor.trigger_condition.value,
+                "action_command": sensor.action_command,
+                "wake_mode": sensor.wake_mode.value,
                 "one_shot": sensor.one_shot,
                 "status": "watching",
             }
@@ -244,6 +257,8 @@ class CoreIpcServer:
                         "sensor_kind": s.sensor_kind.value,
                         "command": s.command,
                         "trigger_condition": s.trigger_condition.value,
+                        "action_command": s.action_command,
+                        "wake_mode": s.wake_mode.value,
                         "poll_interval_sec": s.poll_interval_sec,
                         "one_shot": s.one_shot,
                         "triggers_count": s.triggers_count,

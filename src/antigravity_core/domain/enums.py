@@ -71,3 +71,9 @@ class SensorTriggerCondition(StrEnum):
     ON_EXIT_NONZERO = "ON_EXIT_NONZERO"
     ON_OUTPUT_CHANGE = "ON_OUTPUT_CHANGE"
     ON_REGEX_MATCH = "ON_REGEX_MATCH"
+
+
+class SensorWakeMode(StrEnum):
+    ALWAYS = "ALWAYS"
+    ON_ACTION_FAILURE = "ON_ACTION_FAILURE"
+    NEVER = "NEVER"

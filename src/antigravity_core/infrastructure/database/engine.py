@@ -47,6 +47,14 @@ class DatabaseManager:
                     )
             async with self._engine.begin() as ddl_conn:
                 await ddl_conn.run_sync(Base.metadata.create_all)
+                await ddl_conn.execute(
+                    text("ALTER TABLE event_sensors ADD COLUMN IF NOT EXISTS action_command TEXT")
+                )
+                await ddl_conn.execute(
+                    text(
+                        "ALTER TABLE event_sensors ADD COLUMN IF NOT EXISTS wake_mode VARCHAR(32) NOT NULL DEFAULT 'ALWAYS'"
+                    )
+                )
         except SQLAlchemyError as exc:
             raise StartupValidationError(
                 f"Failed to connect to PostgreSQL 18 database: {exc}"

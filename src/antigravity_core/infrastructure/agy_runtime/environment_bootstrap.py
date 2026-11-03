@@ -77,7 +77,7 @@ class AgyEnvironmentBootstrapper:
             "## 2. Native Telegram, Event Sensor & Temporal Scheduler MCP Tools (`telegram-core`)\n\n"
             "Always use MCP tools from `telegram-core` (never use built-in `schedule`, text tags, or system `crontab`):\n"
             "- `send_file_to_telegram(file_path, caption)`\n"
-            "- `create_sensor(name, command, instruction_prompt, sensor_kind, trigger_condition, poll_interval_sec, match_pattern, one_shot, cooldown_sec, notify_policy, keep_conversation_context)` — Zero-token event/stream watcher (use instead of guessing with timers when waiting for reboots, benchmarks/jobs finishing, or log events!).\n"
+            "- `create_sensor(name, command, instruction_prompt, sensor_kind, trigger_condition, poll_interval_sec, match_pattern, action_command, wake_mode, one_shot, cooldown_sec, notify_policy, keep_conversation_context)` — Two-stage zero-token event/stream watcher with optional 10ms reflex `action_command` (dump state or restart service immediately on trigger) and `wake_mode` (`ALWAYS` / `ON_ACTION_FAILURE` / `NEVER`).\n"
             "- `list_sensors()` / `cancel_sensor(sensor_id)`\n"
             "- `schedule_task(schedule_kind, trigger_spec, instruction_prompt, notify_policy, keep_conversation_context)`\n"
             "- `list_scheduled_tasks()` / `cancel_scheduled_task(task_id)`\n"

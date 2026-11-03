@@ -17,6 +17,7 @@ from antigravity_core.domain.enums import (
     NotifyPolicy,
     SensorKind,
     SensorTriggerCondition,
+    SensorWakeMode,
     TurnStatus,
 )
 from antigravity_core.domain.exceptions import ConfigurationError
@@ -74,6 +75,8 @@ class EventSensorService:
         command: str,
         trigger_condition: SensorTriggerCondition,
         match_pattern: str | None,
+        action_command: str | None,
+        wake_mode: SensorWakeMode,
         poll_interval_sec: int,
         cooldown_sec: int,
         one_shot: bool,
@@ -97,6 +100,7 @@ class EventSensorService:
         effective_cooldown = max(5, cooldown_sec)
 
         sensor_id = uuid4()
+        clean_action = action_command.strip() if action_command and action_command.strip() else None
         sensor = await self._sensor_repo.create_sensor(
             sensor_id=sensor_id,
             topic_id=topic_id,
@@ -106,6 +110,8 @@ class EventSensorService:
             command=clean_cmd,
             trigger_condition=trigger_condition,
             match_pattern=match_pattern,
+            action_command=clean_action,
+            wake_mode=wake_mode,
             poll_interval_sec=effective_poll,
             cooldown_sec=effective_cooldown,
             one_shot=one_shot,
@@ -339,6 +345,61 @@ class EventSensorService:
             deactivate=sensor.one_shot,
         )
 
+        # Stage 1: Immediate millisecond reflex execution (0 LLM tokens)
+        action_rc: int | None = None
+        action_output: str = ""
+        if sensor.action_command:
+            logger.info(
+                "Executing immediate sensor reflex action_command",
+                sensor_id=str(sensor.id),
+                name=sensor.name,
+                action_command=sensor.action_command,
+            )
+            action_rc, action_output = await self._exec_probe_command(
+                sensor_id=sensor.id,
+                command=sensor.action_command,
+                timeout_sec=60.0,
+            )
+
+        # Stage 2: Evaluate wake_mode (NEVER or ON_ACTION_FAILURE when reflex succeeded)
+        if sensor.wake_mode == SensorWakeMode.NEVER:
+            if sensor.notify_policy == NotifyPolicy.ALWAYS or (
+                action_rc is not None and action_rc != 0
+            ):
+                reflex_summary = [
+                    f"⚡ **Сработал авто-рефлекс датчика `{sensor.name}`** (без вызова ИИ)",
+                    f"• **Событие:** `{captured_output[:600]}`",
+                ]
+                if sensor.action_command:
+                    reflex_summary.append(
+                        f"• **Команда рефлекса (`exit {action_rc}`):** `{sensor.action_command}`"
+                    )
+                    if action_output:
+                        reflex_summary.append(f"```\n{action_output[:2000]}\n```")
+                await self._deliver_cb(sensor.topic_id, sensor.name, "\n".join(reflex_summary))
+            return
+
+        if (
+            sensor.wake_mode == SensorWakeMode.ON_ACTION_FAILURE
+            and sensor.action_command
+            and action_rc == 0
+        ):
+            logger.info(
+                "Sensor reflex action_command succeeded (exit 0); skipping AI wake-up per ON_ACTION_FAILURE",
+                sensor_id=str(sensor.id),
+                name=sensor.name,
+            )
+            if sensor.notify_policy == NotifyPolicy.ALWAYS:
+                msg_lines = [
+                    f"⚡ **Авто-рефлекс датчика `{sensor.name}` успешно устранил событие** (`exit 0`, 0 токенов ИИ)",
+                    f"• **Выполнено:** `{sensor.action_command}`",
+                ]
+                if action_output:
+                    msg_lines.append(f"```\n{action_output[:1500]}\n```")
+                await self._deliver_cb(sensor.topic_id, sensor.name, "\n".join(msg_lines))
+            return
+
+        # Stage 3: Wake up agy agent with both sensor event output and reflex dump output
         logger.info(
             "Event sensor TRIGGERED; waking up agy agent",
             sensor_id=str(sensor.id),
@@ -346,14 +407,23 @@ class EventSensorService:
             topic_id=sensor.topic_id,
             condition=sensor.trigger_condition.value,
             one_shot=sensor.one_shot,
+            action_rc=action_rc,
         )
 
         trimmed_capture = captured_output[:2000]
+        reflex_section = ""
+        if sensor.action_command:
+            reflex_section = (
+                f"Immediate reflex action_command executed (exit code {action_rc}): {sensor.action_command}\n"
+                f"Captured reflex output / dump:\n{action_output[:3000]}\n\n"
+            )
+
         if sensor.notify_policy == NotifyPolicy.ALERT_ONLY:
             wake_prompt = (
                 f"[EVENT SENSOR TRIGGERED | name='{sensor.name}' | condition={sensor.trigger_condition.value} | time={now_iso}]\n"
                 f"Sensor command: {sensor.command}\n"
                 f"Captured event output:\n{trimmed_capture}\n\n"
+                f"{reflex_section}"
                 f"Instruction: {sensor.instruction_prompt}\n"
                 "If upon inspection everything is normal and no user alert is required, "
                 "respond with EXACTLY one word: HEARTBEAT_OK."
@@ -363,6 +433,7 @@ class EventSensorService:
                 f"[EVENT SENSOR TRIGGERED | name='{sensor.name}' | condition={sensor.trigger_condition.value} | time={now_iso}]\n"
                 f"Sensor command: {sensor.command}\n"
                 f"Captured event output:\n{trimmed_capture}\n\n"
+                f"{reflex_section}"
                 f"Execute instruction and report to the user:\n{sensor.instruction_prompt}"
             )
 

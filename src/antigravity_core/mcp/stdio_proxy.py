@@ -131,12 +131,14 @@ async def create_sensor(
     ] = "ON_EXIT_ZERO",
     poll_interval_sec: int = 15,
     match_pattern: str = "",
+    action_command: str = "",
+    wake_mode: Literal["ALWAYS", "ON_ACTION_FAILURE", "NEVER"] = "ALWAYS",
     one_shot: bool = True,
     cooldown_sec: int = 300,
     notify_policy: Literal["ALWAYS", "ALERT_ONLY"] = "ALWAYS",
     keep_conversation_context: bool = True,
 ) -> dict[str, Any]:
-    """Create a zero-token background event sensor that wakes you up as soon as a condition or log stream matches."""
+    """Create a zero-token background event sensor with optional immediate reflex action_command (executed in 10ms before waking AI)."""
     return await _call_bot_ipc(
         "create_sensor",
         {
@@ -147,6 +149,8 @@ async def create_sensor(
             "trigger_condition": trigger_condition,
             "poll_interval_sec": poll_interval_sec,
             "match_pattern": match_pattern,
+            "action_command": action_command,
+            "wake_mode": wake_mode,
             "one_shot": one_shot,
             "cooldown_sec": cooldown_sec,
             "notify_policy": notify_policy,
