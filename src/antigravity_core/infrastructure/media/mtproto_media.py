@@ -59,7 +59,8 @@ class MediaService:
             message=lex.media_downloading_init.format(
                 file_name=safe_name, dest_path=dest_path
             ),
-            reply_to=message.id,
+            reply_to=topic_id,
+            silent=True,
         )
         last_edit_ts = time.monotonic()
 
@@ -138,6 +139,7 @@ class MediaService:
                 size_mb=size_bytes / (1024 * 1024),
             ),
             reply_to=topic_id,
+            silent=True,
         )
         last_edit_ts = time.monotonic()
 

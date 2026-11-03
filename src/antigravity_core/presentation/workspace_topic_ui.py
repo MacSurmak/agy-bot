@@ -310,7 +310,7 @@ class WorkspaceTopicUI:
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
                 message=lex.ws_dir_confirmed_msg.format(workspace_path=custom_path),
-                reply_to=reply_to_msg_id,
+                reply_to=topic_id,
             )
             return
 
@@ -336,7 +336,8 @@ class WorkspaceTopicUI:
             message=lex.ws_starting_turn_msg.format(
                 model_slug=topic.model_slug, account_slug=account.slug
             ),
-            reply_to=reply_to_msg_id,
+            reply_to=topic_id,
+            silent=True,
             buttons=build_live_progress_keyboard(lex, topic_id),
         )
         trace_msgs = [status_msg]
@@ -400,6 +401,7 @@ class WorkspaceTopicUI:
                             message=page_text,
                             formatting_entities=ents,
                             reply_to=topic_id,
+                            silent=True,
                             buttons=(
                                 build_live_progress_keyboard(lex, topic_id)
                                 if has_cancel_btn
@@ -526,7 +528,7 @@ class WorkspaceTopicUI:
                     entity=self._cfg.telegram.forum_chat_id,
                     message=chunk_text,
                     formatting_entities=chunk_entities,
-                    reply_to=reply_to_msg_id if idx == 0 else topic_id,
+                    reply_to=topic_id,
                     buttons=build_turn_response_keyboard(lex, updated_topic) if is_last else None,
                 )
         except Exception as exc:
@@ -592,6 +594,7 @@ class WorkspaceTopicUI:
                 model_slug=topic.model_slug, account_slug=account.slug
             ),
             reply_to=topic_id,
+            silent=True,
             buttons=build_live_progress_keyboard(lex, topic_id),
         )
         trace_msgs = [status_msg]
@@ -644,6 +647,7 @@ class WorkspaceTopicUI:
                             message=page_text,
                             formatting_entities=ents,
                             reply_to=topic_id,
+                            silent=True,
                             buttons=(
                                 build_live_progress_keyboard(lex, topic_id)
                                 if has_cancel_btn
