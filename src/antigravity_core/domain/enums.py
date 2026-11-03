@@ -59,3 +59,15 @@ class StepType(StrEnum):
 class UserRole(StrEnum):
     OWNER = "OWNER"
     MEMBER = "MEMBER"
+
+
+class SensorKind(StrEnum):
+    POLL_COMMAND = "POLL_COMMAND"
+    STREAM_WATCH = "STREAM_WATCH"
+
+
+class SensorTriggerCondition(StrEnum):
+    ON_EXIT_ZERO = "ON_EXIT_ZERO"
+    ON_EXIT_NONZERO = "ON_EXIT_NONZERO"
+    ON_OUTPUT_CHANGE = "ON_OUTPUT_CHANGE"
+    ON_REGEX_MATCH = "ON_REGEX_MATCH"

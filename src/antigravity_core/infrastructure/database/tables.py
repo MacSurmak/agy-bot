@@ -137,3 +137,29 @@ class InviteTokenRow(Base):
     redeemed_by_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EventSensorRow(Base):
+    __tablename__ = "event_sensors"
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, nullable=False)
+    topic_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("forum_topics.topic_id", ondelete="CASCADE"), nullable=False
+    )
+    conversation_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    sensor_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    command: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger_condition: Mapped[str] = mapped_column(String(32), nullable=False)
+    match_pattern: Mapped[str | None] = mapped_column(Text, nullable=True)
+    poll_interval_sec: Mapped[int] = mapped_column(Integer, nullable=False)
+    cooldown_sec: Mapped[int] = mapped_column(Integer, nullable=False)
+    one_shot: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    instruction_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    notify_policy: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    triggers_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_triggered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

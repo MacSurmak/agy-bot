@@ -8,6 +8,8 @@ from antigravity_core.domain.enums import (
     ExecutionMode,
     NotifyPolicy,
     ScheduleKind,
+    SensorKind,
+    SensorTriggerCondition,
     StepState,
     TopicKind,
     TopicStatus,
@@ -87,6 +89,27 @@ class ScheduledTask:
     notify_policy: NotifyPolicy
     is_active: bool
     last_run_at: datetime | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class EventSensor:
+    id: UUID
+    topic_id: int
+    conversation_id: UUID | None
+    name: str
+    sensor_kind: SensorKind
+    command: str
+    trigger_condition: SensorTriggerCondition
+    match_pattern: str | None
+    poll_interval_sec: int
+    cooldown_sec: int
+    one_shot: bool
+    instruction_prompt: str
+    notify_policy: NotifyPolicy
+    is_active: bool
+    triggers_count: int
+    last_triggered_at: datetime | None
     created_at: datetime
 
 

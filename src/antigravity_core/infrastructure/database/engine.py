@@ -36,6 +36,8 @@ class DatabaseManager:
         return self._engine
 
     async def verify_connectivity(self) -> None:
+        from antigravity_core.infrastructure.database.tables import Base
+
         try:
             async with self._engine.connect() as conn:
                 result = await conn.scalar(text("SELECT 1"))
@@ -43,6 +45,8 @@ class DatabaseManager:
                     raise StartupValidationError(
                         f"Unexpected PostgreSQL connectivity check result: {result}"
                     )
+            async with self._engine.begin() as ddl_conn:
+                await ddl_conn.run_sync(Base.metadata.create_all)
         except SQLAlchemyError as exc:
             raise StartupValidationError(
                 f"Failed to connect to PostgreSQL 18 database: {exc}"

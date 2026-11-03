@@ -15,6 +15,8 @@ from antigravity_core.domain.enums import (
     ExecutionMode,
     NotifyPolicy,
     ScheduleKind,
+    SensorKind,
+    SensorTriggerCondition,
     TopicKind,
     TopicStatus,
     UserRole,
@@ -22,6 +24,7 @@ from antigravity_core.domain.enums import (
 from antigravity_core.domain.exceptions import DatabaseIntegrityError
 from antigravity_core.domain.models import (
     AuthorizedUser,
+    EventSensor,
     ForumTopic,
     GoogleAccount,
     InviteToken,
@@ -32,6 +35,7 @@ from antigravity_core.domain.models import (
 from antigravity_core.infrastructure.database.engine import DatabaseManager
 from antigravity_core.infrastructure.database.tables import (
     AuthorizedUserRow,
+    EventSensorRow,
     ForumTopicRow,
     GoogleAccountRow,
     InviteTokenRow,
@@ -782,3 +786,106 @@ class AccessControlRepository:
             session.add(new_user)
             await session.flush()
             return _map_authorized_user(new_user)
+
+
+def _map_event_sensor(row: EventSensorRow) -> EventSensor:
+    return EventSensor(
+        id=row.id,
+        topic_id=row.topic_id,
+        conversation_id=row.conversation_id,
+        name=row.name,
+        sensor_kind=SensorKind(row.sensor_kind),
+        command=row.command,
+        trigger_condition=SensorTriggerCondition(row.trigger_condition),
+        match_pattern=row.match_pattern,
+        poll_interval_sec=row.poll_interval_sec,
+        cooldown_sec=row.cooldown_sec,
+        one_shot=row.one_shot,
+        instruction_prompt=row.instruction_prompt,
+        notify_policy=NotifyPolicy(row.notify_policy),
+        is_active=row.is_active,
+        triggers_count=row.triggers_count,
+        last_triggered_at=row.last_triggered_at,
+        created_at=row.created_at,
+    )
+
+
+class SensorRepository:
+    def __init__(self, db: DatabaseManager) -> None:
+        self._db = db
+
+    async def create_sensor(
+        self,
+        sensor_id: UUID,
+        topic_id: int,
+        conversation_id: UUID | None,
+        name: str,
+        sensor_kind: SensorKind,
+        command: str,
+        trigger_condition: SensorTriggerCondition,
+        match_pattern: str | None,
+        poll_interval_sec: int,
+        cooldown_sec: int,
+        one_shot: bool,
+        instruction_prompt: str,
+        notify_policy: NotifyPolicy,
+    ) -> EventSensor:
+        now = datetime.now(tz=UTC)
+        async with self._db.session() as session:
+            row = EventSensorRow(
+                id=sensor_id,
+                topic_id=topic_id,
+                conversation_id=conversation_id,
+                name=name,
+                sensor_kind=sensor_kind.value,
+                command=command,
+                trigger_condition=trigger_condition.value,
+                match_pattern=match_pattern,
+                poll_interval_sec=poll_interval_sec,
+                cooldown_sec=cooldown_sec,
+                one_shot=one_shot,
+                instruction_prompt=instruction_prompt,
+                notify_policy=notify_policy.value,
+                is_active=True,
+                triggers_count=0,
+                last_triggered_at=None,
+                created_at=now,
+            )
+            session.add(row)
+            await session.flush()
+            return _map_event_sensor(row)
+
+    async def get_sensor(self, sensor_id: UUID) -> EventSensor | None:
+        async with self._db.session() as session:
+            row = await session.get(EventSensorRow, sensor_id)
+            return _map_event_sensor(row) if row is not None else None
+
+    async def list_active_sensors(self, topic_id: int | None) -> list[EventSensor]:
+        async with self._db.session() as session:
+            stmt = select(EventSensorRow).where(EventSensorRow.is_active.is_(True))
+            if topic_id is not None:
+                stmt = stmt.where(EventSensorRow.topic_id == topic_id)
+            stmt = stmt.order_by(EventSensorRow.created_at.asc())
+            rows = (await session.scalars(stmt)).all()
+            return [_map_event_sensor(r) for r in rows]
+
+    async def mark_sensor_triggered(self, sensor_id: UUID, deactivate: bool) -> EventSensor:
+        async with self._db.session() as session:
+            row = await session.get(EventSensorRow, sensor_id)
+            if row is None:
+                raise DatabaseIntegrityError(f"EventSensor id={sensor_id} does not exist.")
+            row.triggers_count += 1
+            row.last_triggered_at = datetime.now(tz=UTC)
+            if deactivate:
+                row.is_active = False
+            await session.flush()
+            return _map_event_sensor(row)
+
+    async def cancel_sensor(self, sensor_id: UUID) -> EventSensor:
+        async with self._db.session() as session:
+            row = await session.get(EventSensorRow, sensor_id)
+            if row is None:
+                raise DatabaseIntegrityError(f"EventSensor id={sensor_id} does not exist.")
+            row.is_active = False
+            await session.flush()
+            return _map_event_sensor(row)
