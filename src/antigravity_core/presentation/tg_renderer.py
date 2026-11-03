@@ -23,6 +23,8 @@ _LATEX_SYMBOLS: tuple[tuple[str, str], ...] = (
     (r"\mapsto", "↦"),
     (r"\uparrow", "↑"),
     (r"\downarrow", "↓"),
+    (r"\implies", "⟹"),
+    (r"\impliedby", "⟸"),
     (r"\to", "→"),
     (r"\gets", "←"),
     (r"\iff", "⇔"),
@@ -153,6 +155,15 @@ _SUBSCRIPT_MAP: dict[str, str] = {
     "x": "ₓ",
 }
 
+_BB_MAP: dict[str, str] = {
+    "R": "ℝ", "N": "ℕ", "Z": "ℤ", "Q": "ℚ", "C": "ℂ", "P": "ℙ", "E": "𝔼"
+}
+_CAL_MAP: dict[str, str] = {
+    "O": "𝒪", "L": "ℒ", "H": "ℋ", "F": "ℱ", "D": "𝒟", "N": "𝒩"
+}
+
+_LATEX_BB_RE = re.compile(r"\\mathbb\{([A-Za-z])\}")
+_LATEX_CAL_RE = re.compile(r"\\mathcal\{([A-Za-z])\}")
 _LATEX_TEXT_MACRO_RE = re.compile(r"\\(?:text|mathrm|mathbf|mathit|mathsf|texttt)\{([^{}]*)\}")
 _LATEX_FRAC_RE = re.compile(r"\\frac\{([^{}]+)\}\{([^{}]+)\}")
 _LATEX_SUPER_BRACE_RE = re.compile(r"\^\{([0-9+\-=()ni]+)\}")
@@ -164,6 +175,8 @@ _INLINE_MATH_DOLLAR_RE = re.compile(r"\$\$([^$]+)\$\$|\$([^$\n]+)\$")
 
 def _convert_math_fragment(expr: str) -> str:
     res = expr.strip()
+    res = _LATEX_BB_RE.sub(lambda m: _BB_MAP.get(m.group(1), m.group(1)), res)
+    res = _LATEX_CAL_RE.sub(lambda m: _CAL_MAP.get(m.group(1), m.group(1)), res)
     res = _LATEX_TEXT_MACRO_RE.sub(r"\1", res)
     res = _LATEX_FRAC_RE.sub(r"(\1/\2)", res)
 

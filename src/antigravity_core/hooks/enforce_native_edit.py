@@ -155,6 +155,8 @@ def main() -> None:
 
     tool_name = str(tool_call.get("name", ""))
     if os.environ.get("AGY_EXECUTION_MODE") == "READ_ONLY" and tool_name in (
+        "write_file",
+        "edit_file",
         "write_to_file",
         "replace_file_content",
         "multi_replace_file_content",
