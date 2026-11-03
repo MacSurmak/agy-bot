@@ -44,6 +44,7 @@ class AgyWorkerPool:
         self._keyring_mgr = keyring_mgr
         self._slots: dict[int, WorkerPoolSlot] = {}
         self._registry_lock = asyncio.Lock()
+        self._busy_conversations: set[object] = set()
 
     async def _get_or_create_slot(self, topic_id: int) -> WorkerPoolSlot:
         async with self._registry_lock:
@@ -131,13 +132,20 @@ class AgyWorkerPool:
                     )
                     await slot.worker.start(settings)
 
-                result = await slot.worker.execute_turn(
-                    prompt=prompt,
-                    settings=settings,
-                    on_init=on_init,
-                    on_progress=on_progress,
-                )
-                return result
+                active_cid = desired_sig.conversation_id
+                if active_cid is not None:
+                    self._busy_conversations.add(active_cid)
+                try:
+                    result = await slot.worker.execute_turn(
+                        prompt=prompt,
+                        settings=settings,
+                        on_init=on_init,
+                        on_progress=on_progress,
+                    )
+                    return result
+                finally:
+                    if active_cid is not None:
+                        self._busy_conversations.discard(active_cid)
             finally:
                 slot.is_running_turn = False
                 if slot.worker is not None and slot.worker.is_alive():
@@ -180,8 +188,11 @@ class AgyWorkerPool:
         conv_id = (
             conversation_id_override
             if isinstance(conversation_id_override, UUID)
+            and conversation_id_override not in self._busy_conversations
             else None
         )
+        if conv_id is not None:
+            self._busy_conversations.add(conv_id)
         sig = WorkerSignature(
             conversation_id=conv_id,
             model_slug=topic.model_slug,
@@ -217,6 +228,8 @@ class AgyWorkerPool:
                 on_progress=_noop_prog,
             )
         finally:
+            if conv_id is not None:
+                self._busy_conversations.discard(conv_id)
             await ephemeral_worker.close_gracefully()
 
     async def cancel_active_turn(self, topic_id: int) -> bool:

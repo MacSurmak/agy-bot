@@ -173,6 +173,9 @@ class EventSensorService:
     async def _run_poll_command_loop(self, sensor_id: UUID) -> None:
         baseline_output: str | None = None
         baseline_captured = False
+        was_condition_active = False
+        last_fire_monotonic = 0.0
+        loop = asyncio.get_running_loop()
 
         try:
             while True:
@@ -186,36 +189,51 @@ class EventSensorService:
                     timeout_sec=max(15.0, float(sensor.poll_interval_sec)),
                 )
 
-                triggered = False
+                condition_matched = False
                 cond = sensor.trigger_condition
 
                 if cond == SensorTriggerCondition.ON_EXIT_ZERO:
-                    triggered = returncode == 0
+                    condition_matched = returncode == 0
                 elif cond == SensorTriggerCondition.ON_EXIT_NONZERO:
-                    triggered = returncode != 0
+                    condition_matched = returncode != 0
                 elif cond == SensorTriggerCondition.ON_OUTPUT_CHANGE:
                     if not baseline_captured:
                         baseline_output = output
                         baseline_captured = True
                     elif output != baseline_output:
                         baseline_output = output
-                        triggered = True
+                        condition_matched = True
                 elif cond == SensorTriggerCondition.ON_REGEX_MATCH:
                     pat = sensor.match_pattern or ".+"
-                    triggered = (
+                    condition_matched = (
                         re.search(pat, output, re.IGNORECASE | re.MULTILINE) is not None
                     )
 
-                if triggered:
-                    await self._handle_sensor_trigger(
-                        sensor=sensor,
-                        captured_output=output or f"[Command exited with code {returncode}]",
-                    )
-                    if sensor.one_shot:
-                        return
-                    await asyncio.sleep(float(max(sensor.poll_interval_sec, sensor.cooldown_sec)))
+                now_mono = loop.time()
+                if condition_matched:
+                    # Fire immediately on rising edge (False -> True), or after cooldown_sec if condition stays continuously True
+                    cooldown_elapsed = (now_mono - last_fire_monotonic) >= float(sensor.cooldown_sec)
+                    if (not was_condition_active) or cooldown_elapsed:
+                        was_condition_active = True
+                        last_fire_monotonic = now_mono
+                        if sensor.one_shot:
+                            await self._handle_sensor_trigger(
+                                sensor=sensor,
+                                captured_output=output or f"[Command exited with code {returncode}]",
+                            )
+                            return
+                        # Run wake-up handler in background task so poll loop keeps watching for state resets
+                        asyncio.create_task(
+                            self._handle_sensor_trigger(
+                                sensor=sensor,
+                                captured_output=output or f"[Command exited with code {returncode}]",
+                            )
+                        )
                 else:
-                    await asyncio.sleep(float(sensor.poll_interval_sec))
+                    # Condition cleared (e.g. PyMOL closed): immediately rearm the sensor!
+                    was_condition_active = False
+
+                await asyncio.sleep(float(sensor.poll_interval_sec))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
