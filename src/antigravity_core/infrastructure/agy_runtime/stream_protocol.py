@@ -182,6 +182,34 @@ def _parse_step_update_event(
                     param_lines.append(f"{k}: {val_str}")
                 parameters_text = "\n".join(param_lines)
 
+                # Unwrap MCP call_mcp_tool so ssh_exec, create_sensor, etc. display their real tool name and host/command
+                if tool_name == "call_mcp_tool" and "ToolName" in params:
+                    mcp_tool = str(params.get("ToolName", "")).strip()
+                    raw_args = params.get("Arguments")
+                    parsed_mcp_args: dict[str, Any] = {}
+                    if isinstance(raw_args, dict):
+                        parsed_mcp_args = raw_args
+                    elif isinstance(raw_args, str) and raw_args.strip().startswith("{"):
+                        try:
+                            loaded = json.loads(raw_args)
+                            if isinstance(loaded, dict):
+                                parsed_mcp_args = loaded
+                        except json.JSONDecodeError:
+                            pass
+
+                    if mcp_tool == "ssh_exec":
+                        h_alias = str(parsed_mcp_args.get("host", "?"))
+                        h_cmd = str(parsed_mcp_args.get("command", "")).replace("\n", " ").strip()
+                        tool_name = f"ssh_exec [{h_alias}]"
+                        target_hint = h_cmd[:target_hint_max_chars]
+                        parameters_text = f"CommandLine: {parsed_mcp_args.get('command', '')}"
+                    elif mcp_tool:
+                        tool_name = f"mcp:{mcp_tool}"
+                        for m_key in ("file_path", "name", "alias", "trigger_spec", "host"):
+                            if m_key in parsed_mcp_args and parsed_mcp_args[m_key]:
+                                target_hint = str(parsed_mcp_args[m_key])[:target_hint_max_chars]
+                                break
+
             raw_out = tool_info.get("output")
             if raw_out is not None:
                 out_str = (

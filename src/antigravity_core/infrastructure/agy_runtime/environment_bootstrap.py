@@ -7,6 +7,7 @@ import structlog
 
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import StartupValidationError
+from antigravity_core.domain.models import RemoteHost
 
 logger = structlog.get_logger(__name__)
 
@@ -48,51 +49,76 @@ class AgyEnvironmentBootstrapper:
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
-        self._write_agents_md(agy_home / "AGENTS.md", config_dir / "AGENTS.md")
+        self.sync_global_agents_md_host_map(hosts=[])
         self._write_settings_json(cli_dir / "settings.json")
         self._write_hooks_json(config_dir / "hooks.json")
         self._write_mcp_config_json(config_dir / "mcp_config.json")
         self._write_onboarding_skill(skills_dir / "SKILL.md")
         self._configure_agy_internal_sqlite_wal(cli_dir / "conversation_summaries.db")
 
-    def _write_agents_md(self, root_agents: Path, config_agents: Path) -> None:
+    def sync_global_agents_md_host_map(self, hosts: list[RemoteHost]) -> None:
+        agy_home = self._cfg.paths.agy_home_dir
+        root_agents = agy_home / "AGENTS.md"
+        config_agents = agy_home / "config" / "AGENTS.md"
         remotes_dir = self._cfg.paths.remotes_mount_dir
-        rules_dir = self._cfg.paths.agy_home_dir / "config" / "rules"
-        ssh_dir = self._cfg.paths.ssh_config_dir
+        rules_dir = agy_home / "config" / "rules"
+
+        if hosts:
+            table_lines = [
+                "| SSH Host Alias (`host`) | Address & User | Mounted VFS Path (for `read_file`/`write_file`/`edit_file`) | Detailed Host Passport |",
+                "| :--- | :--- | :--- | :--- |",
+            ]
+            for h in hosts:
+                table_lines.append(
+                    f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}` | `{h.local_mount_path}` | `{h.rule_file_path}` |"
+                )
+            hosts_table_md = "\n".join(table_lines)
+        else:
+            hosts_table_md = (
+                "*(No remote hosts registered yet. Call `mcp:telegram-core:register_remote_host` to onboard a machine.)*"
+            )
 
         content = (
-            "# Antigravity Telegram Core — Global Agent Constitution & Infrastructure Index\n\n"
-            "You are running inside the central **Antigravity Telegram Core** LXC orchestrator on Proxmox VE.\n\n"
-            "## 1. Strict Native File Editing & Hybrid Search Law (Zero Shell File Edits)\n\n"
-            f"1. **All remote machines are mounted via SSHFS (`auto_cache`) under `{remotes_dir}/<host_alias>/`.**\n"
-            "2. **Reading, creating, and modifying files** (both local and on remote servers) "
-            "**MUST be performed STRICTLY using your native file tools** (`view_file`, `write_to_file`, "
-            "`replace_file_content`, `multi_replace_file_content`, `list_dir`, `find_by_name`).\n"
-            "3. **Modifying files via `run_command` (`sed -i`, `awk -i inplace`, `perl -pi`, `cat << EOF >`, "
-            "`echo >`, `tee`, `dd of=`, `truncate`) is STRICTLY FORBIDDEN** and blocked by the `PreToolUse` hook.\n"
-            "4. **Hybrid Search Rule for Large Remote Directories:**\n"
-            "   - For primary full-text search across huge remote directory trees, you MAY run read-only ripgrep via SSH:\n"
-            "     `ssh <host> \"rg -n --hidden -g '!.git' '<pattern>' /path 2>/dev/null\"`\n"
-            f"   - Then open and edit the target files using native `view_file` and `replace_file_content` via `{remotes_dir}/<host>/...`.\n\n"
-            "## 2. Native Telegram, Event Sensor & Temporal Scheduler MCP Tools (`telegram-core`)\n\n"
-            "Always use MCP tools from `telegram-core` (never use built-in `schedule`, text tags, or system `crontab`):\n"
-            "- `send_file_to_telegram(file_path, caption)`\n"
-            "- `create_sensor(name, command, instruction_prompt, sensor_kind, trigger_condition, poll_interval_sec, match_pattern, action_command, wake_mode, one_shot, cooldown_sec, notify_policy, keep_conversation_context)` — Two-stage zero-token event/stream watcher with optional 10ms reflex `action_command` (dump state or restart service immediately on trigger) and `wake_mode` (`ALWAYS` / `ON_ACTION_FAILURE` / `NEVER`).\n"
+            "# Antigravity Telegram Core — LXC Brain Constitution & Live Infrastructure Map\n\n"
+            "You live inside an isolated **LXC Brain Container** (`Antigravity Telegram Core`).\n"
+            "**There are NO user projects inside this LXC container!** Your current working directory (`workspaces/topic_<id>`) "
+            "is strictly your private scratchpad for temporary files and generating charts.\n"
+            "All user computers, workstations, and cluster nodes are external machines connected via SSH and mounted under "
+            f"`{remotes_dir}/<host_alias>/`.\n\n"
+            "## 1. Live Registered Infrastructure Map\n\n"
+            f"{hosts_table_md}\n\n"
+            "## 2. Three Iron Laws of Interacting with Computers\n\n"
+            "1. **NO LOCAL SHELL (`run_command` is disabled):**\n"
+            "   - Never attempt to run local bash commands inside the LXC container.\n"
+            "   - To execute ANY shell command, script, compiler, Docker, systemd, Slurm, or fast `rg`/`find` search on a machine, "
+            "**ALWAYS call `mcp:telegram-core:ssh_exec(host=\"<alias>\", command=\"...\")`**!\n"
+            "2. **NATIVE FILE TOOLS ON MOUNTED PATHS (`/remotes/<alias>/...`):**\n"
+            f"   - Every registered machine's filesystem is mounted at `{remotes_dir}/<alias>/`.\n"
+            "   - To read, create, or edit any file or code on a remote machine, **ALWAYS use your native file tools** "
+            f"(`read_file`, `write_file`, `edit_file`, `list_dir`) directly on `{remotes_dir}/<alias>/path/to/file`.\n"
+            "   - Never edit files via `cat << EOF >` or `sed -i` inside `ssh_exec`.\n"
+            "3. **TWO-TIER SELF-UPDATING INFRASTRUCTURE MEMORY:**\n"
+            f"   - Each host has a passport in `{rules_dir}/infra-<alias>.md`.\n"
+            "   - **Top section (Auto-Synced Telemetry):** Automatically updated by the bot's SSH scanner (hardware, disks, Docker, VMs, folders).\n"
+            "   - **Bottom section (AI Architectural Notes):** Whenever you discover project paths, databases, services, or fix system issues on a host, "
+            "immediately record those insights using **`mcp:telegram-core:update_host_knowledge(host=\"<alias>\", notes_markdown=\"...\")`**!\n\n"
+            "## 3. Complete MCP Toolset (`telegram-core`)\n\n"
+            "- `ssh_exec(host, command, timeout_sec)` — execute shell commands on `<host>` (or `host=\"local_scratch\"` only if running a local matplotlib plotting script inside your topic scratch folder).\n"
+            "- `register_remote_host(alias, hostname_or_ip, ssh_user, ssh_port, remote_root_path)` — onboard a new machine, mount its filesystem via SSHFS, and auto-scan its hardware passport.\n"
+            "- `update_host_knowledge(host, notes_markdown, append)` — save architectural notes into the host's passport `infra-<host>.md`.\n"
+            "- `send_file_to_telegram(file_path, caption)` — send any file or chart (local scratch or `/remotes/<host>/...`) to the current Telegram topic.\n"
+            "- `create_sensor(name, command, instruction_prompt, sensor_kind, trigger_condition, poll_interval_sec, match_pattern, action_command, wake_mode, one_shot, cooldown_sec, notify_policy, keep_conversation_context)` — zero-token background event/stream watcher with 10ms reflex `action_command`.\n"
             "- `list_sensors()` / `cancel_sensor(sensor_id)`\n"
             "- `schedule_task(schedule_kind, trigger_spec, instruction_prompt, notify_policy, keep_conversation_context)`\n"
             "- `list_scheduled_tasks()` / `cancel_scheduled_task(task_id)`\n"
-            "- `register_remote_host(alias, hostname_or_ip, ssh_user, ssh_port, remote_root_path)`\n"
-            "- `create_workspace_topic(title, workspace_path, execution_mode)`\n\n"
-            "## 3. Self-Updating Infrastructure Registry\n\n"
-            f"- SSH configs live in `{ssh_dir}/<alias>.conf`.\n"
-            f"- Host passports live in `{rules_dir}/infra-<alias>.md` with YAML frontmatter `trigger: model_decision`.\n"
-            "- Whenever you learn new facts about a server or configure a new service, update its `infra-<alias>.md` passport.\n"
+            "- `create_workspace_topic(title, execution_mode)`\n"
         )
         root_agents.write_text(content, encoding="utf-8")
         config_agents.write_text(content, encoding="utf-8")
 
     def _write_settings_json(self, settings_path: Path) -> None:
         workspaces_dir = str(self._cfg.paths.workspaces_root_dir)
+        remotes_dir = str(self._cfg.paths.remotes_mount_dir)
 
         payload: dict[str, Any] = {
             "$schema": "https://antigravity.google/schemas/v1/settings.json",
@@ -106,17 +132,18 @@ class AgyEnvironmentBootstrapper:
             "showFeedbackSurvey": False,
             "notifications": False,
             "historySize": -1,
-            "trustedWorkspaces": [workspaces_dir],
+            "trustedWorkspaces": [workspaces_dir, remotes_dir],
             "permissions": {
                 "allow": [
                     "read_file(*)",
                     "write_file(*)",
-                    "command(*)",
                     "read_url(*)",
                     "mcp(telegram-core/*)",
                     "mcp(*)",
                 ],
                 "deny": [
+                    "command(*)",
+                    "schedule(*)",
                     "write_file(/etc/shadow)",
                     "write_file(/root/.ssh/authorized_keys)",
                 ],
