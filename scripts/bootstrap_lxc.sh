@@ -27,6 +27,8 @@ apt-get install -y \
     curl \
     gnupg \
     build-essential \
+    rustc \
+    cargo \
     dbus-daemon \
     dbus-user-session \
     gnome-keyring \
@@ -72,6 +74,7 @@ fi
 
 UV_BIN="$(command -v uv || echo /usr/local/bin/uv)"
 "${UV_BIN}" venv --python 3.14 --clear /srv/antigravity/venv
+export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 "${UV_BIN}" pip install --python /srv/antigravity/venv/bin/python -e /srv/antigravity/app
 
 echo "==> [4/4] Preparing runtime directories..."
