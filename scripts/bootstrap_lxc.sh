@@ -77,7 +77,17 @@ UV_BIN="$(command -v uv || echo /usr/local/bin/uv)"
 export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 "${UV_BIN}" pip install --python /srv/antigravity/venv/bin/python -e /srv/antigravity/app
 
-echo "==> [4/4] Preparing runtime directories..."
+echo "==> [4/5] Installing Google Antigravity CLI (agy)..."
+if ! command -v agy >/dev/null 2>&1 && [[ ! -x /usr/local/bin/agy ]]; then
+    curl -fsSL https://antigravity.google/cli/install.sh | bash
+    if [[ -x /root/.local/bin/agy ]]; then
+        install -m 0755 /root/.local/bin/agy /usr/local/bin/agy
+    elif [[ -x "${HOME}/.local/bin/agy" ]]; then
+        install -m 0755 "${HOME}/.local/bin/agy" /usr/local/bin/agy
+    fi
+fi
+
+echo "==> [5/5] Preparing runtime directories..."
 mkdir -p \
     /srv/antigravity/app/runtime_data \
     /run/agy \
