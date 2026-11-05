@@ -20,6 +20,9 @@ from antigravity_core.domain.enums import (
     SensorWakeMode,
     TopicKind,
 )
+from antigravity_core.infrastructure.agy_runtime.environment_bootstrap import (
+    AgyEnvironmentBootstrapper,
+)
 from antigravity_core.infrastructure.database.repositories import (
     RemoteHostRepository,
     TopicRepository,
@@ -36,6 +39,7 @@ class CoreIpcServer:
     def __init__(
         self,
         static_config: StaticConfig,
+        bootstrapper: AgyEnvironmentBootstrapper,
         media_service: MediaService,
         scheduler_service: TemporalSchedulerService,
         sensor_service: EventSensorService,
@@ -45,6 +49,7 @@ class CoreIpcServer:
         mount_mgr: RemoteMountManager,
     ) -> None:
         self._cfg = static_config
+        self._bootstrapper = bootstrapper
         self._media = media_service
         self._scheduler = scheduler_service
         self._sensors = sensor_service
@@ -120,6 +125,57 @@ class CoreIpcServer:
     async def _dispatch(
         self, method: str, topic_id: int, params: dict[str, Any]
     ) -> dict[str, Any]:
+        if method == "ssh_exec":
+            topic = await self._topic_repo.get_topic_strict(topic_id)
+            host_alias = str(params["host"]).strip()
+            command_str = str(params["command"])
+            timeout_sec = int(params.get("timeout_sec", 60))
+            scratch_dir = Path(topic.workspace_path)
+
+            if host_alias.lower() in ("local", "local_scratch", "scratch", "lxc"):
+                return await self._mount_mgr.execute_remote_ssh(
+                    host=None,
+                    command=command_str,
+                    timeout_sec=timeout_sec,
+                    execution_mode=topic.execution_mode,
+                    local_scratch_dir=scratch_dir,
+                )
+
+            remote_host = await self._host_repo.get_by_alias(host_alias)
+            if remote_host is None:
+                all_hosts = await self._host_repo.list_hosts()
+                known = ", ".join(h.alias for h in all_hosts) or "none"
+                raise ValueError(
+                    f"Unknown remote host alias '{host_alias}'. Registered hosts: [{known}]. "
+                    f"Call 'register_remote_host' first or use host='local_scratch' for local plotting scripts."
+                )
+
+            return await self._mount_mgr.execute_remote_ssh(
+                host=remote_host,
+                command=command_str,
+                timeout_sec=timeout_sec,
+                execution_mode=topic.execution_mode,
+                local_scratch_dir=scratch_dir,
+            )
+
+        if method == "update_host_knowledge":
+            host_alias = str(params["host"]).strip()
+            remote_host = await self._host_repo.get_by_alias(host_alias)
+            if remote_host is None:
+                raise ValueError(
+                    f"Host '{host_alias}' is not registered. Call 'register_remote_host' first."
+                )
+            notes_md = str(params["notes_markdown"])
+            append_flag = bool(params.get("append", True))
+            rule_path = self._mount_mgr.update_host_ai_notes(
+                remote_host, notes_markdown=notes_md, append=append_flag
+            )
+            return {
+                "host": remote_host.alias,
+                "rule_file_path": str(rule_path),
+                "status": "updated",
+            }
+
         if method == "send_file_to_telegram":
             return await self._media.send_file_to_topic(
                 topic_id=topic_id,
@@ -300,29 +356,38 @@ class CoreIpcServer:
             )
             await self._mount_mgr.verify_ssh_connectivity(host)
             await self._mount_mgr.ensure_mounted(host)
-            self._mount_mgr.ensure_rule_skeleton(host)
+            await self._mount_mgr.sync_host_telemetry_and_rules(host)
+            all_hosts = await self._host_repo.list_hosts()
+            self._bootstrapper.sync_global_agents_md_host_map(all_hosts)
             return {
                 "alias": host.alias,
                 "local_mount_path": host.local_mount_path,
                 "rule_file_path": host.rule_file_path,
-                "status": "mounted",
+                "status": "mounted_and_indexed",
             }
 
         if method == "create_workspace_topic":
             title = str(params["title"]).strip()
-            workspace_path = str(Path(str(params["workspace_path"])).resolve())
-            mode = ExecutionMode(str(params["execution_mode"]).upper())
+            mode = ExecutionMode(str(params.get("execution_mode", "FULL_ACCESS")).upper())
+            placeholder_dir = str(self._cfg.paths.workspaces_root_dir / "pending_topic")
             created = await self._topic_lifecycle.create_forum_topic_with_card(
                 title=title,
-                kind=TopicKind.TASK_TOPIC,
-                workspace_path=workspace_path,
+                kind=TopicKind.PERMANENT_WORKSPACE,
+                workspace_path=placeholder_dir,
                 execution_mode=mode,
             )
+            scratch_dir = (
+                self._cfg.paths.workspaces_root_dir / f"topic_{created.topic_id}"
+            ).resolve()
+            scratch_dir.mkdir(parents=True, exist_ok=True)
+            updated = await self._topic_repo.update_workspace_path(
+                created.topic_id, str(scratch_dir)
+            )
             return {
-                "topic_id": created.topic_id,
-                "title": created.title,
-                "workspace_path": created.workspace_path,
-                "execution_mode": created.execution_mode.value,
+                "topic_id": updated.topic_id,
+                "title": updated.title,
+                "workspace_path": updated.workspace_path,
+                "execution_mode": updated.execution_mode.value,
             }
 
         raise ValueError(f"Unsupported IPC method: '{method}'")

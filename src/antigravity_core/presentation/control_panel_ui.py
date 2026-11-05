@@ -15,6 +15,9 @@ from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import ExecutionMode, TopicKind, UserRole
 from antigravity_core.infrastructure.agy_runtime.cli_inspector import AgyCliInspector
+from antigravity_core.infrastructure.agy_runtime.environment_bootstrap import (
+    AgyEnvironmentBootstrapper,
+)
 from antigravity_core.infrastructure.agy_runtime.worker_pool import AgyWorkerPool
 from antigravity_core.infrastructure.crypto.fernet_vault import FernetVault
 from antigravity_core.infrastructure.database.repositories import (
@@ -61,6 +64,7 @@ class ControlPanelUI:
         self,
         client: TelegramClient,
         static_config: StaticConfig,
+        bootstrapper: AgyEnvironmentBootstrapper,
         vault: FernetVault,
         keyring_mgr: KeyringProfileManager,
         mount_mgr: RemoteMountManager,
@@ -77,6 +81,7 @@ class ControlPanelUI:
     ) -> None:
         self._client = client
         self._cfg = static_config
+        self._bootstrapper = bootstrapper
         self._vault = vault
         self._keyring_mgr = keyring_mgr
         self._mount_mgr = mount_mgr
@@ -336,12 +341,14 @@ class ControlPanelUI:
                 if host.auto_mount_enabled:
                     try:
                         await self._mount_mgr.ensure_mounted(host)
+                        await self._mount_mgr.sync_host_telemetry_and_rules(host)
                     except Exception as exc:
                         max_err = self._cfg.limits.error_summary_max_chars
                         err_short = str(exc)[:max_err]
                         await event.respond(
                             lex.cp_remount_failed.format(alias=host.alias, error=err_short)
                         )
+            self._bootstrapper.sync_global_agents_md_host_map(hosts)
             lex, text = await self._build_dashboard_text()
             await self._safe_edit_event(event, text, build_control_panel_keyboard(lex))
             return

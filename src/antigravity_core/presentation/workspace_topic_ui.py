@@ -84,27 +84,21 @@ class WorkspaceTopicUI:
         self._awaiting_custom_dir_topics: set[int] = set()
 
     async def initialize_created_topic(self, topic_id: int, assigned_dir: str) -> None:
+        Path(assigned_dir).mkdir(parents=True, exist_ok=True)
         await self._topic_repo.update_workspace_path(topic_id, assigned_dir)
         await self.refresh_pinned_card(topic_id)
-        settings = await self._settings_repo.load_settings()
-        lex = get_lexicon(settings.ui_language)
-        await self._client.send_message(
-            entity=self._cfg.telegram.forum_chat_id,
-            message=lex.ws_folder_confirm_prompt.format(workspace_path=assigned_dir),
-            reply_to=topic_id,
-            buttons=build_new_topic_folder_confirm_keyboard(lex, topic_id),
-        )
 
     async def ensure_topic_registered(self, topic_id: int) -> ForumTopic:
         existing = await self._topic_repo.get_topic(topic_id)
         if existing is not None:
+            Path(existing.workspace_path).mkdir(parents=True, exist_ok=True)
             return existing
 
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
         default_account = await self._account_repo.get_default_account()
-        # Do not create the directory on disk until confirmed or first turn starts
         default_dir = self._cfg.paths.workspaces_root_dir / f"topic_{topic_id}"
+        default_dir.mkdir(parents=True, exist_ok=True)
 
         topic = await self._topic_repo.create_topic(
             topic_id=topic_id,

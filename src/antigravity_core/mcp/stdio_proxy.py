@@ -76,8 +76,42 @@ async def _call_bot_ipc(method: str, params: dict[str, Any]) -> dict[str, Any]:
 
 # Errata Patch #1: `topic_id` is completely omitted from tool signatures exposed to the LLM!
 @mcp.tool()
+async def ssh_exec(
+    host: str,
+    command: str,
+    timeout_sec: int = 60,
+) -> dict[str, Any]:
+    """Execute a shell command on a registered remote host via SSH (e.g. host='labcomp', 'bigcomp', 'mulberry', 'work'), or host='local_scratch' to run a helper/plotting script in the topic's local scratch folder."""
+    return await _call_bot_ipc(
+        "ssh_exec",
+        {
+            "host": host,
+            "command": command,
+            "timeout_sec": timeout_sec,
+        },
+    )
+
+
+@mcp.tool()
+async def update_host_knowledge(
+    host: str,
+    notes_markdown: str,
+    append: bool = True,
+) -> dict[str, Any]:
+    """Save architectural notes, project paths, database locations, or operational insights into the permanent passport ~/.gemini/config/rules/infra-<host>.md."""
+    return await _call_bot_ipc(
+        "update_host_knowledge",
+        {
+            "host": host,
+            "notes_markdown": notes_markdown,
+            "append": append,
+        },
+    )
+
+
+@mcp.tool()
 async def send_file_to_telegram(file_path: str, caption: str) -> dict[str, Any]:
-    """Send a local or /mnt/remotes/<host>/... file (up to 2 GB) to the current Telegram topic."""
+    """Send a file (from local topic scratch or /remotes/<host>/..., up to 2 GB) to the current Telegram topic."""
     return await _call_bot_ipc(
         "send_file_to_telegram",
         {"file_path": file_path, "caption": caption},
@@ -195,15 +229,13 @@ async def register_remote_host(
 @mcp.tool()
 async def create_workspace_topic(
     title: str,
-    workspace_path: str,
-    execution_mode: str,
+    execution_mode: Literal["FULL_ACCESS", "READ_ONLY"] = "FULL_ACCESS",
 ) -> dict[str, Any]:
-    """Create a new Telegram Forum Topic bound to the given workspace directory."""
+    """Create a new Telegram Forum Topic with its own isolated scratch directory."""
     return await _call_bot_ipc(
         "create_workspace_topic",
         {
             "title": title,
-            "workspace_path": workspace_path,
             "execution_mode": execution_mode,
         },
     )

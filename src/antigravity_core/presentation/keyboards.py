@@ -199,10 +199,9 @@ def build_topic_header_keyboard(lex: UiLexicon, topic: ForumTopic) -> list[list[
         ],
         [
             Button.inline(lex.btn_ws_models, f"ws:models:{tid}".encode("ascii")),
-            Button.inline(lex.btn_ws_workspace, f"ws:dirs:{tid}".encode("ascii")),
+            Button.inline(lex.btn_ws_switch_account, f"ws:accounts:{tid}".encode("ascii")),
         ],
         [
-            Button.inline(lex.btn_ws_switch_account, f"ws:accounts:{tid}".encode("ascii")),
             Button.inline(lex.btn_ws_archive_topic, f"ws:archive:{tid}".encode("ascii")),
         ],
     ]

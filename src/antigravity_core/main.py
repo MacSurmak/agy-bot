@@ -133,14 +133,16 @@ async def run_service(static_config: StaticConfig) -> None:
     for acc in enabled_accounts:
         await keyring_mgr.ensure_account_bus(acc)
 
-    # Step 4: Mount registered SSHFS remote hosts with auto_cache (Errata Patch #3)
+    # Step 4: Mount registered SSHFS remote hosts with auto_cache and sync live AGENTS.md host map
     mount_mgr = RemoteMountManager(static_config)
     hosts = await host_repo.list_hosts()
+    bootstrapper.sync_global_agents_md_host_map(hosts)
     for host in hosts:
         mount_mgr.ensure_rule_skeleton(host)
         if host.auto_mount_enabled:
             try:
                 await mount_mgr.ensure_mounted(host)
+                asyncio.create_task(mount_mgr.sync_host_telemetry_and_rules(host))
             except Exception as exc:
                 logger.error("Failed to auto-mount remote host at startup", alias=host.alias, error=str(exc))
 
@@ -207,6 +209,7 @@ async def run_service(static_config: StaticConfig) -> None:
 
     ipc_server = CoreIpcServer(
         static_config=static_config,
+        bootstrapper=bootstrapper,
         media_service=media_service,
         scheduler_service=scheduler_service,
         sensor_service=sensor_service,
@@ -219,6 +222,7 @@ async def run_service(static_config: StaticConfig) -> None:
     control_panel_ui = ControlPanelUI(
         client=client,
         static_config=static_config,
+        bootstrapper=bootstrapper,
         vault=vault,
         keyring_mgr=keyring_mgr,
         mount_mgr=mount_mgr,
