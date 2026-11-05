@@ -133,8 +133,9 @@ async def run_service(static_config: StaticConfig) -> None:
     for acc in enabled_accounts:
         await keyring_mgr.ensure_account_bus(acc)
 
-    # Step 4: Mount registered SSHFS remote hosts with auto_cache and sync live AGENTS.md host map
+    # Step 4: Ensure local SSH keypair, mount registered SSHFS remote hosts, and sync AGENTS.md host map
     mount_mgr = RemoteMountManager(static_config)
+    await mount_mgr.ensure_local_ssh_keypair()
     hosts = await host_repo.list_hosts()
     bootstrapper.sync_global_agents_md_host_map(hosts)
     for host in hosts:

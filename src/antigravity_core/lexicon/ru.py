@@ -126,7 +126,17 @@ RU_LEXICON = UiLexicon(
     btn_cp_remount_hosts="🔌 Перемонтировать SSHFS",
     btn_cp_tasks_menu="⏰ Расписания и Таймеры",
     btn_cp_settings_menu="⚙️ Настройки",
+    btn_cp_show_ssh_key="🔑 SSH-ключ бота",
     btn_cp_create_invite="🎟 Создать инвайт-токен",
+    cp_ssh_key_card=(
+        "🔑 **Публичный SSH-ключ контейнера Antigravity Core**\n\n"
+        "Выполните эту команду на целевом сервере (например, на мастере `labcomp` или `work`), "
+        "чтобы разрешить боту беспарольный вход:\n"
+        "```bash\n"
+        'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "{pub_key}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys\n'
+        "```\n"
+        "После добавления ключа на мастер-узел агент сможет сам раскатывать его на внутренние ноды кластера и подключать их через `ProxyJump`!"
+    ),
     btn_cp_reauth_account="🔑 Авторизовать {slug} ({email_label})",
     btn_cp_open_oauth_url="🔗 Открыть страницу входа Google",
     btn_cp_register_new_acc="➕ Зарегистрировать новый профиль",

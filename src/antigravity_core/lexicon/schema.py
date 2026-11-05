@@ -102,7 +102,9 @@ class UiLexicon:
     btn_cp_remount_hosts: str
     btn_cp_tasks_menu: str
     btn_cp_settings_menu: str
+    btn_cp_show_ssh_key: str
     btn_cp_create_invite: str
+    cp_ssh_key_card: str
     btn_cp_reauth_account: str
     btn_cp_open_oauth_url: str
     btn_cp_register_new_acc: str

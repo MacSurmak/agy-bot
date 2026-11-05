@@ -206,14 +206,21 @@ async def cancel_sensor(sensor_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def get_bot_ssh_public_key() -> dict[str, Any]:
+    """Return the bot's Ed25519 SSH public key so it can be added to ~/.ssh/authorized_keys on remote hosts or propagated across cluster nodes."""
+    return await _call_bot_ipc("get_bot_ssh_public_key", {})
+
+
+@mcp.tool()
 async def register_remote_host(
     alias: str,
     hostname_or_ip: str,
     ssh_user: str,
-    ssh_port: int,
-    remote_root_path: str,
+    ssh_port: int = 22,
+    remote_root_path: str = "/",
+    jump_host: str = "",
 ) -> dict[str, Any]:
-    """Register a remote SSH host, mount it via SSHFS under /mnt/remotes/<alias>, and create its rule passport."""
+    """Register a remote SSH host (with optional jump_host ProxyJump alias for internal LAN nodes), mount it via SSHFS, and auto-scan its hardware passport."""
     return await _call_bot_ipc(
         "register_remote_host",
         {
@@ -222,6 +229,7 @@ async def register_remote_host(
             "ssh_user": ssh_user,
             "ssh_port": ssh_port,
             "remote_root_path": remote_root_path,
+            "jump_host": jump_host,
         },
     )
 

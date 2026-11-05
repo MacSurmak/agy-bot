@@ -33,6 +33,7 @@ def build_control_panel_keyboard(lex: UiLexicon) -> list[list[Button]]:
             Button.inline(lex.btn_cp_settings_menu, b"cp:settings_menu"),
         ],
         [
+            Button.inline(lex.btn_cp_show_ssh_key, b"cp:show_ssh_key"),
             Button.inline(lex.btn_cp_create_invite, b"cp:create_invite"),
         ],
     ]

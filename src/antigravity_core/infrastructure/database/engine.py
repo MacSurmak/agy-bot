@@ -55,6 +55,11 @@ class DatabaseManager:
                         "ALTER TABLE event_sensors ADD COLUMN IF NOT EXISTS wake_mode VARCHAR(32) NOT NULL DEFAULT 'ALWAYS'"
                     )
                 )
+                await ddl_conn.execute(
+                    text(
+                        "ALTER TABLE remote_hosts ADD COLUMN IF NOT EXISTS jump_host VARCHAR(64)"
+                    )
+                )
         except SQLAlchemyError as exc:
             raise StartupValidationError(
                 f"Failed to connect to PostgreSQL 18 database: {exc}"

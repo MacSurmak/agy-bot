@@ -120,7 +120,16 @@ EN_LEXICON = UiLexicon(
     btn_cp_remount_hosts="🔌 Remount SSHFS Hosts",
     btn_cp_tasks_menu="⏰ Scheduled Tasks",
     btn_cp_settings_menu="⚙️ Settings",
+    btn_cp_show_ssh_key="🔑 Bot SSH Public Key",
     btn_cp_create_invite="🎟 Generate Member Invite",
+    cp_ssh_key_card=(
+        "🔑 **Antigravity Core Public SSH Key**\n\n"
+        "Run this one-liner on your target server to grant passwordless SSH access to the bot:\n"
+        "```bash\n"
+        'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "{pub_key}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys\n'
+        "```\n"
+        "Once authorized on a master/bastion node, the agent can propagate its key to internal cluster nodes and mount them via `ProxyJump`!"
+    ),
     btn_cp_reauth_account="🔑 Re-Authenticate {slug} ({email_label})",
     btn_cp_open_oauth_url="🔗 Open Google Sign-In Page",
     btn_cp_register_new_acc="➕ Register New Account Profile",

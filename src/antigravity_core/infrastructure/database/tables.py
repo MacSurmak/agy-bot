@@ -52,6 +52,7 @@ class RemoteHostRow(Base):
     local_mount_path: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     rule_file_path: Mapped[str] = mapped_column(Text, nullable=False)
     auto_mount_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    jump_host: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class ForumTopicRow(Base):

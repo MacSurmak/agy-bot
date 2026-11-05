@@ -77,6 +77,7 @@ def _map_remote_host(row: RemoteHostRow) -> RemoteHost:
         local_mount_path=row.local_mount_path,
         rule_file_path=row.rule_file_path,
         auto_mount_enabled=row.auto_mount_enabled,
+        jump_host=row.jump_host,
     )
 
 
@@ -380,6 +381,7 @@ class RemoteHostRepository:
         local_mount_path: str,
         rule_file_path: str,
         auto_mount_enabled: bool,
+        jump_host: str | None = None,
     ) -> RemoteHost:
         async with self._db.session() as session:
             stmt = select(RemoteHostRow).where(RemoteHostRow.alias == alias)
@@ -392,6 +394,7 @@ class RemoteHostRepository:
                 existing.local_mount_path = local_mount_path
                 existing.rule_file_path = rule_file_path
                 existing.auto_mount_enabled = auto_mount_enabled
+                existing.jump_host = jump_host
                 await session.flush()
                 return _map_remote_host(existing)
 
@@ -404,6 +407,7 @@ class RemoteHostRepository:
                 local_mount_path=local_mount_path,
                 rule_file_path=rule_file_path,
                 auto_mount_enabled=auto_mount_enabled,
+                jump_host=jump_host,
             )
             session.add(row)
             await session.flush()

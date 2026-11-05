@@ -8,6 +8,7 @@ from uuid import UUID
 import structlog
 from telethon import TelegramClient, events
 from telethon.errors import MessageNotModifiedError, RPCError
+from telethon.tl.custom import Button
 
 from antigravity_core.application.scheduler_service import TemporalSchedulerService
 from antigravity_core.application.sensor_service import EventSensorService
@@ -418,6 +419,15 @@ class ControlPanelUI:
                 new_lex.cp_setting_updated.format(key=key, value_json=raw_val)
             )
             await self._render_settings_menu(event, new_lex)
+            return
+
+        if data_str == "cp:show_ssh_key":
+            pub_key = await self._mount_mgr.ensure_local_ssh_keypair()
+            await self._safe_edit_event(
+                event,
+                lex.cp_ssh_key_card.format(pub_key=pub_key),
+                [[Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")]],
+            )
             return
 
         if data_str == "cp:create_invite":

@@ -46,6 +46,7 @@ class RemoteHost:
     local_mount_path: str
     rule_file_path: str
     auto_mount_enabled: bool
+    jump_host: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

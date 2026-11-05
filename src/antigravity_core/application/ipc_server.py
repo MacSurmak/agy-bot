@@ -331,12 +331,23 @@ class CoreIpcServer:
             canceled_s = await self._sensors.cancel_sensor(sensor_uuid)
             return {"sensor_id": str(canceled_s.id), "name": canceled_s.name, "status": "canceled"}
 
+        if method == "get_bot_ssh_public_key":
+            pub_key = await self._mount_mgr.ensure_local_ssh_keypair()
+            return {
+                "public_key": pub_key,
+                "authorize_one_liner": (
+                    f'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "{pub_key}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
+                ),
+            }
+
         if method == "register_remote_host":
             alias = str(params["alias"]).strip()
             hostname_or_ip = str(params["hostname_or_ip"]).strip()
             ssh_user = str(params["ssh_user"]).strip()
-            ssh_port = int(params["ssh_port"])
-            remote_root_path = str(params["remote_root_path"]).strip()
+            ssh_port = int(params.get("ssh_port", 22))
+            remote_root_path = str(params.get("remote_root_path", "/")).strip() or "/"
+            jump_host_raw = str(params.get("jump_host") or "").strip()
+            jump_host = jump_host_raw if jump_host_raw else None
 
             local_mount = str((self._cfg.paths.remotes_mount_dir / alias).resolve())
             rule_file = str(
@@ -353,6 +364,7 @@ class CoreIpcServer:
                 local_mount_path=local_mount,
                 rule_file_path=rule_file,
                 auto_mount_enabled=True,
+                jump_host=jump_host,
             )
             await self._mount_mgr.verify_ssh_connectivity(host)
             await self._mount_mgr.ensure_mounted(host)

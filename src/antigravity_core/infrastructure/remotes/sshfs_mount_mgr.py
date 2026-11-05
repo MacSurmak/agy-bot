@@ -60,18 +60,58 @@ class RemoteMountManager:
         main_ssh_config.write_text(updated_text, encoding="utf-8")
         os.chmod(main_ssh_config, 0o600)
 
+    async def ensure_local_ssh_keypair(self) -> str:
+        """Auto-generates ~/.ssh/id_ed25519 if absent and returns the public key string."""
+        ssh_root = self._cfg.paths.ssh_config_dir.parent
+        ssh_root.mkdir(parents=True, exist_ok=True)
+        os.chmod(ssh_root, 0o700)
+        self._ensure_main_ssh_config_include()
+
+        priv_key = ssh_root / "id_ed25519"
+        pub_key = ssh_root / "id_ed25519.pub"
+
+        if not priv_key.is_file() or not pub_key.is_file():
+            proc = await asyncio.create_subprocess_exec(
+                "ssh-keygen",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-C",
+                "antigravity-core-lxc",
+                "-f",
+                str(priv_key),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            if priv_key.is_file():
+                os.chmod(priv_key, 0o600)
+            logger.info("Generated new Ed25519 SSH keypair for Antigravity Core", path=str(pub_key))
+
+        if pub_key.is_file():
+            return pub_key.read_text(encoding="utf-8").strip()
+        raise RemoteMountError(f"Failed to read or generate SSH public key at {pub_key}")
+
     def write_ssh_config_entry(self, host: RemoteHost) -> Path:
         ssh_dir = self._cfg.paths.ssh_config_dir
         ssh_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_main_ssh_config_include()
         config_file = ssh_dir / f"{host.alias}.conf"
 
+        proxy_jump_line = (
+            f"    ProxyJump {host.jump_host.strip()}\n"
+            if host.jump_host and host.jump_host.strip()
+            else ""
+        )
         content = (
             f"# Managed by Antigravity Telegram Core\n"
             f"Host {host.alias}\n"
             f"    HostName {host.hostname_or_ip}\n"
             f"    User {host.ssh_user}\n"
             f"    Port {host.ssh_port}\n"
+            f"{proxy_jump_line}"
             f"    BatchMode yes\n"
             f"    ConnectTimeout {self._cfg.remotes.ssh_connect_timeout_sec}\n"
             f"    ServerAliveInterval 5\n"
