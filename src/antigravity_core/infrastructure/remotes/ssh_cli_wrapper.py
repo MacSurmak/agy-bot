@@ -120,11 +120,15 @@ def _resolve_target_via_openssh(
             elif parts[0] == "port" and parts[1].isdigit():
                 port = int(parts[1])
             elif parts[0] == "proxyjump" and parts[1].lower() != "none":
-                proxy_jump = parts[1]
+                raw_pj = parts[1].replace("[", "").replace("]", "")
+                if raw_pj.endswith(":22"):
+                    raw_pj = raw_pj[:-3]
+                proxy_jump = raw_pj
 
-    if not hostname:
+    clean_host = hostname.replace("[", "").replace("]", "")
+    if not clean_host:
         return None
-    return ssh_user, hostname, port, proxy_jump
+    return ssh_user, clean_host, port, proxy_jump
 
 
 def _contains_sudo_prompt(buffer_tail: bytes) -> bool:

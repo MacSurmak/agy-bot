@@ -474,10 +474,11 @@ class CoreIpcServer:
                 jump_host=jump_host,
             )
             self._mount_mgr.write_ssh_config_entry(host)
-            await self._mount_mgr.ensure_target_access(
+            await self._mount_mgr.ensure_target_access_with_jump(
                 topic_id=topic_id,
                 raw_target=f"{ssh_user}@{alias}",
                 explicit_port=ssh_port,
+                jump_host=jump_host if jump_host is not None else "",
             )
             await self._mount_mgr.sync_host_telemetry_and_rules(host)
             all_hosts = await self._host_repo.list_hosts()

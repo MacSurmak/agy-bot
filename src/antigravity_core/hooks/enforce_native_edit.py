@@ -170,15 +170,19 @@ def _pre_onboard_ssh_command(cmd_line: str) -> tuple[bool, str]:
                 elif parts[0] == "port" and parts[1].isdigit():
                     port = int(parts[1])
                 elif parts[0] == "proxyjump" and parts[1].lower() != "none":
-                    proxy_jump = parts[1]
+                    raw_pj = parts[1].replace("[", "").replace("]", "")
+                    if raw_pj.endswith(":22"):
+                        raw_pj = raw_pj[:-3]
+                    proxy_jump = raw_pj
 
-        if hostname:
+        clean_host = hostname.replace("[", "").replace("]", "")
+        if clean_host:
             ok, err_msg = _ipc_call(
                 "ensure_ssh_target_ready",
                 {
                     "ssh_user": ssh_user,
-                    "hostname": hostname,
-                    "host_alias": hostname,
+                    "hostname": clean_host,
+                    "host_alias": clean_host,
                     "port": port,
                     "jump_host": proxy_jump,
                 },

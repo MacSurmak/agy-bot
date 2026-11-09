@@ -232,19 +232,26 @@ class RemoteMountManager:
         self._ensure_main_ssh_config_include()
         config_file = ssh_dir / f"{host.alias}.conf"
 
-        proxy_jump_line = (
-            f"    ProxyJump {host.jump_host.strip()}\n"
+        clean_jump = (
+            host.jump_host.strip().replace("[", "").replace("]", "")
             if host.jump_host and host.jump_host.strip()
             else ""
         )
+        if clean_jump.endswith(":22"):
+            clean_jump = clean_jump[:-3]
+        proxy_jump_line = f"    ProxyJump {clean_jump}\n" if clean_jump else ""
+        host_patterns = (
+            f"{host.alias} {host.hostname_or_ip}"
+            if host.alias != host.hostname_or_ip
+            else host.alias
+        )
         content = (
             f"# Managed by Antigravity Telegram Core\n"
-            f"Host {host.alias}\n"
+            f"Host {host_patterns}\n"
             f"    HostName {host.hostname_or_ip}\n"
             f"    User {host.ssh_user}\n"
             f"    Port {host.ssh_port}\n"
             f"{proxy_jump_line}"
-            f"    BatchMode yes\n"
             f"    ConnectTimeout {self._cfg.remotes.ssh_connect_timeout_sec}\n"
             f"    ServerAliveInterval 5\n"
             f"    ServerAliveCountMax 2\n"
@@ -315,12 +322,24 @@ class RemoteMountManager:
         self, raw_target: str, explicit_port: int
     ) -> tuple[str, str, int, str]:
         user_part = ""
-        host_part = raw_target.strip()
+        host_part = raw_target.strip().replace("[", "").replace("]", "")
         if "@" in host_part:
             user_part, host_part = host_part.split("@", 1)
+        if ":" in host_part:
+            h_only, p_only = host_part.rsplit(":", 1)
+            if p_only.isdigit():
+                host_part = h_only
+                if explicit_port == 22:
+                    explicit_port = int(p_only)
 
         if self._host_repo is not None:
             reg = await self._host_repo.get_by_alias(host_part)
+            if reg is None:
+                all_hosts = await self._host_repo.list_hosts()
+                reg = next(
+                    (h for h in all_hosts if h.hostname_or_ip == host_part),
+                    None,
+                )
             if reg is not None:
                 eff_user = user_part if user_part else reg.ssh_user
                 eff_port = explicit_port if explicit_port != 22 else reg.ssh_port
@@ -407,6 +426,8 @@ class RemoteMountManager:
                 "/usr/bin/ssh",
                 *jump_args,
                 "-o",
+                "BatchMode=no",
+                "-o",
                 "ControlMaster=no",
                 "-o",
                 "ControlPath=none",
@@ -474,7 +495,9 @@ class RemoteMountManager:
         explicit_port: int,
         jump_host: str,
     ) -> tuple[str, SshCredential | None]:
-        clean_jump = jump_host.strip()
+        clean_jump = jump_host.strip().replace("[", "").replace("]", "")
+        if clean_jump.endswith(":22"):
+            clean_jump = clean_jump[:-3]
         if clean_jump:
             await self.ensure_target_access_with_jump(
                 topic_id=topic_id,

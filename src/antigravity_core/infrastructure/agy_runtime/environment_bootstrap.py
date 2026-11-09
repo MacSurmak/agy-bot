@@ -66,17 +66,18 @@ class AgyEnvironmentBootstrapper:
 
         if hosts:
             table_lines = [
-                "| SSH Host Alias (`host`) | Address & User | Native File Tool TRAMP Prefix | Detailed Host Passport |",
+                "| SSH Host Alias (`alias`) | Address & Route | Native File Tool TRAMP Prefix | Detailed Host Passport |",
                 "| :--- | :--- | :--- | :--- |",
             ]
             for h in hosts:
+                route_note = f" (via `{h.jump_host}`)" if h.jump_host else ""
                 table_lines.append(
-                    f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}` | `/ssh:{h.ssh_user}@{h.alias}:/path` or `/ssh:{h.ssh_user}@{h.alias}:~/path` | `{h.rule_file_path}` |"
+                    f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}`{route_note} | `/ssh:{h.ssh_user}@{h.alias}:/path` or `/ssh:{h.ssh_user}@{h.alias}:~/path` | `{h.rule_file_path}` |"
                 )
             hosts_table_md = "\n".join(table_lines)
         else:
             hosts_table_md = (
-                "*(Use any host from `~/.ssh/config` or `/ssh:user@hostname:/path` directly!)*"
+                "*(No hosts registered yet. Call `mcp:telegram-core:register_remote_host` first when connecting to a new server!)*"
             )
 
         content = (
@@ -86,20 +87,23 @@ class AgyEnvironmentBootstrapper:
             "is strictly your private scratchpad for temporary files and generating charts.\n\n"
             "## 1. Live Registered Infrastructure Map\n\n"
             f"{hosts_table_md}\n\n"
-            "## 2. Two Iron Laws of Interacting with Remote Computers\n\n"
-            "1. **NATIVE FILE TOOLS WITH TRAMP PATHS (`/ssh:user@host:/path` and `/ssh:user@host:~/path`):**\n"
-            "   - Because native file tools require an absolute path starting with `/`, **ALWAYS pass remote paths using TRAMP syntax**:\n"
-            "     `/ssh:user@host:/abs/path` or `/ssh:user@host:~/rel/path` (or multi-hop `/ssh:user@jump|ssh:user@target:/abs/path`).\n"
+            "## 2. Two-Stage Workflow for Remote Computers\n\n"
+            "1. **STAGE 1 — CHECK & ONBOARD NEW HOSTS FIRST (`register_remote_host`):**\n"
+            "   - Before working on a server, check if it is in the **Live Registered Infrastructure Map** above.\n"
+            "   - If the host is NOT in the table yet (e.g. a new server IP or an internal LAN node like `bigcomp` discovered behind a gateway), "
+            "**FIRST call `mcp:telegram-core:register_remote_host(alias, hostname_or_ip, ssh_user, ssh_port, remote_root_path, jump_host)`**!\n"
+            "   - If the node requires a jump host, pass `jump_host=\"user@gateway\"`. This configures `ProxyJump` in `~/.ssh/config.d/<alias>.conf` and installs the SSH key.\n"
+            "2. **STAGE 2 — WORK DIRECTLY BY ALIAS (`/ssh:user@<alias>:/path` & `ssh user@<alias>`):**\n"
+            "   - Once a host is registered, **ALWAYS address it directly by its `<alias>`** (OpenSSH handles `ProxyJump` automatically; never use manual `-J` or `|ssh:` pipes):\n"
+            "   - Native file tools (`view_file`, `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `edit_file`): "
+            "`/ssh:user@<alias>:/abs/path` or `/ssh:user@<alias>:~/rel/path`.\n"
             "   - Never edit files via `sed -i`, `awk`, `python3 -c`, or `cat << EOF >` in shell commands.\n"
-            "2. **NATIVE `run_command` WITH `ssh user@host \"...\"`:**\n"
-            "   - To inspect directories (`ls -la`, `find`, `rg`), check logs (`cat`, `head`, `tail`), or run workloads (`sbatch`, `gmx`, `docker`, `systemctl`), "
-            "use your native `run_command` tool: `ssh user@host \"command\"` (or `ssh -J user@jump user@target \"command\"`).\n"
-            "   - When root privileges are needed on a server, simply write `sudo` inside the command as usual (e.g. `ssh user@host \"sudo systemctl restart slurmd\"`).\n"
+            "   - Shell commands (`run_command`): `ssh user@<alias> \"command\"` (write plain `sudo` inside the command when root privileges are needed).\n"
             "3. **DIRECT REMOTE FILE SENDING TO TELEGRAM:**\n"
-            "   - Pass TRAMP paths (`/ssh:user@host:/path/to/file.png`) directly into `mcp:telegram-core:send_file_to_telegram(file_path, caption)` — never run manual `scp` to copy files into the local workspace just to send them.\n"
+            "   - Pass TRAMP paths (`/ssh:user@<alias>:/path/to/file.png`) directly into `mcp:telegram-core:send_file_to_telegram(file_path, caption)` — never run manual `scp`.\n"
             "4. **SELF-UPDATING INFRASTRUCTURE MEMORY:**\n"
             f"   - Each known host has a passport in `{rules_dir}/infra-<alias>.md`.\n"
-            "   - Whenever you discover a new server (including internal LAN nodes accessed via `jump_host`), register it via `mcp:telegram-core:register_remote_host` and record insights using "
+            "   - Whenever you discover project paths, databases, or services on a host, record insights using "
             "`mcp:telegram-core:update_host_knowledge(host=\"<alias>\", notes_markdown=\"...\")`.\n\n"
             "## 3. MCP Toolset (`telegram-core`)\n\n"
             "- `send_file_to_telegram(file_path, caption)` — send any local file or remote TRAMP file (`/ssh:user@host:/path`) directly to the current Telegram topic.\n"

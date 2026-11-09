@@ -3,20 +3,22 @@
 You are running inside the central **Antigravity Telegram Core** LXC orchestrator on Proxmox VE.
 Every conversation topic in Telegram corresponds to an isolated workspace.
 
-## 1. Native Remote File Tools & Direct SSH Execution Law
+## 1. Two-Stage Host Onboarding & Direct TRAMP / SSH Law
 
-1. **Direct TRAMP Remote Paths in Native File Tools (`/ssh:user@host:/path` and `/ssh:user@host:~/path`):**
-   - Because native file tools require an absolute path starting with `/`, **ALWAYS pass remote file paths using standard TRAMP syntax**:
-     - `view_file` / `read_file`: `/ssh:user@172.16.6.6:/shared/ColabFold/0_simulate_gaps.py` or `/ssh:user@bigcomp:~/md_run/md.mdp` or `/ssh:gpu-master:/etc/slurm/slurm.conf`
-     - `write_to_file` / `write_file`
-     - `replace_file_content` / `multi_replace_file_content` / `edit_file`
-   - The `PreToolUse` and `PostToolUse` hooks automatically stage that single file just-in-time at `/ssh:user@host:/...`, apply your native edit, push it back (handling `sudo` automatically if needed), and delete the temporary folder.
-2. **Zero Shell File Edits:**
-   - Editing or creating files via `run_command` (`sed -i`, `awk -i inplace`, `perl -pi`, `cat << EOF >`, `echo >`, `tee`, `dd of=`, `truncate`) is **STRICTLY FORBIDDEN** and blocked by `PreToolUse`.
-3. **Executing Commands & Inspection on Remote Hosts (`run_command`):**
-   - To inspect directories (`ls -la`, `find`, `rg`), check logs (`cat`, `head`, `tail`), or run workloads (`sbatch`, `gmx`, `docker`, `systemctl`, `pytest`), use your native `run_command` tool with standard `ssh`:
-     `ssh user@host "command"` (or `ssh <alias> "command"`).
-   - If a command requires administrator privileges, simply write `sudo` inside the command as usual (e.g. `ssh user@host "sudo systemctl restart slurmd"`).
+1. **Stage 1 — Check & Register Unknown Hosts First (`register_remote_host`):**
+   - Before working on any server, check if it is listed in the **Live Registered Infrastructure Map** below.
+   - If the server is NOT registered yet (or is an internal LAN node behind a gateway like `bigcomp` behind `172.16.6.6`), **FIRST call `mcp:telegram-core:register_remote_host(alias, hostname_or_ip, ssh_user, ssh_port, remote_root_path, jump_host)`**!
+   - If the node is reached through a jump host, pass `jump_host="user@gateway_host"`. This writes `/root/.ssh/config.d/<alias>.conf` with `ProxyJump`, provisions the SSH key once, and adds `<alias>` to the map.
+2. **Stage 2 — Work Directly via Registered Alias (`/ssh:user@<alias>:/path` & `ssh user@<alias>`):**
+   - Once a host is registered (even if it uses `ProxyJump` under the hood), **ALWAYS address it directly without `-J` or `|ssh:`**:
+     - Native file tools (`view_file`, `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `edit_file`):
+       `/ssh:user@<alias>:/abs/path` or `/ssh:user@<alias>:~/rel/path` (e.g. `/ssh:user@bigcomp:~/test_jump.txt`).
+     - Shell commands (`run_command`):
+       `ssh user@<alias> "command"` (with plain `sudo` inside the command when root privileges are needed).
+     - Sending files to Telegram (`send_file_to_telegram`):
+       `send_file_to_telegram(file_path="/ssh:user@<alias>:/path/to/file", caption="...")`.
+3. **Zero Shell File Edits:**
+   - Editing or creating files via `run_command` (`sed -i`, `awk -i inplace`, `perl -pi`, `python3 -c`, `cat << EOF >`) is **STRICTLY FORBIDDEN** and blocked by `PreToolUse`.
 
 ## 2. Native Telegram, Event Sensor & Temporal Scheduler MCP Tools (`telegram-core`)
 
