@@ -3,6 +3,7 @@ import os
 import re
 import socket
 import sys
+from pathlib import Path
 
 _SAFE_REDIRECT_RE: re.Pattern[str] = re.compile(
     r"(?:\b\d*>&\d+\b|\b\d*>>?\s*/dev/null\b|&>>?\s*/dev/null\b)"
@@ -12,6 +13,14 @@ _SHELL_FILE_EDIT_RE: re.Pattern[str] = re.compile(
     r"|\bawk\b[^\n;|]*-i\s+inplace\b"
     r"|\bperl\s+-[a-zA-Z0-9]*i\b"
     r"|\bcat\s*<<)"
+)
+_SELF_INSPECT_CMD_RE: re.Pattern[str] = re.compile(
+    r"(?:\bantigravity_core\b"
+    r"|/srv/antigravity/app/src\b"
+    r"|/srv/antigravity/app/config\.yaml\b"
+    r"|/srv/antigravity/app/\.env\b"
+    r"|bot_ipc\.sock\b"
+    r"|telethon_bot\.session\b)"
 )
 _WRITE_TOOLS: frozenset[str] = frozenset(
     {
@@ -27,6 +36,8 @@ _ALL_FILE_TOOLS: frozenset[str] = frozenset(
         "view_file",
         "read_file",
         "list_dir",
+        "find_by_name",
+        "grep_search",
         *_WRITE_TOOLS,
     }
 )
@@ -189,6 +200,18 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
 
     if tool_name == "run_command":
         cmd_line = str_args["CommandLine"] if "CommandLine" in str_args else ""
+        if _SELF_INSPECT_CMD_RE.search(cmd_line) is not None:
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "decision": "deny",
+                        "reason": "Access to internal Antigravity Core orchestrator files, source code, and secrets is strictly forbidden.",
+                    }
+                )
+                + "\n"
+            )
+            return
+
         cleaned_cmd = _SAFE_REDIRECT_RE.sub("", cmd_line)
         if _SHELL_FILE_EDIT_RE.search(cleaned_cmd) is not None:
             sys.stdout.write(
@@ -211,7 +234,19 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
 
     if tool_name in _ALL_FILE_TOOLS:
         target_path = _extract_file_path(str_args)
-        if target_path and ":" in target_path:
+        if target_path and ":" in target_path and not target_path.startswith("/"):
+            if tool_name in ("find_by_name", "grep_search"):
+                sys.stdout.write(
+                    json.dumps(
+                        {
+                            "decision": "deny",
+                            "reason": "For searching across remote directories, run 'ssh user@host \"rg ...\"' via run_command, then open specific files with view_file/replace_file_content.",
+                        }
+                    )
+                    + "\n"
+                )
+                return
+
             ok, err_msg = _ipc_call(
                 "stage_remote_file",
                 {
@@ -222,6 +257,27 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
             if not ok:
                 sys.stdout.write(
                     json.dumps({"decision": "deny", "reason": err_msg}) + "\n"
+                )
+                return
+        elif target_path:
+            resolved_local = str(Path(target_path).expanduser().resolve())
+            allowed_local_prefixes = (
+                "/srv/antigravity/app/runtime_data/workspaces",
+                "/srv/antigravity/app/runtime_data/inbox",
+                "/root/.gemini/config/rules",
+                "/tmp",
+            )
+            if resolved_local.startswith("/srv/antigravity") and not resolved_local.startswith(
+                allowed_local_prefixes
+            ):
+                sys.stdout.write(
+                    json.dumps(
+                        {
+                            "decision": "deny",
+                            "reason": "Access to internal Antigravity Core application code and configuration (/srv/antigravity) is strictly forbidden.",
+                        }
+                    )
+                    + "\n"
                 )
                 return
 

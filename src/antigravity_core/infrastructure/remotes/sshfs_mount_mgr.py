@@ -1,7 +1,9 @@
 import asyncio
 import difflib
+import errno
 import os
-import secrets
+import pty
+import select
 import shlex
 import shutil
 import signal
@@ -98,6 +100,21 @@ class RemoteMountManager:
             return True
         return False
 
+    def cancel_topic_prompts(self, topic_id: int) -> None:
+        if topic_id in self._pending_passwords:
+            _target, fut = self._pending_passwords.pop(topic_id)
+            if not fut.done():
+                fut.cancel()
+        stale_reqs = [
+            req_id
+            for req_id, (tid, _fut) in self._pending_sudo.items()
+            if tid == topic_id
+        ]
+        for req_id in stale_reqs:
+            _tid, s_fut = self._pending_sudo.pop(req_id)
+            if not s_fut.done():
+                s_fut.cancel()
+
     def resolve_sudo_approval(self, request_id: str, decision: str) -> tuple[int, bool]:
         if request_id not in self._pending_sudo:
             return 0, False
@@ -125,14 +142,6 @@ class RemoteMountManager:
         ssh_wrapper.write_text(ssh_script, encoding="utf-8")
         os.chmod(ssh_wrapper, 0o755)
 
-        askpass_wrapper = bin_dir / "agy-askpass"
-        askpass_script = (
-            "#!/bin/sh\n"
-            f'exec "{python_bin}" -m antigravity_core.infrastructure.remotes.ssh_cli_wrapper --askpass-mode "$@"\n'
-        )
-        askpass_wrapper.write_text(askpass_script, encoding="utf-8")
-        os.chmod(askpass_wrapper, 0o755)
-
     def _ensure_main_ssh_config_include(self) -> None:
         ssh_dir = self._cfg.paths.ssh_config_dir
         sockets_dir = self._cfg.paths.ssh_sockets_dir
@@ -140,15 +149,9 @@ class RemoteMountManager:
         sockets_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(sockets_dir, 0o700)
 
-        python_bin = str(self._cfg.paths.venv_python_path)
-        match_cmd = (
-            f"{python_bin} -m antigravity_core.infrastructure.remotes.ssh_cli_wrapper "
-            f"--match-hook %r %h %n %p"
-        )
         multiplex_conf = ssh_dir / "00-antigravity-multiplex.conf"
         multiplex_content = (
             "# Managed by Antigravity Telegram Core\n"
-            f'Match host * exec "{match_cmd}"\n'
             "Host *\n"
             "    ControlMaster auto\n"
             f"    ControlPath {sockets_dir}/%r@%h-%p\n"
@@ -370,56 +373,95 @@ class RemoteMountManager:
         await proc.communicate()
         return proc.returncode == 0
 
+    @staticmethod
+    def _run_pty_key_install_sync(
+        resolved_target: str,
+        port: int,
+        connect_timeout: int,
+        remote_install_cmd: str,
+        password: str,
+    ) -> bool:
+        master_fd, slave_fd = pty.openpty()
+        pid = os.fork()
+        if pid == 0:
+            os.close(master_fd)
+            os.setsid()
+            os.dup2(slave_fd, 0)
+            os.dup2(slave_fd, 1)
+            os.dup2(slave_fd, 2)
+            if slave_fd > 2:
+                os.close(slave_fd)
+            child_env = {**os.environ, "LC_ALL": "C"}
+            os.execve(
+                "/usr/bin/ssh",
+                [
+                    "/usr/bin/ssh",
+                    "-o",
+                    "PubkeyAuthentication=no",
+                    "-o",
+                    "PreferredAuthentications=password,keyboard-interactive",
+                    "-o",
+                    "NumberOfPasswordPrompts=1",
+                    "-o",
+                    f"ConnectTimeout={connect_timeout}",
+                    "-o",
+                    "StrictHostKeyChecking=accept-new",
+                    "-p",
+                    str(port),
+                    resolved_target,
+                    remote_install_cmd,
+                ],
+                child_env,
+            )
+
+        os.close(slave_fd)
+        sent_password = False
+        tail = b""
+        try:
+            while True:
+                rlist, _, _ = select.select([master_fd], [], [], 0.1)
+                if not rlist:
+                    wpid, status = os.waitpid(pid, os.WNOHANG)
+                    if wpid == pid:
+                        return os.waitstatus_to_exitcode(status) == 0
+                    continue
+                try:
+                    chunk = os.read(master_fd, 4096)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:
+                        break
+                    raise
+                if not chunk:
+                    break
+                tail = (tail + chunk)[-256:]
+                if not sent_password and (b"password:" in tail.lower()):
+                    os.write(master_fd, (password + "\n").encode("utf-8"))
+                    sent_password = True
+                    tail = b""
+        finally:
+            os.close(master_fd)
+
+        _, final_status = os.waitpid(pid, 0)
+        return os.waitstatus_to_exitcode(final_status) == 0
+
     async def _provision_key_with_password(
         self, resolved_target: str, port: int, password: str
     ) -> bool:
         pub_key = await self.ensure_local_ssh_keypair()
-        token = secrets.token_urlsafe(24)
-        self._askpass_tokens[token] = password
-        askpass_bin = str(self._cfg.paths.runtime_bin_dir / "agy-askpass")
-
-        env = {
-            **self._internal_ssh_env(),
-            "SSH_ASKPASS": askpass_bin,
-            "SSH_ASKPASS_REQUIRE": "force",
-            "DISPLAY": "antigravity:0",
-            "AGY_ASKPASS_SECRET_TOKEN": token,
-            "AGY_CORE_IPC_SOCKET": str(self._cfg.paths.ipc_socket_path),
-        }
         remote_install_cmd = (
             "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
             f"(grep -qxF {shlex.quote(pub_key)} ~/.ssh/authorized_keys 2>/dev/null || "
             f"printf '%s\\n' {shlex.quote(pub_key)} >> ~/.ssh/authorized_keys) && "
             "chmod 600 ~/.ssh/authorized_keys"
         )
-        proc = await asyncio.create_subprocess_exec(
-            "/usr/bin/ssh",
-            "-o",
-            "PubkeyAuthentication=no",
-            "-o",
-            "PreferredAuthentications=password,keyboard-interactive",
-            "-o",
-            "NumberOfPasswordPrompts=1",
-            "-o",
-            f"ConnectTimeout={self._cfg.remotes.ssh_connect_timeout_sec}",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-p",
-            str(port),
+        return await asyncio.to_thread(
+            self._run_pty_key_install_sync,
             resolved_target,
+            port,
+            self._cfg.remotes.ssh_connect_timeout_sec,
             remote_install_cmd,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-            start_new_session=True,
+            password,
         )
-        try:
-            await proc.communicate()
-        finally:
-            self._askpass_tokens.pop(token, None)
-
-        return proc.returncode == 0
 
     async def _request_password_from_owner(self, topic_id: int, target_label: str) -> str:
         if self._on_password_prompt is None:
@@ -429,17 +471,18 @@ class RemoteMountManager:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
         self._pending_passwords[topic_id] = (target_label, fut)
-        await self._on_password_prompt(topic_id, target_label)
         try:
+            await self._on_password_prompt(topic_id, target_label)
             return await asyncio.wait_for(
                 fut,
                 timeout=self._cfg.remotes.interactive_approval_timeout_sec,
             )
         except TimeoutError as exc:
-            self._pending_passwords.pop(topic_id, None)
             raise RemoteMountError(
                 f"Timed out waiting for SSH password for '{target_label}' in Telegram."
             ) from exc
+        finally:
+            self._pending_passwords.pop(topic_id, None)
 
     async def ensure_target_access(
         self, topic_id: int, raw_target: str, explicit_port: int
@@ -471,11 +514,6 @@ class RemoteMountManager:
                     return resolved_target, cred
 
             entered_pass = await self._request_password_from_owner(topic_id, resolved_target)
-            if not await self._provision_key_with_password(resolved_target, port, entered_pass):
-                raise RemoteMountError(
-                    f"Failed to authenticate and install SSH key on '{resolved_target}' with the provided password."
-                )
-
             if self._vault is not None and self._cred_repo is not None:
                 enc = self._vault.encrypt_text(entered_pass)
                 cred = await self._cred_repo.upsert_credential(
@@ -484,8 +522,16 @@ class RemoteMountManager:
                     host_target=host_part,
                     ssh_port=port,
                     encrypted_password=enc,
-                    key_provisioned=True,
+                    key_provisioned=False,
                 )
+
+            if not await self._provision_key_with_password(resolved_target, port, entered_pass):
+                raise RemoteMountError(
+                    f"Failed to authenticate and install SSH key on '{resolved_target}' with the provided password."
+                )
+
+            if self._cred_repo is not None:
+                cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
             return resolved_target, cred
 
     async def authorize_sudo_operation(

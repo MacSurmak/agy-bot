@@ -7,6 +7,7 @@ from uuid import UUID
 import structlog
 from telethon import TelegramClient, events
 from telethon.errors import MessageNotModifiedError, RPCError
+from telethon.tl.types import TypeMessageEntity
 
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.application.turn_orchestrator import TurnOrchestrator
@@ -87,6 +88,7 @@ class WorkspaceTopicUI:
         self._awaiting_custom_dir_topics: set[int] = set()
         self._password_prompt_msgs: dict[int, tuple[str, int]] = {}
         self._sudo_prompt_meta: dict[str, tuple[str, str]] = {}
+        self._relocate_trace_topics: set[int] = set()
 
     async def send_ssh_password_prompt(self, topic_id: int, target_label: str) -> None:
         settings = await self._settings_repo.load_settings()
@@ -97,6 +99,7 @@ class WorkspaceTopicUI:
             reply_to=topic_id,
         )
         self._password_prompt_msgs[topic_id] = (target_label, sent.id)
+        self._relocate_trace_topics.add(topic_id)
 
     async def acknowledge_password_received(self, topic_id: int) -> None:
         if topic_id not in self._password_prompt_msgs:
@@ -109,6 +112,7 @@ class WorkspaceTopicUI:
             message=msg_id,
             text=lex.ssh_password_accepted_card.format(target=target_label),
         )
+        self._relocate_trace_topics.add(topic_id)
 
     async def send_sudo_approval_prompt(
         self,
@@ -132,6 +136,7 @@ class WorkspaceTopicUI:
             reply_to=topic_id,
             buttons=build_sudo_approval_keyboard(lex, topic_id, request_id),
         )
+        self._relocate_trace_topics.add(topic_id)
 
     async def initialize_created_topic(self, topic_id: int, assigned_dir: str) -> None:
         Path(assigned_dir).mkdir(parents=True, exist_ok=True)
@@ -239,6 +244,7 @@ class WorkspaceTopicUI:
             return True
 
         if cmd == "/cancel":
+            self._mount_mgr.cancel_topic_prompts(topic_id)
             stopped = await self._pool.cancel_active_turn(topic_id)
             msg = lex.ws_turn_stopped_msg if stopped else lex.ws_no_running_turn_msg
             await self._client.send_message(
@@ -389,9 +395,15 @@ class WorkspaceTopicUI:
         rendered_page_state: dict[int, tuple[str, bool]] = {}
 
         async def _sync_trace_pages(
-            pages: list[tuple[str, list[object]]], is_final: bool
+            pages: list[tuple[str, list[TypeMessageEntity]]], is_final: bool
         ) -> None:
-            from telethon.tl.types import TypeMessageEntity
+            if topic_id in self._relocate_trace_topics:
+                self._relocate_trace_topics.discard(topic_id)
+                for old_msg in trace_msgs:
+                    with contextlib.suppress(RPCError):
+                        await old_msg.delete()
+                trace_msgs.clear()
+                rendered_page_state.clear()
 
             total_pages = len(pages)
             for idx, (page_text, raw_ents) in enumerate(pages):
@@ -497,6 +509,7 @@ class WorkspaceTopicUI:
             # Fire-and-forget UI sync so Telegram FloodWaits never block agy stdout reading
             asyncio.create_task(_bg_sync_pages(pages))
 
+        self._mount_mgr.cancel_topic_prompts(topic_id)
         try:
             result = await self._orchestrator.execute_topic_turn(
                 topic_id=topic_id,
@@ -937,10 +950,12 @@ class WorkspaceTopicUI:
                 status_text = lex.sudo_rejected_status.format(
                     action_summary=summary_lbl, target=target_lbl
                 )
+            self._relocate_trace_topics.add(topic_id)
             await event.edit(status_text, buttons=None)
             return
 
         if action == "cancel":
+            self._mount_mgr.cancel_topic_prompts(topic_id)
             await self._pool.cancel_active_turn(topic_id)
             await event.answer(lex.ws_toast_turn_canceled)
             return

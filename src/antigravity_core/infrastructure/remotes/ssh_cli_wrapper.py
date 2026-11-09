@@ -74,64 +74,52 @@ def _ipc_call(
     return True, {str(k): str(v) for k, v in res.items() if v is not None}, ""
 
 
-def _target_state_file(session_id: str) -> Path:
-    if "AGY_CORE_IPC_SOCKET" in os.environ:
-        run_dir = Path(os.environ["AGY_CORE_IPC_SOCKET"]).parent
-    else:
-        run_dir = Path("/tmp")
-    return run_dir / f".ssh_target_{session_id}.json"
+def _resolve_target_via_openssh(ssh_argv: list[str]) -> tuple[str, str, int] | None:
+    if not ssh_argv:
+        return None
+    r_fd, w_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(r_fd)
+        devnull = os.open(os.devnull, os.O_RDWR)
+        os.dup2(devnull, 0)
+        os.dup2(w_fd, 1)
+        os.dup2(devnull, 2)
+        if w_fd > 2:
+            os.close(w_fd)
+        if devnull > 2:
+            os.close(devnull)
+        os.execv("/usr/bin/ssh", ["/usr/bin/ssh", "-G", *ssh_argv])
 
+    os.close(w_fd)
+    chunks: list[bytes] = []
+    while True:
+        data = os.read(r_fd, 16384)
+        if not data:
+            break
+        chunks.append(data)
+    os.close(r_fd)
+    _, status = os.waitpid(pid, 0)
+    if os.waitstatus_to_exitcode(status) != 0:
+        return None
 
-def _run_askpass_mode() -> int:
-    if "AGY_ASKPASS_SECRET_TOKEN" not in os.environ:
-        sys.stderr.write("Missing AGY_ASKPASS_SECRET_TOKEN.\n")
-        return 1
-    token = os.environ["AGY_ASKPASS_SECRET_TOKEN"]
-    ok, res, err_msg = _ipc_call("consume_askpass_token", {"token": token})
-    if not ok or "secret" not in res:
-        sys.stderr.write(f"Askpass error: {err_msg}\n")
-        return 1
-    sys.stdout.write(res["secret"] + "\n")
-    sys.stdout.flush()
-    return 0
+    out_text = b"".join(chunks).decode("utf-8", errors="replace")
+    ssh_user = ""
+    hostname = ""
+    port = 22
+    for line in out_text.splitlines():
+        parts = line.strip().split(maxsplit=1)
+        if len(parts) == 2:
+            if parts[0] == "user":
+                ssh_user = parts[1]
+            elif parts[0] == "hostname":
+                hostname = parts[1]
+            elif parts[0] == "port" and parts[1].isdigit():
+                port = int(parts[1])
 
-
-def _run_match_hook_mode(argv: list[str]) -> int:
-    if "AGY_INTERNAL_SSH" in os.environ or "AGY_CORE_IPC_SOCKET" not in os.environ:
-        return 0
-    if len(argv) < 4:
-        return 0
-
-    ssh_user = argv[0].strip()
-    hostname = argv[1].strip()
-    host_alias = argv[2].strip()
-    port = int(argv[3]) if argv[3].strip().isdigit() else 22
-
-    ok, _res, err_msg = _ipc_call(
-        "ensure_ssh_target_ready",
-        {
-            "ssh_user": ssh_user,
-            "hostname": hostname,
-            "host_alias": host_alias,
-            "port": port,
-        },
-    )
-    if not ok:
-        sys.stderr.write(f"SSH onboarding aborted: {err_msg}\n")
-        return 1
-
-    if "AGY_SSH_WRAPPER_SID" in os.environ:
-        sid = os.environ["AGY_SSH_WRAPPER_SID"]
-        state_path = _target_state_file(sid)
-        state_payload = {
-            "ssh_user": ssh_user,
-            "hostname": hostname,
-            "host_alias": host_alias,
-            "port": port,
-        }
-        state_path.write_text(json.dumps(state_payload), encoding="utf-8")
-
-    return 0
+    if not hostname:
+        return None
+    return ssh_user, hostname, port
 
 
 def _contains_sudo_prompt(buffer_tail: bytes) -> bool:
@@ -142,11 +130,28 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
     if "AGY_CORE_IPC_SOCKET" not in os.environ:
         os.execv("/usr/bin/ssh", ["/usr/bin/ssh", *ssh_argv])
 
-    sid = f"{os.getpid()}"
-    state_file = _target_state_file(sid)
+    resolved = _resolve_target_via_openssh(ssh_argv)
+    if resolved is None:
+        os.execv("/usr/bin/ssh", ["/usr/bin/ssh", *ssh_argv])
+
+    ssh_user, hostname, port = resolved
+    target_label = f"{ssh_user}@{hostname}" if ssh_user else hostname
+
+    ok_ready, _res_ready, err_ready = _ipc_call(
+        "ensure_ssh_target_ready",
+        {
+            "ssh_user": ssh_user,
+            "hostname": hostname,
+            "host_alias": hostname,
+            "port": port,
+        },
+    )
+    if not ok_ready:
+        sys.stderr.write(f"SSH onboarding failed for {target_label}: {err_ready}\n")
+        return 255
+
     child_env = {
         **os.environ,
-        "AGY_SSH_WRAPPER_SID": sid,
         "LC_ALL": "C",
     }
 
@@ -194,17 +199,6 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
             if _contains_sudo_prompt(rolling_tail):
                 rolling_tail = b""
                 if cached_sudo_secret is None:
-                    target_label = "remote"
-                    port = 22
-                    if state_file.is_file():
-                        loaded = json.loads(state_file.read_text(encoding="utf-8"))
-                        if isinstance(loaded, dict):
-                            u_str = str(loaded["ssh_user"]) if "ssh_user" in loaded else ""
-                            h_str = str(loaded["host_alias"]) if "host_alias" in loaded else ""
-                            target_label = f"{u_str}@{h_str}" if u_str else h_str
-                            if "port" in loaded:
-                                port = int(loaded["port"])
-
                     ok, auth_res, err_msg = _ipc_call(
                         "authorize_pty_sudo",
                         {
@@ -228,20 +222,13 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
                 sys.stdout.buffer.flush()
     finally:
         os.close(master_fd)
-        if state_file.exists():
-            state_file.unlink()
 
     _, final_status = os.waitpid(pid, 0)
     return os.waitstatus_to_exitcode(final_status)
 
 
 def main() -> int:
-    args = sys.argv[1:]
-    if len(args) >= 1 and args[0] == "--askpass-mode":
-        return _run_askpass_mode()
-    if len(args) >= 1 and args[0] == "--match-hook":
-        return _run_match_hook_mode(args[1:])
-    return _run_pty_ssh_bridge(args)
+    return _run_pty_ssh_bridge(sys.argv[1:])
 
 
 if __name__ == "__main__":
