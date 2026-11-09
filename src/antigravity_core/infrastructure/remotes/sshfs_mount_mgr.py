@@ -578,14 +578,23 @@ class RemoteMountManager:
         self, raw_path: str, workspace_dir: Path
     ) -> RemoteFileSpec | None:
         cleaned = raw_path.strip()
-        ws_str = str(workspace_dir.resolve())
-        if cleaned.startswith(ws_str + "/"):
-            cleaned = cleaned[len(ws_str) + 1 :]
+        is_root_tramp = False
 
-        if cleaned.startswith("/") or ":" not in cleaned:
+        if cleaned.startswith("/ssh:"):
+            is_root_tramp = True
+            remainder = cleaned[len("/ssh:") :]
+        else:
+            ws_str = str(workspace_dir.resolve())
+            if cleaned.startswith(ws_str + "/"):
+                cleaned = cleaned[len(ws_str) + 1 :]
+            if cleaned.startswith("/") or ":" not in cleaned:
+                return None
+            remainder = cleaned
+
+        if ":" not in remainder:
             return None
 
-        target_part, remote_path = cleaned.split(":", 1)
+        target_part, remote_path = remainder.split(":", 1)
         if not target_part or "/" in target_part or not remote_path:
             return None
 
@@ -600,9 +609,15 @@ class RemoteMountManager:
             remote_path = f"~/{remote_path}"
 
         raw_target = f"{user_part}@{host_part}" if user_part else host_part
-        first_segment = cleaned.split("/", 1)[0]
-        local_stage_path = (workspace_dir / cleaned).resolve()
-        stage_root_dir = (workspace_dir / first_segment).resolve()
+
+        if is_root_tramp:
+            local_stage_path = Path(cleaned)
+            top_segment = cleaned.lstrip("/").split("/", 1)[0]
+            stage_root_dir = Path("/") / top_segment
+        else:
+            first_segment = cleaned.split("/", 1)[0]
+            local_stage_path = (workspace_dir / cleaned).resolve()
+            stage_root_dir = (workspace_dir / first_segment).resolve()
 
         return RemoteFileSpec(
             raw_target=raw_target,

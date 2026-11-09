@@ -11,8 +11,6 @@ Group=root
 WorkingDirectory=/srv/antigravity/app
 RuntimeDirectory=agy
 RuntimeDirectoryMode=0700
-ProtectSystem=strict
-ReadWritePaths=-/srv/antigravity/app/runtime_data -/root/.gemini -/root/.ssh -/run/agy -/tmp
 Environment="ANTIGRAVITY_CONFIG=/srv/antigravity/app/config.yaml"
 Environment="PYTHONUNBUFFERED=1"
 ExecStartPre=/usr/bin/docker compose -f /srv/antigravity/app/docker-compose.yml up -d --wait

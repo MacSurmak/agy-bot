@@ -66,17 +66,17 @@ class AgyEnvironmentBootstrapper:
 
         if hosts:
             table_lines = [
-                "| SSH Host Alias (`host`) | Address & User | Native File Tool Prefix | Detailed Host Passport |",
+                "| SSH Host Alias (`host`) | Address & User | Native File Tool TRAMP Prefix | Detailed Host Passport |",
                 "| :--- | :--- | :--- | :--- |",
             ]
             for h in hosts:
                 table_lines.append(
-                    f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}` | `{h.ssh_user}@{h.alias}:/path` or `{h.ssh_user}@{h.alias}:~/path` | `{h.rule_file_path}` |"
+                    f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}` | `/ssh:{h.ssh_user}@{h.alias}:/path` or `/ssh:{h.ssh_user}@{h.alias}:~/path` | `{h.rule_file_path}` |"
                 )
             hosts_table_md = "\n".join(table_lines)
         else:
             hosts_table_md = (
-                "*(Use any host from `~/.ssh/config` or `user@hostname` directly!)*"
+                "*(Use any host from `~/.ssh/config` or `/ssh:user@hostname:/path` directly!)*"
             )
 
         content = (
@@ -87,11 +87,10 @@ class AgyEnvironmentBootstrapper:
             "## 1. Live Registered Infrastructure Map\n\n"
             f"{hosts_table_md}\n\n"
             "## 2. Two Iron Laws of Interacting with Remote Computers\n\n"
-            "1. **NATIVE FILE TOOLS WITH REMOTE PATHS (`user@host:/path` and `user@host:~/path`):**\n"
-            "   - To read, create, or edit ANY file on a remote machine (both `/home/...` and `/etc/...`), "
-            "**ALWAYS use your native file tools** (`view_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`) "
-            "passing the remote path directly: `user@host:/abs/path` or `user@host:~/rel/path` (or `alias:/path`).\n"
-            "   - Never edit files via `sed -i`, `awk`, or `cat << EOF >` in shell commands.\n"
+            "1. **NATIVE FILE TOOLS WITH TRAMP PATHS (`/ssh:user@host:/path` and `/ssh:user@host:~/path`):**\n"
+            "   - Because native file tools require an absolute path starting with `/`, **ALWAYS pass remote paths using TRAMP syntax**:\n"
+            "     `/ssh:user@host:/abs/path` or `/ssh:user@host:~/rel/path` (for example: `/ssh:user@172.16.6.6:/shared/ColabFold/0_simulate_gaps.py`).\n"
+            "   - Never edit files via `sed -i`, `awk`, `python3 -c`, or `cat << EOF >` in shell commands.\n"
             "2. **NATIVE `run_command` WITH `ssh user@host \"...\"`:**\n"
             "   - To inspect directories (`ls -la`, `find`, `rg`), check logs (`cat`, `head`, `tail`), or run workloads (`sbatch`, `gmx`, `docker`, `systemctl`), "
             "use your native `run_command` tool: `ssh user@host \"command\"`.\n"

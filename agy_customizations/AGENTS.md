@@ -5,13 +5,12 @@ Every conversation topic in Telegram corresponds to an isolated workspace.
 
 ## 1. Native Remote File Tools & Direct SSH Execution Law
 
-1. **Direct Remote Paths in Native File Tools (`user@host:/path` and `user@host:~/path`):**
-   - To read, create, or edit ANY file on a remote server (both user project files in `~/...` and system files in `/etc/...`), **ALWAYS pass the remote path directly to your native file tools**:
-     - `view_file` (e.g. `user@bigcomp:~/md_run/md.mdp` or `user@bigcomp:/etc/slurm/slurm.conf`)
-     - `write_to_file`
-     - `replace_file_content`
-     - `multi_replace_file_content`
-   - The `PreToolUse` and `PostToolUse` hooks automatically stage that single file just-in-time, apply your native edit, push it back (handling `sudo` automatically if needed), and clean up local temporary files.
+1. **Direct TRAMP Remote Paths in Native File Tools (`/ssh:user@host:/path` and `/ssh:user@host:~/path`):**
+   - Because native file tools require an absolute path starting with `/`, **ALWAYS pass remote file paths using standard TRAMP syntax**:
+     - `view_file` / `read_file`: `/ssh:user@172.16.6.6:/shared/ColabFold/0_simulate_gaps.py` or `/ssh:user@bigcomp:~/md_run/md.mdp` or `/ssh:gpu-master:/etc/slurm/slurm.conf`
+     - `write_to_file` / `write_file`
+     - `replace_file_content` / `multi_replace_file_content` / `edit_file`
+   - The `PreToolUse` and `PostToolUse` hooks automatically stage that single file just-in-time at `/ssh:user@host:/...`, apply your native edit, push it back (handling `sudo` automatically if needed), and delete the temporary folder.
 2. **Zero Shell File Edits:**
    - Editing or creating files via `run_command` (`sed -i`, `awk -i inplace`, `perl -pi`, `cat << EOF >`, `echo >`, `tee`, `dd of=`, `truncate`) is **STRICTLY FORBIDDEN** and blocked by `PreToolUse`.
 3. **Executing Commands & Inspection on Remote Hosts (`run_command`):**

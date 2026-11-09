@@ -12,7 +12,8 @@ _SHELL_FILE_EDIT_RE: re.Pattern[str] = re.compile(
     r"(?:\bsed\s+(?:-[a-zA-Z0-9]*i\b|--in-place\b)"
     r"|\bawk\b[^\n;|]*-i\s+inplace\b"
     r"|\bperl\s+-[a-zA-Z0-9]*i\b"
-    r"|\bcat\s*<<)"
+    r"|\bcat\s*<<"
+    r"|\bpython[23]?\s+-c\s+.*(?:\.write\(|\.writelines\(|open\([^\n)]*['\"][wa]['\"]))"
 )
 _SELF_INSPECT_CMD_RE: re.Pattern[str] = re.compile(
     r"(?:\bantigravity_core\b"
@@ -112,6 +113,12 @@ def _extract_file_path(args: dict[str, str]) -> str:
     return ""
 
 
+def _is_remote_tramp_or_scp_path(target_path: str) -> bool:
+    if target_path.startswith("/ssh:"):
+        return True
+    return ":" in target_path and not target_path.startswith("/")
+
+
 def _handle_post_tool_use(raw_stdin: str) -> None:
     if not raw_stdin.strip():
         sys.stdout.write("{}\n")
@@ -135,7 +142,7 @@ def _handle_post_tool_use(raw_stdin: str) -> None:
 
     str_args = {str(k): str(v) for k, v in raw_args.items() if v is not None}
     target_path = _extract_file_path(str_args)
-    if target_path and ":" in target_path:
+    if target_path and _is_remote_tramp_or_scp_path(target_path):
         _ipc_call(
             "commit_remote_file",
             {
@@ -219,9 +226,9 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
                     {
                         "decision": "deny",
                         "reason": (
-                            "Editing or creating files via sed -i / awk -i / perl -i / cat << EOF in run_command is forbidden. "
-                            "Use your native file tools (view_file, write_to_file, replace_file_content, multi_replace_file_content) "
-                            "passing remote paths directly as 'user@host:/path' or 'user@host:~/path'."
+                            "Editing or creating files via shell commands or python -c is forbidden. "
+                            "Use your native file tools (view_file, read_file, write_to_file, replace_file_content, multi_replace_file_content) "
+                            "passing remote paths in TRAMP format: '/ssh:user@host:/path' or '/ssh:user@host:~/path'."
                         ),
                     }
                 )
@@ -234,13 +241,13 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
 
     if tool_name in _ALL_FILE_TOOLS:
         target_path = _extract_file_path(str_args)
-        if target_path and ":" in target_path and not target_path.startswith("/"):
+        if target_path and _is_remote_tramp_or_scp_path(target_path):
             if tool_name in ("find_by_name", "grep_search"):
                 sys.stdout.write(
                     json.dumps(
                         {
                             "decision": "deny",
-                            "reason": "For searching across remote directories, run 'ssh user@host \"rg ...\"' via run_command, then open specific files with view_file/replace_file_content.",
+                            "reason": "For searching across remote directories, run 'ssh user@host \"rg ...\"' via run_command, then open specific files with '/ssh:user@host:/path'.",
                         }
                     )
                     + "\n"
