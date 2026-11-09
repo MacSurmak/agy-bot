@@ -31,6 +31,7 @@ from antigravity_core.domain.models import (
     InviteToken,
     RemoteHost,
     ScheduledTask,
+    SshCredential,
     TopicSession,
 )
 from antigravity_core.infrastructure.database.engine import DatabaseManager
@@ -42,6 +43,7 @@ from antigravity_core.infrastructure.database.tables import (
     InviteTokenRow,
     RemoteHostRow,
     ScheduledTaskRow,
+    SshCredentialRow,
     SystemSettingRow,
     TopicSessionRow,
 )
@@ -81,6 +83,19 @@ def _map_remote_host(row: RemoteHostRow) -> RemoteHost:
     )
 
 
+def _map_ssh_credential(row: SshCredentialRow) -> SshCredential:
+    return SshCredential(
+        credential_key=row.credential_key,
+        ssh_user=row.ssh_user,
+        host_target=row.host_target,
+        ssh_port=row.ssh_port,
+        encrypted_password=bytes(row.encrypted_password),
+        is_root=row.is_root,
+        key_provisioned=row.key_provisioned,
+        updated_at=row.updated_at,
+    )
+
+
 def _map_topic(row: ForumTopicRow) -> ForumTopic:
     return ForumTopic(
         topic_id=row.topic_id,
@@ -97,6 +112,7 @@ def _map_topic(row: ForumTopicRow) -> ForumTopic:
         pinned_card_msg_id=row.pinned_card_msg_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        sudo_carte_blanche=bool(row.sudo_carte_blanche),
     )
 
 
@@ -414,6 +430,81 @@ class RemoteHostRepository:
             return _map_remote_host(row)
 
 
+class SshCredentialRepository:
+    def __init__(self, db: DatabaseManager) -> None:
+        self._db = db
+
+    async def get_credential(self, credential_key: str) -> SshCredential | None:
+        async with self._db.session() as session:
+            stmt = select(SshCredentialRow).where(
+                SshCredentialRow.credential_key == credential_key
+            )
+            row = (await session.scalars(stmt)).first()
+            return _map_ssh_credential(row) if row is not None else None
+
+    async def list_credentials(self) -> list[SshCredential]:
+        async with self._db.session() as session:
+            stmt = select(SshCredentialRow).order_by(SshCredentialRow.credential_key.asc())
+            rows = (await session.scalars(stmt)).all()
+            return [_map_ssh_credential(r) for r in rows]
+
+    async def upsert_credential(
+        self,
+        credential_key: str,
+        ssh_user: str,
+        host_target: str,
+        ssh_port: int,
+        encrypted_password: bytes,
+        key_provisioned: bool,
+    ) -> SshCredential:
+        now = datetime.now(tz=UTC)
+        is_root = ssh_user.strip() == "root"
+        async with self._db.session() as session:
+            stmt = select(SshCredentialRow).where(
+                SshCredentialRow.credential_key == credential_key
+            )
+            existing = (await session.scalars(stmt)).first()
+            if existing is not None:
+                existing.ssh_user = ssh_user
+                existing.host_target = host_target
+                existing.ssh_port = ssh_port
+                existing.encrypted_password = encrypted_password
+                existing.is_root = is_root
+                existing.key_provisioned = key_provisioned
+                existing.updated_at = now
+                await session.flush()
+                return _map_ssh_credential(existing)
+
+            row = SshCredentialRow(
+                credential_key=credential_key,
+                ssh_user=ssh_user,
+                host_target=host_target,
+                ssh_port=ssh_port,
+                encrypted_password=encrypted_password,
+                is_root=is_root,
+                key_provisioned=key_provisioned,
+                updated_at=now,
+            )
+            session.add(row)
+            await session.flush()
+            return _map_ssh_credential(row)
+
+    async def mark_key_provisioned(
+        self, credential_key: str, provisioned: bool
+    ) -> SshCredential | None:
+        async with self._db.session() as session:
+            stmt = select(SshCredentialRow).where(
+                SshCredentialRow.credential_key == credential_key
+            )
+            row = (await session.scalars(stmt)).first()
+            if row is None:
+                return None
+            row.key_provisioned = provisioned
+            row.updated_at = datetime.now(tz=UTC)
+            await session.flush()
+            return _map_ssh_credential(row)
+
+
 class TopicRepository:
     def __init__(self, db: DatabaseManager) -> None:
         self._db = db
@@ -467,10 +558,22 @@ class TopicRepository:
                 assigned_account_id=assigned_account_id,
                 active_conversation_id=None,
                 pinned_card_msg_id=pinned_card_msg_id,
+                sudo_carte_blanche=False,
                 created_at=now,
                 updated_at=now,
             )
             session.add(row)
+            await session.flush()
+            return _map_topic(row)
+
+    async def set_sudo_carte_blanche(self, topic_id: int, enabled: bool) -> ForumTopic:
+        async with self._db.session() as session:
+            stmt = select(ForumTopicRow).where(ForumTopicRow.topic_id == topic_id)
+            row = (await session.scalars(stmt)).first()
+            if row is None:
+                raise DatabaseIntegrityError(f"ForumTopic topic_id={topic_id} does not exist.")
+            row.sudo_carte_blanche = enabled
+            row.updated_at = datetime.now(tz=UTC)
             await session.flush()
             return _map_topic(row)
 

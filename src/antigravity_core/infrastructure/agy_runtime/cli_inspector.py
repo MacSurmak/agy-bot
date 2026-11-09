@@ -156,7 +156,7 @@ class AgyCliInspector:
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(),
-                timeout=25.0,
+                timeout=self._cfg.runtime.agy_quota_exec_timeout_sec,
             )
         except TimeoutError as exc:
             with contextlib.suppress(ProcessLookupError):

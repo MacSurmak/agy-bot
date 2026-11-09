@@ -55,6 +55,19 @@ class RemoteHostRow(Base):
     jump_host: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class SshCredentialRow(Base):
+    __tablename__ = "ssh_credentials"
+
+    credential_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    ssh_user: Mapped[str] = mapped_column(String(128), nullable=False)
+    host_target: Mapped[str] = mapped_column(String(255), nullable=False)
+    ssh_port: Mapped[int] = mapped_column(Integer, nullable=False)
+    encrypted_password: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    is_root: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    key_provisioned: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ForumTopicRow(Base):
     __tablename__ = "forum_topics"
 
@@ -74,6 +87,7 @@ class ForumTopicRow(Base):
         PG_UUID(as_uuid=True), nullable=True
     )
     pinned_card_msg_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    sudo_carte_blanche: Mapped[bool] = mapped_column(Boolean, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

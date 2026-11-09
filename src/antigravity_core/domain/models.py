@@ -50,6 +50,18 @@ class RemoteHost:
 
 
 @dataclass(frozen=True, slots=True)
+class SshCredential:
+    credential_key: str
+    ssh_user: str
+    host_target: str
+    ssh_port: int
+    encrypted_password: bytes
+    is_root: bool
+    key_provisioned: bool
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ForumTopic:
     topic_id: int
     title: str
@@ -65,6 +77,7 @@ class ForumTopic:
     pinned_card_msg_id: int | None
     created_at: datetime
     updated_at: datetime
+    sudo_carte_blanche: bool
 
 
 @dataclass(frozen=True, slots=True)

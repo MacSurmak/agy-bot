@@ -1,6 +1,6 @@
 import asyncio
-import contextlib
 from dataclasses import dataclass
+from uuid import UUID
 
 import structlog
 
@@ -44,7 +44,7 @@ class AgyWorkerPool:
         self._keyring_mgr = keyring_mgr
         self._slots: dict[int, WorkerPoolSlot] = {}
         self._registry_lock = asyncio.Lock()
-        self._busy_conversations: set[object] = set()
+        self._busy_conversations: set[UUID] = set()
 
     async def _get_or_create_slot(self, topic_id: int) -> WorkerPoolSlot:
         async with self._registry_lock:
@@ -180,16 +180,14 @@ class AgyWorkerPool:
         account: GoogleAccount,
         prompt: str,
         settings: DynamicSettings,
-        conversation_id_override: object = None,
-        on_progress: ProgressCallback | None = None,
-        initial_cumulative_tokens: int = 0,
+        conversation_id_override: UUID | None,
+        on_progress: ProgressCallback | None,
+        initial_cumulative_tokens: int,
     ) -> TurnResult:
         """Executes an isolated background/scheduled turn in parallel with full live progress streaming."""
-        from uuid import UUID
-
         conv_id = (
             conversation_id_override
-            if isinstance(conversation_id_override, UUID)
+            if conversation_id_override is not None
             and conversation_id_override not in self._busy_conversations
             else None
         )

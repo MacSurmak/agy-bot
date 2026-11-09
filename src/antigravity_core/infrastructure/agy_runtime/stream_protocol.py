@@ -194,8 +194,10 @@ def _parse_step_update_event(
                             loaded = json.loads(raw_args)
                             if isinstance(loaded, dict):
                                 parsed_mcp_args = loaded
-                        except json.JSONDecodeError:
-                            pass
+                        except json.JSONDecodeError as exc:
+                            raise AgyProcessError(
+                                f"Malformed JSON in call_mcp_tool Arguments: {exc}"
+                            ) from exc
 
                     if mcp_tool == "ssh_exec":
                         h_alias = str(parsed_mcp_args.get("host", "?"))

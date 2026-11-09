@@ -97,6 +97,15 @@ class TopicLifecycleService:
         await self._pool.evict_topic_worker(topic_id)
         return updated
 
+    async def toggle_sudo_carte_blanche(self, topic_id: int) -> ForumTopic:
+        topic = await self._topic_repo.get_topic_strict(topic_id)
+        return await self._topic_repo.set_sudo_carte_blanche(
+            topic_id, not topic.sudo_carte_blanche
+        )
+
+    async def set_sudo_carte_blanche(self, topic_id: int, enabled: bool) -> ForumTopic:
+        return await self._topic_repo.set_sudo_carte_blanche(topic_id, enabled)
+
     async def change_model(
         self, topic_id: int, model_slug: str, effort_level: EffortLevel | None
     ) -> ForumTopic:

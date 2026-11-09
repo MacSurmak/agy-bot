@@ -99,6 +99,8 @@ class PathsStaticConfig:
     system_user: str
     system_logname: str
     ssh_config_dir: Path
+    ssh_sockets_dir: Path
+    runtime_bin_dir: Path
     workspaces_root_dir: Path
     remotes_mount_dir: Path
     inbox_dir: Path
@@ -220,6 +222,8 @@ def _resolve_paths_config(project_root: Path) -> PathsStaticConfig:
         system_user=current_user,
         system_logname=current_user,
         ssh_config_dir=home_dir / ".ssh" / "config.d",
+        ssh_sockets_dir=home_dir / ".ssh" / "sockets",
+        runtime_bin_dir=runtime_root / "bin",
         workspaces_root_dir=runtime_root / "workspaces",
         remotes_mount_dir=runtime_root / "remotes",
         inbox_dir=runtime_root / "inbox",

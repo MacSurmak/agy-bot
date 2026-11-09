@@ -32,14 +32,19 @@ SSHFS_MOUNT_OPTIONS: str = (
 SSH_CONNECT_TIMEOUT_SEC: int = 10
 SSH_CHECK_GRACE_SEC: int = 5
 SSHFS_MOUNT_GRACE_SEC: int = 10
+SSH_CONTROL_PERSIST_SEC: int = 600
+INTERACTIVE_APPROVAL_TIMEOUT_SEC: float = 290.0
 
 # Subprocess, D-Bus, PTY, and Scheduler runtime constants
 AGY_SQLITE_BUSY_TIMEOUT_MS: int = 5000
 MCP_STDIO_TIMEOUT_SEC: int = 600
-HOOK_TIMEOUT_SEC: int = 5
+HOOK_TIMEOUT_SEC: int = 300
 PROCESS_KILL_GRACE_SEC: float = 3.0
-IPC_REQUEST_TIMEOUT_SEC: float = 120.0
+IPC_REQUEST_TIMEOUT_SEC: float = 310.0
 COMMAND_EXEC_TIMEOUT_SEC: float = 45.0
+AGY_QUOTA_EXEC_TIMEOUT_SEC: float = 25.0
+AGY_AUTH_CHECK_TIMEOUT_SEC: float = 10.0
+SENSOR_REFLEX_TIMEOUT_SEC: float = 60.0
 TURN_WATCHDOG_GRACE_SEC: float = 30.0
 DBUS_SOCKET_POLL_ATTEMPTS: int = 40
 DBUS_SOCKET_POLL_INTERVAL_SEC: float = 0.05
@@ -76,6 +81,8 @@ class RemotesStaticConfig:
     ssh_connect_timeout_sec: int = SSH_CONNECT_TIMEOUT_SEC
     ssh_check_grace_sec: int = SSH_CHECK_GRACE_SEC
     sshfs_mount_grace_sec: int = SSHFS_MOUNT_GRACE_SEC
+    ssh_control_persist_sec: int = SSH_CONTROL_PERSIST_SEC
+    interactive_approval_timeout_sec: float = INTERACTIVE_APPROVAL_TIMEOUT_SEC
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +93,9 @@ class RuntimeStaticConfig:
     process_kill_grace_sec: float = PROCESS_KILL_GRACE_SEC
     ipc_request_timeout_sec: float = IPC_REQUEST_TIMEOUT_SEC
     command_exec_timeout_sec: float = COMMAND_EXEC_TIMEOUT_SEC
+    agy_quota_exec_timeout_sec: float = AGY_QUOTA_EXEC_TIMEOUT_SEC
+    agy_auth_check_timeout_sec: float = AGY_AUTH_CHECK_TIMEOUT_SEC
+    sensor_reflex_timeout_sec: float = SENSOR_REFLEX_TIMEOUT_SEC
     turn_watchdog_grace_sec: float = TURN_WATCHDOG_GRACE_SEC
     dbus_socket_poll_attempts: int = DBUS_SOCKET_POLL_ATTEMPTS
     dbus_socket_poll_interval_sec: float = DBUS_SOCKET_POLL_INTERVAL_SEC
