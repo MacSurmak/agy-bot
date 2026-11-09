@@ -215,7 +215,7 @@ def _resolve_paths_config(project_root: Path) -> PathsStaticConfig:
     current_path = os.environ.get("PATH", "").strip() or DEFAULT_SYSTEM_PATH
 
     return PathsStaticConfig(
-        venv_python_path=Path(sys.executable).resolve(),
+        venv_python_path=Path(sys.executable),
         agy_binary_path=_resolve_agy_binary(),
         agy_home_dir=home_dir / ".gemini",
         system_path_env=current_path,
