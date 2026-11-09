@@ -1,35 +1,165 @@
 import asyncio
-import contextlib
-from datetime import UTC, datetime
+import difflib
 import os
-from pathlib import Path
-import re
+import secrets
+import shlex
+import shutil
 import signal
-from typing import Any
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
 
 import structlog
 
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import ExecutionMode
 from antigravity_core.domain.exceptions import RemoteMountError
-from antigravity_core.domain.models import RemoteHost
+from antigravity_core.domain.models import RemoteHost, SshCredential
+from antigravity_core.infrastructure.crypto.fernet_vault import FernetVault
+from antigravity_core.infrastructure.database.repositories import (
+    RemoteHostRepository,
+    SshCredentialRepository,
+    TopicRepository,
+)
 
-logger = structlog.get_logger(__name__)
+logger: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
 _AI_NOTES_MARKER: str = "<!-- AI_NOTES_START -->"
-_FILE_EDIT_IN_SSH_RE = re.compile(
-    r"\bsed\s+(?:-[a-zA-Z0-9]*i\b|--in-place\b)|\bawk\b[^\n;|]*-i\s+inplace\b|\bcat\s*<<"
-)
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteFileSpec:
+    raw_target: str
+    ssh_user: str
+    host_alias_or_ip: str
+    ssh_port: int
+    credential_key: str
+    remote_path: str
+    local_stage_path: Path
+    stage_root_dir: Path
+
+
+@dataclass(frozen=True, slots=True)
+class _StagedFileBaseline:
+    existed_on_remote: bool
+    original_bytes: bytes
+    requires_sudo_write: bool
 
 
 class RemoteMountManager:
-    """Manages ~/.ssh/config.d/<alias>.conf and FUSE SSHFS mounts under /mnt/remotes/<alias>."""
+    """Manages native OpenSSH multiplexing, key onboarding, PTY sudo auth, and JIT file staging."""
 
     def __init__(self, static_config: StaticConfig) -> None:
         self._cfg = static_config
+        self._vault: FernetVault | None = None
+        self._cred_repo: SshCredentialRepository | None = None
+        self._host_repo: RemoteHostRepository | None = None
+        self._topic_repo: TopicRepository | None = None
+        self._on_password_prompt: Callable[[int, str], Awaitable[None]] | None = None
+        self._on_sudo_prompt: (
+            Callable[[int, str, str, str, str], Awaitable[None]] | None
+        ) = None
+        self._pending_passwords: dict[int, tuple[str, asyncio.Future[str]]] = {}
+        self._pending_sudo: dict[str, tuple[int, asyncio.Future[str]]] = {}
+        self._askpass_tokens: dict[str, str] = {}
+        self._staged_baselines: dict[tuple[int, str], _StagedFileBaseline] = {}
+        self._onboarding_locks: dict[str, asyncio.Lock] = {}
+
+    def bind_security_gateways(
+        self,
+        vault: FernetVault,
+        cred_repo: SshCredentialRepository,
+        host_repo: RemoteHostRepository,
+        topic_repo: TopicRepository,
+        on_password_prompt: Callable[[int, str], Awaitable[None]],
+        on_sudo_prompt: Callable[[int, str, str, str, str], Awaitable[None]],
+    ) -> None:
+        self._vault = vault
+        self._cred_repo = cred_repo
+        self._host_repo = host_repo
+        self._topic_repo = topic_repo
+        self._on_password_prompt = on_password_prompt
+        self._on_sudo_prompt = on_sudo_prompt
+
+    def has_pending_password_prompt(self, topic_id: int) -> bool:
+        if topic_id not in self._pending_passwords:
+            return False
+        _target, fut = self._pending_passwords[topic_id]
+        return not fut.done()
+
+    def submit_password_from_telegram(self, topic_id: int, raw_password: str) -> bool:
+        if topic_id not in self._pending_passwords:
+            return False
+        _target, fut = self._pending_passwords.pop(topic_id)
+        if not fut.done():
+            fut.set_result(raw_password.strip())
+            return True
+        return False
+
+    def resolve_sudo_approval(self, request_id: str, decision: str) -> tuple[int, bool]:
+        if request_id not in self._pending_sudo:
+            return 0, False
+        topic_id, fut = self._pending_sudo.pop(request_id)
+        if not fut.done():
+            fut.set_result(decision)
+            return topic_id, True
+        return topic_id, False
+
+    def consume_askpass_token(self, token: str) -> str:
+        if token not in self._askpass_tokens:
+            raise RemoteMountError("Invalid or expired askpass token.")
+        return self._askpass_tokens.pop(token)
+
+    def install_runtime_wrappers(self) -> None:
+        bin_dir = self._cfg.paths.runtime_bin_dir
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        python_bin = str(self._cfg.paths.venv_python_path)
+
+        ssh_wrapper = bin_dir / "ssh"
+        ssh_script = (
+            "#!/bin/sh\n"
+            f'exec "{python_bin}" -m antigravity_core.infrastructure.remotes.ssh_cli_wrapper "$@"\n'
+        )
+        ssh_wrapper.write_text(ssh_script, encoding="utf-8")
+        os.chmod(ssh_wrapper, 0o755)
+
+        askpass_wrapper = bin_dir / "agy-askpass"
+        askpass_script = (
+            "#!/bin/sh\n"
+            f'exec "{python_bin}" -m antigravity_core.infrastructure.remotes.ssh_cli_wrapper --askpass-mode "$@"\n'
+        )
+        askpass_wrapper.write_text(askpass_script, encoding="utf-8")
+        os.chmod(askpass_wrapper, 0o755)
 
     def _ensure_main_ssh_config_include(self) -> None:
         ssh_dir = self._cfg.paths.ssh_config_dir
+        sockets_dir = self._cfg.paths.ssh_sockets_dir
+        ssh_dir.mkdir(parents=True, exist_ok=True)
+        sockets_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(sockets_dir, 0o700)
+
+        python_bin = str(self._cfg.paths.venv_python_path)
+        match_cmd = (
+            f"{python_bin} -m antigravity_core.infrastructure.remotes.ssh_cli_wrapper "
+            f"--match-hook %r %h %n %p"
+        )
+        multiplex_conf = ssh_dir / "00-antigravity-multiplex.conf"
+        multiplex_content = (
+            "# Managed by Antigravity Telegram Core\n"
+            f'Match host * exec "{match_cmd}"\n'
+            "Host *\n"
+            "    ControlMaster auto\n"
+            f"    ControlPath {sockets_dir}/%r@%h-%p\n"
+            f"    ControlPersist {self._cfg.remotes.ssh_control_persist_sec}\n"
+            "    ServerAliveInterval 15\n"
+            "    ServerAliveCountMax 3\n"
+            "    StrictHostKeyChecking accept-new\n"
+        )
+        multiplex_conf.write_text(multiplex_content, encoding="utf-8")
+        os.chmod(multiplex_conf, 0o600)
+
         main_ssh_config = ssh_dir.parent / "config"
         include_line = f"Include {ssh_dir}/*.conf"
 
@@ -156,57 +286,11 @@ class RemoteMountManager:
             )
 
     def is_mounted(self, mount_path: Path) -> bool:
-        if not mount_path.exists():
-            return False
-        return os.path.ismount(mount_path)
+        return mount_path.exists() and os.path.ismount(mount_path)
 
     async def ensure_mounted(self, host: RemoteHost) -> None:
+        """Ensures SSH config entry exists without mounting persistent FUSE SSHFS."""
         self.write_ssh_config_entry(host)
-        mount_path = Path(host.local_mount_path)
-        mount_path.mkdir(parents=True, exist_ok=True)
-
-        if self.is_mounted(mount_path):
-            return
-
-        # Errata Patch #3: Use configured sshfs_mount_options with auto_cache and attr_timeout=3
-        remote_spec = f"{host.alias}:{host.remote_root_path}"
-        proc = await asyncio.create_subprocess_exec(
-            "sshfs",
-            remote_spec,
-            str(mount_path),
-            "-o",
-            self._cfg.remotes.sshfs_mount_options,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        mount_timeout = float(
-            self._cfg.remotes.ssh_connect_timeout_sec + self._cfg.remotes.sshfs_mount_grace_sec
-        )
-        try:
-            _, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=mount_timeout,
-            )
-        except TimeoutError as exc:
-            proc.kill()
-            raise RemoteMountError(
-                f"SSHFS mount timed out for '{remote_spec}' -> '{mount_path}'."
-            ) from exc
-
-        if proc.returncode != 0 or not self.is_mounted(mount_path):
-            stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
-            raise RemoteMountError(
-                f"SSHFS mount failed for '{remote_spec}' -> '{mount_path}' "
-                f"(code {proc.returncode}): {stderr_text}"
-            )
-
-        logger.info(
-            "Mounted remote host via SSHFS (auto_cache)",
-            alias=host.alias,
-            remote_spec=remote_spec,
-            local_mount=str(mount_path),
-        )
 
     async def unmount(self, mount_path: Path) -> None:
         if not self.is_mounted(mount_path):
@@ -221,6 +305,562 @@ class RemoteMountManager:
             stderr=asyncio.subprocess.PIPE,
         )
         await proc.communicate()
+
+    def _internal_ssh_env(self) -> dict[str, str]:
+        return {**os.environ, "AGY_INTERNAL_SSH": "1"}
+
+    async def _resolve_ssh_target_details(
+        self, raw_target: str, explicit_port: int
+    ) -> tuple[str, str, int, str]:
+        user_part = ""
+        host_part = raw_target.strip()
+        if "@" in host_part:
+            user_part, host_part = host_part.split("@", 1)
+
+        if self._host_repo is not None:
+            reg = await self._host_repo.get_by_alias(host_part)
+            if reg is not None:
+                eff_user = user_part if user_part else reg.ssh_user
+                eff_port = explicit_port if explicit_port != 22 else reg.ssh_port
+                cred_key = f"{eff_user}@{reg.alias}:{eff_port}"
+                return eff_user, reg.alias, eff_port, cred_key
+
+        proc = await asyncio.create_subprocess_exec(
+            "/usr/bin/ssh",
+            "-G",
+            raw_target,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._internal_ssh_env(),
+        )
+        stdout_bytes, _ = await proc.communicate()
+        parsed_user = user_part if user_part else self._cfg.paths.system_user
+        parsed_port = explicit_port
+
+        for line in stdout_bytes.decode("utf-8", errors="replace").splitlines():
+            parts = line.strip().split(maxsplit=1)
+            if len(parts) == 2:
+                if parts[0] == "user" and not user_part:
+                    parsed_user = parts[1]
+                elif parts[0] == "port" and explicit_port == 22 and parts[1].isdigit():
+                    parsed_port = int(parts[1])
+
+        cred_key = f"{parsed_user}@{host_part}:{parsed_port}"
+        return parsed_user, host_part, parsed_port, cred_key
+
+    async def _test_batch_key_auth(self, resolved_target: str, port: int) -> bool:
+        proc = await asyncio.create_subprocess_exec(
+            "/usr/bin/ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            f"ConnectTimeout={self._cfg.remotes.ssh_connect_timeout_sec}",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-p",
+            str(port),
+            resolved_target,
+            "true",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._internal_ssh_env(),
+        )
+        await proc.communicate()
+        return proc.returncode == 0
+
+    async def _provision_key_with_password(
+        self, resolved_target: str, port: int, password: str
+    ) -> bool:
+        pub_key = await self.ensure_local_ssh_keypair()
+        token = secrets.token_urlsafe(24)
+        self._askpass_tokens[token] = password
+        askpass_bin = str(self._cfg.paths.runtime_bin_dir / "agy-askpass")
+
+        env = {
+            **self._internal_ssh_env(),
+            "SSH_ASKPASS": askpass_bin,
+            "SSH_ASKPASS_REQUIRE": "force",
+            "DISPLAY": "antigravity:0",
+            "AGY_ASKPASS_SECRET_TOKEN": token,
+            "AGY_CORE_IPC_SOCKET": str(self._cfg.paths.ipc_socket_path),
+        }
+        remote_install_cmd = (
+            "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
+            f"(grep -qxF {shlex.quote(pub_key)} ~/.ssh/authorized_keys 2>/dev/null || "
+            f"printf '%s\\n' {shlex.quote(pub_key)} >> ~/.ssh/authorized_keys) && "
+            "chmod 600 ~/.ssh/authorized_keys"
+        )
+        proc = await asyncio.create_subprocess_exec(
+            "/usr/bin/ssh",
+            "-o",
+            "PubkeyAuthentication=no",
+            "-o",
+            "PreferredAuthentications=password,keyboard-interactive",
+            "-o",
+            "NumberOfPasswordPrompts=1",
+            "-o",
+            f"ConnectTimeout={self._cfg.remotes.ssh_connect_timeout_sec}",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-p",
+            str(port),
+            resolved_target,
+            remote_install_cmd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            start_new_session=True,
+        )
+        try:
+            await proc.communicate()
+        finally:
+            self._askpass_tokens.pop(token, None)
+
+        return proc.returncode == 0
+
+    async def _request_password_from_owner(self, topic_id: int, target_label: str) -> str:
+        if self._on_password_prompt is None:
+            raise RemoteMountError(
+                f"SSH key is not provisioned for '{target_label}' and interactive prompt callback is not bound."
+            )
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[str] = loop.create_future()
+        self._pending_passwords[topic_id] = (target_label, fut)
+        await self._on_password_prompt(topic_id, target_label)
+        try:
+            return await asyncio.wait_for(
+                fut,
+                timeout=self._cfg.remotes.interactive_approval_timeout_sec,
+            )
+        except TimeoutError as exc:
+            self._pending_passwords.pop(topic_id, None)
+            raise RemoteMountError(
+                f"Timed out waiting for SSH password for '{target_label}' in Telegram."
+            ) from exc
+
+    async def ensure_target_access(
+        self, topic_id: int, raw_target: str, explicit_port: int
+    ) -> tuple[str, SshCredential | None]:
+        ssh_user, host_part, port, cred_key = await self._resolve_ssh_target_details(
+            raw_target, explicit_port
+        )
+        resolved_target = f"{ssh_user}@{host_part}"
+
+        if cred_key not in self._onboarding_locks:
+            self._onboarding_locks[cred_key] = asyncio.Lock()
+
+        async with self._onboarding_locks[cred_key]:
+            cred = (
+                await self._cred_repo.get_credential(cred_key)
+                if self._cred_repo is not None
+                else None
+            )
+            if await self._test_batch_key_auth(resolved_target, port):
+                if cred is not None and not cred.key_provisioned and self._cred_repo is not None:
+                    cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
+                return resolved_target, cred
+
+            if cred is not None and self._vault is not None:
+                saved_pass = self._vault.decrypt_text(cred.encrypted_password)
+                if await self._provision_key_with_password(resolved_target, port, saved_pass):
+                    if self._cred_repo is not None:
+                        cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
+                    return resolved_target, cred
+
+            entered_pass = await self._request_password_from_owner(topic_id, resolved_target)
+            if not await self._provision_key_with_password(resolved_target, port, entered_pass):
+                raise RemoteMountError(
+                    f"Failed to authenticate and install SSH key on '{resolved_target}' with the provided password."
+                )
+
+            if self._vault is not None and self._cred_repo is not None:
+                enc = self._vault.encrypt_text(entered_pass)
+                cred = await self._cred_repo.upsert_credential(
+                    credential_key=cred_key,
+                    ssh_user=ssh_user,
+                    host_target=host_part,
+                    ssh_port=port,
+                    encrypted_password=enc,
+                    key_provisioned=True,
+                )
+            return resolved_target, cred
+
+    async def authorize_sudo_operation(
+        self,
+        topic_id: int,
+        raw_target: str,
+        explicit_port: int,
+        action_summary: str,
+        diff_or_cmd_preview: str,
+    ) -> tuple[str, str, bool]:
+        resolved_target, cred = await self.ensure_target_access(
+            topic_id, raw_target, explicit_port
+        )
+        ssh_user, host_part, port, cred_key = await self._resolve_ssh_target_details(
+            raw_target, explicit_port
+        )
+        if ssh_user == "root":
+            return resolved_target, "", True
+
+        carte_blanche = False
+        if self._topic_repo is not None:
+            topic = await self._topic_repo.get_topic(topic_id)
+            if topic is not None:
+                carte_blanche = topic.sudo_carte_blanche
+
+        if not carte_blanche:
+            if self._on_sudo_prompt is None:
+                raise RemoteMountError("Sudo approval callback is not configured.")
+            req_id = uuid4().hex[:12]
+            loop = asyncio.get_running_loop()
+            fut: asyncio.Future[str] = loop.create_future()
+            self._pending_sudo[req_id] = (topic_id, fut)
+            await self._on_sudo_prompt(
+                topic_id, req_id, resolved_target, action_summary, diff_or_cmd_preview
+            )
+            try:
+                decision = await asyncio.wait_for(
+                    fut,
+                    timeout=self._cfg.remotes.interactive_approval_timeout_sec,
+                )
+            except TimeoutError as exc:
+                self._pending_sudo.pop(req_id, None)
+                raise RemoteMountError(
+                    f"Timed out waiting for sudo approval on '{resolved_target}'."
+                ) from exc
+
+            if decision == "deny":
+                raise RemoteMountError(
+                    f"Sudo operation on '{resolved_target}' was rejected by the owner in Telegram."
+                )
+            if decision == "carte_blanche" and self._topic_repo is not None:
+                await self._topic_repo.set_sudo_carte_blanche(topic_id, True)
+
+        if cred is None and self._cred_repo is not None:
+            cred = await self._cred_repo.get_credential(cred_key)
+
+        if cred is None:
+            entered_pass = await self._request_password_from_owner(
+                topic_id, f"sudo@{resolved_target}"
+            )
+            if self._vault is not None and self._cred_repo is not None:
+                enc = self._vault.encrypt_text(entered_pass)
+                cred = await self._cred_repo.upsert_credential(
+                    credential_key=cred_key,
+                    ssh_user=ssh_user,
+                    host_target=host_part,
+                    ssh_port=port,
+                    encrypted_password=enc,
+                    key_provisioned=True,
+                )
+            return resolved_target, entered_pass, False
+
+        if self._vault is None:
+            raise RemoteMountError("FernetVault is not initialized.")
+        return resolved_target, self._vault.decrypt_text(cred.encrypted_password), False
+
+    def parse_remote_file_spec(
+        self, raw_path: str, workspace_dir: Path
+    ) -> RemoteFileSpec | None:
+        cleaned = raw_path.strip()
+        ws_str = str(workspace_dir.resolve())
+        if cleaned.startswith(ws_str + "/"):
+            cleaned = cleaned[len(ws_str) + 1 :]
+
+        if cleaned.startswith("/") or ":" not in cleaned:
+            return None
+
+        target_part, remote_path = cleaned.split(":", 1)
+        if not target_part or "/" in target_part or not remote_path:
+            return None
+
+        user_part = ""
+        host_part = target_part
+        if "@" in target_part:
+            user_part, host_part = target_part.split("@", 1)
+        if not host_part:
+            return None
+
+        if not remote_path.startswith(("/", "~/")) and remote_path != "~":
+            remote_path = f"~/{remote_path}"
+
+        raw_target = f"{user_part}@{host_part}" if user_part else host_part
+        first_segment = cleaned.split("/", 1)[0]
+        local_stage_path = (workspace_dir / cleaned).resolve()
+        stage_root_dir = (workspace_dir / first_segment).resolve()
+
+        return RemoteFileSpec(
+            raw_target=raw_target,
+            ssh_user=user_part,
+            host_alias_or_ip=host_part,
+            ssh_port=22,
+            credential_key=f"{raw_target}:22",
+            remote_path=remote_path,
+            local_stage_path=local_stage_path,
+            stage_root_dir=stage_root_dir,
+        )
+
+    @staticmethod
+    def _quote_remote_path(remote_path: str) -> str:
+        if remote_path == "~":
+            return '"$HOME"'
+        if remote_path.startswith("~/"):
+            return f'"$HOME"/{shlex.quote(remote_path[2:])}'
+        return shlex.quote(remote_path)
+
+    async def stage_remote_file(
+        self,
+        topic_id: int,
+        workspace_dir: Path,
+        raw_path: str,
+        for_write: bool,
+    ) -> dict[str, str]:
+        spec = self.parse_remote_file_spec(raw_path, workspace_dir)
+        if spec is None:
+            return {"status": "local"}
+
+        resolved_target, _cred = await self.ensure_target_access(
+            topic_id, spec.raw_target, spec.ssh_port
+        )
+        qpath = self._quote_remote_path(spec.remote_path)
+
+        probe_cmd = (
+            f"if [ -d {qpath} ]; then echo AGY_KIND_DIR; ls -la {qpath}; "
+            f"elif [ -e {qpath} ]; then "
+            f"  if [ -r {qpath} ]; then "
+            f"    if [ -w {qpath} ]; then echo AGY_FILE_RW; else echo AGY_FILE_RO; fi; "
+            f"    cat {qpath}; "
+            f"  else echo AGY_NEED_SUDO_READ; fi; "
+            f"else "
+            f"  parent_dir=$(dirname {qpath}); "
+            f"  if [ -w \"$parent_dir\" ]; then echo AGY_MISSING_RW; else echo AGY_MISSING_SUDO; fi; "
+            f"fi"
+        )
+        proc = await asyncio.create_subprocess_exec(
+            "/usr/bin/ssh",
+            "-o",
+            "BatchMode=yes",
+            resolved_target,
+            probe_cmd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._internal_ssh_env(),
+        )
+        stdout_bytes, stderr_bytes = await proc.communicate()
+        if proc.returncode != 0 and not stdout_bytes:
+            err_str = stderr_bytes.decode("utf-8", errors="replace").strip()
+            raise RemoteMountError(
+                f"Failed to access '{spec.remote_path}' on '{resolved_target}': {err_str}"
+            )
+
+        nl_idx = stdout_bytes.find(b"\n")
+        if nl_idx == -1:
+            header = stdout_bytes.decode("utf-8", errors="replace").strip()
+            body_bytes = b""
+        else:
+            header = stdout_bytes[:nl_idx].decode("utf-8", errors="replace").strip()
+            body_bytes = stdout_bytes[nl_idx + 1 :]
+
+        if header == "AGY_KIND_DIR":
+            spec.local_stage_path.mkdir(parents=True, exist_ok=True)
+            return {"status": "staged_dir", "local_path": str(spec.local_stage_path)}
+
+        existed = True
+        requires_sudo_write = False
+
+        if header == "AGY_NEED_SUDO_READ":
+            _t, sudo_pass, is_root = await self.authorize_sudo_operation(
+                topic_id=topic_id,
+                raw_target=spec.raw_target,
+                explicit_port=spec.ssh_port,
+                action_summary=f"Чтение защищённого файла {spec.remote_path}",
+                diff_or_cmd_preview=f"sudo cat {spec.remote_path}",
+            )
+            requires_sudo_write = not is_root
+            sudo_cmd = f"sudo -k -S -p '' cat {qpath}" if not is_root else f"cat {qpath}"
+            s_proc = await asyncio.create_subprocess_exec(
+                "/usr/bin/ssh",
+                "-o",
+                "BatchMode=yes",
+                resolved_target,
+                sudo_cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._internal_ssh_env(),
+            )
+            stdin_payload = (sudo_pass + "\n").encode("utf-8") if not is_root else b""
+            body_bytes, s_err = await s_proc.communicate(input=stdin_payload)
+            if s_proc.returncode != 0:
+                raise RemoteMountError(
+                    f"Failed to read '{spec.remote_path}' with sudo: {s_err.decode('utf-8', errors='replace')}"
+                )
+        elif header == "AGY_FILE_RO":
+            requires_sudo_write = True
+        elif header == "AGY_MISSING_RW":
+            existed = False
+            body_bytes = b""
+        elif header == "AGY_MISSING_SUDO":
+            existed = False
+            requires_sudo_write = True
+            body_bytes = b""
+
+        spec.local_stage_path.parent.mkdir(parents=True, exist_ok=True)
+        if existed or for_write:
+            spec.local_stage_path.write_bytes(body_bytes)
+
+        self._staged_baselines[(topic_id, str(spec.local_stage_path))] = _StagedFileBaseline(
+            existed_on_remote=existed,
+            original_bytes=body_bytes,
+            requires_sudo_write=requires_sudo_write,
+        )
+        return {"status": "staged", "local_path": str(spec.local_stage_path)}
+
+    async def commit_remote_file(
+        self,
+        topic_id: int,
+        workspace_dir: Path,
+        raw_path: str,
+        cleanup_only: bool,
+    ) -> dict[str, str]:
+        spec = self.parse_remote_file_spec(raw_path, workspace_dir)
+        if spec is None:
+            return {"status": "local"}
+
+        baseline_key = (topic_id, str(spec.local_stage_path))
+        baseline = (
+            self._staged_baselines.pop(baseline_key)
+            if baseline_key in self._staged_baselines
+            else None
+        )
+
+        try:
+            if cleanup_only or not spec.local_stage_path.is_file():
+                return {"status": "cleaned"}
+
+            new_bytes = spec.local_stage_path.read_bytes()
+            if (
+                baseline is not None
+                and baseline.existed_on_remote
+                and new_bytes == baseline.original_bytes
+            ):
+                return {"status": "unchanged"}
+
+            resolved_target, _cred = await self.ensure_target_access(
+                topic_id, spec.raw_target, spec.ssh_port
+            )
+            qpath = self._quote_remote_path(spec.remote_path)
+            needs_sudo = baseline.requires_sudo_write if baseline is not None else False
+
+            if not needs_sudo:
+                write_cmd = (
+                    f"parent_dir=$(dirname {qpath}); "
+                    f"mkdir -p \"$parent_dir\" 2>/dev/null && "
+                    f"tmp_f=\"{qpath}.agy_tmp_$$\" && "
+                    f"cat > \"$tmp_f\" && mv -f \"$tmp_f\" {qpath}"
+                )
+                w_proc = await asyncio.create_subprocess_exec(
+                    "/usr/bin/ssh",
+                    "-o",
+                    "BatchMode=yes",
+                    resolved_target,
+                    write_cmd,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=self._internal_ssh_env(),
+                )
+                await w_proc.communicate(input=new_bytes)
+                if w_proc.returncode == 0:
+                    return {"status": "committed", "remote_path": spec.remote_path}
+                needs_sudo = True
+
+            old_text = (
+                baseline.original_bytes.decode("utf-8", errors="replace").splitlines()
+                if baseline is not None and baseline.existed_on_remote
+                else []
+            )
+            new_text = new_bytes.decode("utf-8", errors="replace").splitlines()
+            diff_lines = list(
+                difflib.unified_diff(
+                    old_text,
+                    new_text,
+                    fromfile=f"a:{spec.remote_path}",
+                    tofile=f"b:{spec.remote_path}",
+                    lineterm="",
+                )
+            )
+            diff_preview = (
+                "\n".join(diff_lines[:80])
+                if diff_lines
+                else f"[Binary or new file: {len(new_bytes)} bytes]"
+            )
+
+            _t, sudo_pass, is_root = await self.authorize_sudo_operation(
+                topic_id=topic_id,
+                raw_target=spec.raw_target,
+                explicit_port=spec.ssh_port,
+                action_summary=f"Запись системного файла {spec.remote_path}",
+                diff_or_cmd_preview=diff_preview,
+            )
+
+            stage_upload_cmd = (
+                "tmp_stage=$(mktemp /tmp/.agy_stage_XXXXXXXXXX) && "
+                "cat > \"$tmp_stage\" && printf '%s' \"$tmp_stage\""
+            )
+            up_proc = await asyncio.create_subprocess_exec(
+                "/usr/bin/ssh",
+                "-o",
+                "BatchMode=yes",
+                resolved_target,
+                stage_upload_cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._internal_ssh_env(),
+            )
+            up_out, up_err = await up_proc.communicate(input=new_bytes)
+            remote_tmp = up_out.decode("utf-8", errors="replace").strip()
+            if up_proc.returncode != 0 or not remote_tmp.startswith("/tmp/"):
+                raise RemoteMountError(
+                    f"Failed to upload staging buffer to '{resolved_target}': {up_err.decode('utf-8', errors='replace')}"
+                )
+
+            qtmp = shlex.quote(remote_tmp)
+            sudo_prefix = "sudo -k -S -p ''" if not is_root else ""
+            apply_cmd = (
+                f"{sudo_prefix} sh -c "
+                f"'parent_dir=$(dirname {qpath}); mkdir -p \"$parent_dir\" && "
+                f"if [ -f {qpath} ]; then cp -p {qpath} {qtmp}.perm && cat {qtmp} > {qtmp}.perm && mv -f {qtmp}.perm {qpath}; "
+                f"else install -m 0644 {qtmp} {qpath}; fi; "
+                f"rc=$?; rm -f {qtmp} {qtmp}.perm; exit $rc'"
+            )
+            sw_proc = await asyncio.create_subprocess_exec(
+                "/usr/bin/ssh",
+                "-o",
+                "BatchMode=yes",
+                resolved_target,
+                apply_cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._internal_ssh_env(),
+            )
+            stdin_pass = (sudo_pass + "\n").encode("utf-8") if not is_root else b""
+            _, sw_err = await sw_proc.communicate(input=stdin_pass)
+            if sw_proc.returncode != 0:
+                err_msg = sw_err.decode("utf-8", errors="replace").strip()
+                raise RemoteMountError(
+                    f"Failed to write '{spec.remote_path}' on '{resolved_target}' via sudo: {err_msg}"
+                )
+            return {"status": "committed_sudo", "remote_path": spec.remote_path}
+        finally:
+            if spec.stage_root_dir.exists() and spec.stage_root_dir != workspace_dir.resolve():
+                shutil.rmtree(spec.stage_root_dir, ignore_errors=True)
 
     def ensure_rule_skeleton(self, host: RemoteHost) -> Path:
         rule_path = Path(host.rule_file_path)
@@ -289,7 +929,7 @@ class RemoteMountManager:
             "if [ -d /shared ]; then echo '=== /shared ==='; ls -1 /shared 2>/dev/null | head -n 25; fi"
         )
         proc = await asyncio.create_subprocess_exec(
-            "ssh",
+            "/usr/bin/ssh",
             "-o",
             "BatchMode=yes",
             "-o",
@@ -299,15 +939,15 @@ class RemoteMountManager:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=self._internal_ssh_env(),
         )
         now_str = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
-        try:
-            stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=15.0)
-            telemetry_out = stdout_bytes.decode("utf-8", errors="replace").strip()
-        except TimeoutError:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            telemetry_out = "[Telemetry SSH probe timed out]"
+        stdout_bytes, _ = await proc.communicate()
+        telemetry_out = (
+            stdout_bytes.decode("utf-8", errors="replace").strip()
+            if proc.returncode == 0
+            else "[Telemetry SSH probe failed or timed out]"
+        )
 
         auto_section = (
             f"*Last auto-synced: `{now_str}`*\n\n"
@@ -354,22 +994,14 @@ class RemoteMountManager:
         timeout_sec: int,
         execution_mode: ExecutionMode,
         local_scratch_dir: Path,
-    ) -> dict[str, Any]:
+    ) -> dict[str, str | int]:
         clean_cmd = command.strip()
         if not clean_cmd:
             raise RemoteMountError("Command cannot be empty.")
 
-        if _FILE_EDIT_IN_SSH_RE.search(clean_cmd) is not None:
-            mount_hint = host.local_mount_path if host is not None else str(local_scratch_dir)
-            raise RemoteMountError(
-                f"Editing or creating files via sed -i / awk -i / cat << EOF inside ssh_exec is forbidden. "
-                f"Use your native file tools (write_file, edit_file) directly on '{mount_hint}/...'."
-            )
-
         effective_timeout = float(max(5, min(3600, timeout_sec)))
 
         if host is None:
-            # Local scratch execution (e.g. running matplotlib plot script inside workspaces/topic_<id>)
             local_scratch_dir.mkdir(parents=True, exist_ok=True)
             proc = await asyncio.create_subprocess_exec(
                 "bash",
@@ -382,12 +1014,9 @@ class RemoteMountManager:
                 start_new_session=True,
             )
         else:
-            if host.auto_mount_enabled and not self.is_mounted(Path(host.local_mount_path)):
-                with contextlib.suppress( Exception):
-                    await self.ensure_mounted(host)
-
+            self.write_ssh_config_entry(host)
             proc = await asyncio.create_subprocess_exec(
-                "ssh",
+                "/usr/bin/ssh",
                 "-o",
                 "BatchMode=yes",
                 "-o",
@@ -397,6 +1026,7 @@ class RemoteMountManager:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=self._internal_ssh_env(),
                 start_new_session=True,
             )
 
@@ -409,8 +1039,7 @@ class RemoteMountManager:
             out_text = stdout_bytes.decode("utf-8", errors="replace").strip()
         except TimeoutError as exc:
             if proc.returncode is None:
-                with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             raise RemoteMountError(
                 f"Command timed out after {effective_timeout:.0f}s on '{host.alias if host else 'local_scratch'}': {clean_cmd[:120]}"
             ) from exc
