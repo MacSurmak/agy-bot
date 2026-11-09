@@ -24,9 +24,12 @@ from antigravity_core.infrastructure.database.repositories import AccountReposit
 
 logger = structlog.get_logger(__name__)
 
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\].*?\x07")
-_TUI_NOISE_RE = re.compile(r"[─━═│┃┌┐└┘├┤┬┴┼\ufffd]+")
-_OAUTH_URL_PATTERN = re.compile(r"(https://accounts\.google\.com/[^\s\"'<>]+)")
+_ANSI_ESCAPE_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\].*?\x07")
+_TUI_NOISE_RE: re.Pattern[str] = re.compile(r"[─━═│┃┌┐└┘├┤┬┴┼\ufffd]+")
+_OAUTH_URL_PATTERN: re.Pattern[str] = re.compile(r"(https://accounts\.google\.com/[^\s\"'<>]+)")
+_EMAIL_EXTRACT_RE: re.Pattern[str] = re.compile(
+    r"\b([a-zA-Z0-9_.+-]+@(?:gmail\.com|googlemail\.com|[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+))\b"
+)
 
 
 @dataclass(slots=True)
@@ -390,23 +393,50 @@ class KeyringProfileManager:
         max_chars = self._cfg.limits.error_summary_max_chars
         return collapsed[-max_chars:] if len(collapsed) > max_chars else collapsed
 
+    async def _try_extract_and_save_email(
+        self, account: GoogleAccount, raw_blob: str
+    ) -> None:
+        match = _EMAIL_EXTRACT_RE.search(raw_blob)
+        if match is not None:
+            found_email = match.group(1).lower()
+            if found_email != account.email_label.lower():
+                await self._account_repo.update_email_label(account.id, found_email)
+                return
+
+        for part in raw_blob.split("."):
+            if len(part) > 20 and part.startswith("eyJ"):
+                padded = part + ("=" * ((4 - len(part) % 4) % 4))
+                try:
+                    decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode(
+                        "utf-8", errors="ignore"
+                    )
+                except ValueError as exc:
+                    raise AccountAuthFlowError(f"Invalid JWT base64 segment: {exc}") from exc
+                jwt_match = _EMAIL_EXTRACT_RE.search(decoded)
+                if jwt_match is not None:
+                    await self._account_repo.update_email_label(
+                        account.id, jwt_match.group(1).lower()
+                    )
+                    return
+
     async def backup_account_token_to_db(self, account: GoogleAccount) -> bool:
         env = await self.ensure_account_bus(account)
         secret_val = await self._lookup_gemini_secret(env)
         if secret_val:
+            await self._try_extract_and_save_email(account, secret_val)
             encrypted = self._vault.encrypt_text(secret_val)
             await self._account_repo.update_token_backup(account.id, encrypted)
             return True
 
         keyrings_dir = Path(account.xdg_data_dir) / "keyrings"
         keyring_file = keyrings_dir / "login.keyring"
-        if not keyring_file.is_file():
-            candidates = sorted(keyrings_dir.glob("*.keyring"))
-            if candidates:
-                keyring_file = candidates[0]
 
         if keyring_file.is_file() and keyring_file.stat().st_size > 0:
-            b64_str = base64.b64encode(keyring_file.read_bytes()).decode("ascii")
+            raw_bytes = keyring_file.read_bytes()
+            await self._try_extract_and_save_email(
+                account, raw_bytes.decode("utf-8", errors="ignore")
+            )
+            b64_str = base64.b64encode(raw_bytes).decode("ascii")
             encrypted = self._vault.encrypt_text(f"keyring-b64:{b64_str}")
             await self._account_repo.update_token_backup(account.id, encrypted)
             return True

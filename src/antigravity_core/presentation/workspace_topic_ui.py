@@ -382,10 +382,13 @@ class WorkspaceTopicUI:
         start_ts = time.monotonic()
         last_edit_ts = start_ts
 
+        acc_display = (
+            account.email_label if "@" in account.email_label else account.slug
+        )
         status_msg = await self._client.send_message(
             entity=self._cfg.telegram.forum_chat_id,
             message=lex.ws_starting_turn_msg.format(
-                model_slug=topic.model_slug, account_slug=account.slug
+                model_slug=topic.model_slug, account_slug=acc_display
             ),
             reply_to=topic_id,
             silent=True,
@@ -530,42 +533,39 @@ class WorkspaceTopicUI:
 
         updated_topic = await self._topic_repo.get_topic_strict(topic_id)
         updated_account = await self._account_repo.get_by_id(updated_topic.assigned_account_id)
+        upd_acc_display = (
+            updated_account.email_label
+            if "@" in updated_account.email_label
+            else updated_account.slug
+        )
 
         final_pages = build_final_execution_trace_pages(
             lex=lex,
             limits=self._cfg.limits,
             result=result,
             model_slug=updated_topic.model_slug,
-            account_slug=updated_account.slug,
+            account_slug=upd_acc_display,
         )
         if final_pages:
             async with sync_lock:
                 await _sync_trace_pages(final_pages, is_final=True)
-            # Delete any trailing trace messages that only held the temporary live draft preview
             if len(trace_msgs) > len(final_pages):
                 extra_msgs = trace_msgs[len(final_pages) :]
                 del trace_msgs[len(final_pages) :]
                 for extra_msg in extra_msgs:
-                    try:
+                    with contextlib.suppress(RPCError):
                         await extra_msg.delete()
-                    except RPCError:
-                        try:
-                            await extra_msg.edit(buttons=None)
-                        except RPCError as edit_exc:
-                            logger.debug("Could not clear extra draft page", error=str(edit_exc))
         else:
             for msg in trace_msgs:
-                try:
+                with contextlib.suppress(RPCError):
                     await msg.delete()
-                except RPCError as exc:
-                    logger.debug("Could not delete empty status message", error=str(exc))
 
         footer_bar = render_turn_footer(
             lex=lex,
             limits=self._cfg.limits,
             result=result,
             model_slug=updated_topic.model_slug,
-            account_slug=updated_account.slug,
+            account_slug=upd_acc_display,
         )
         body_text = (
             result.response_text.strip()

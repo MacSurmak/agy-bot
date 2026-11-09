@@ -243,6 +243,7 @@ async def run_service(static_config: StaticConfig) -> None:
         settings_repo=settings_repo,
         account_repo=account_repo,
         host_repo=host_repo,
+        cred_repo=cred_repo,
         access_repo=access_repo,
     )
 

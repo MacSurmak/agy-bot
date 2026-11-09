@@ -1,9 +1,7 @@
 import asyncio
 import difflib
-import errno
 import os
-import pty
-import select
+import secrets
 import shlex
 import shutil
 import signal
@@ -373,95 +371,63 @@ class RemoteMountManager:
         await proc.communicate()
         return proc.returncode == 0
 
-    @staticmethod
-    def _run_pty_key_install_sync(
-        resolved_target: str,
-        port: int,
-        connect_timeout: int,
-        remote_install_cmd: str,
-        password: str,
-    ) -> bool:
-        master_fd, slave_fd = pty.openpty()
-        pid = os.fork()
-        if pid == 0:
-            os.close(master_fd)
-            os.setsid()
-            os.dup2(slave_fd, 0)
-            os.dup2(slave_fd, 1)
-            os.dup2(slave_fd, 2)
-            if slave_fd > 2:
-                os.close(slave_fd)
-            child_env = {**os.environ, "LC_ALL": "C"}
-            os.execve(
-                "/usr/bin/ssh",
-                [
-                    "/usr/bin/ssh",
-                    "-o",
-                    "PubkeyAuthentication=no",
-                    "-o",
-                    "PreferredAuthentications=password,keyboard-interactive",
-                    "-o",
-                    "NumberOfPasswordPrompts=1",
-                    "-o",
-                    f"ConnectTimeout={connect_timeout}",
-                    "-o",
-                    "StrictHostKeyChecking=accept-new",
-                    "-p",
-                    str(port),
-                    resolved_target,
-                    remote_install_cmd,
-                ],
-                child_env,
-            )
-
-        os.close(slave_fd)
-        sent_password = False
-        tail = b""
-        try:
-            while True:
-                rlist, _, _ = select.select([master_fd], [], [], 0.1)
-                if not rlist:
-                    wpid, status = os.waitpid(pid, os.WNOHANG)
-                    if wpid == pid:
-                        return os.waitstatus_to_exitcode(status) == 0
-                    continue
-                try:
-                    chunk = os.read(master_fd, 4096)
-                except OSError as exc:
-                    if exc.errno == errno.EIO:
-                        break
-                    raise
-                if not chunk:
-                    break
-                tail = (tail + chunk)[-256:]
-                if not sent_password and (b"password:" in tail.lower()):
-                    os.write(master_fd, (password + "\n").encode("utf-8"))
-                    sent_password = True
-                    tail = b""
-        finally:
-            os.close(master_fd)
-
-        _, final_status = os.waitpid(pid, 0)
-        return os.waitstatus_to_exitcode(final_status) == 0
-
     async def _provision_key_with_password(
         self, resolved_target: str, port: int, password: str
     ) -> bool:
         pub_key = await self.ensure_local_ssh_keypair()
+        self._cfg.paths.runtime_dir.mkdir(parents=True, exist_ok=True)
+        askpass_script = (
+            self._cfg.paths.runtime_dir / f".askpass_{secrets.token_hex(12)}.sh"
+        )
+        script_body = f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(password)}\n"
+        askpass_script.write_text(script_body, encoding="utf-8")
+        os.chmod(askpass_script, 0o700)
+
+        env = {
+            **self._internal_ssh_env(),
+            "SSH_ASKPASS": str(askpass_script),
+            "SSH_ASKPASS_REQUIRE": "force",
+            "DISPLAY": "antigravity:0",
+            "LC_ALL": "C",
+        }
         remote_install_cmd = (
             "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
             f"(grep -qxF {shlex.quote(pub_key)} ~/.ssh/authorized_keys 2>/dev/null || "
             f"printf '%s\\n' {shlex.quote(pub_key)} >> ~/.ssh/authorized_keys) && "
             "chmod 600 ~/.ssh/authorized_keys"
         )
-        return await asyncio.to_thread(
-            self._run_pty_key_install_sync,
-            resolved_target,
-            port,
-            self._cfg.remotes.ssh_connect_timeout_sec,
-            remote_install_cmd,
-            password,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "/usr/bin/ssh",
+                "-o",
+                "ControlMaster=no",
+                "-o",
+                "ControlPath=none",
+                "-o",
+                "PubkeyAuthentication=no",
+                "-o",
+                "PreferredAuthentications=keyboard-interactive,password",
+                "-o",
+                "NumberOfPasswordPrompts=1",
+                "-o",
+                f"ConnectTimeout={self._cfg.remotes.ssh_connect_timeout_sec}",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "-p",
+                str(port),
+                resolved_target,
+                remote_install_cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                start_new_session=True,
+            )
+            await proc.communicate()
+            return proc.returncode == 0
+        finally:
+            if askpass_script.exists():
+                askpass_script.unlink()
 
     async def _request_password_from_owner(self, topic_id: int, target_label: str) -> str:
         if self._on_password_prompt is None:
@@ -512,8 +478,16 @@ class RemoteMountManager:
                     if self._cred_repo is not None:
                         cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
                     return resolved_target, cred
+                if self._cred_repo is not None:
+                    await self._cred_repo.delete_credential(cred_key)
+                cred = None
 
             entered_pass = await self._request_password_from_owner(topic_id, resolved_target)
+            if not await self._provision_key_with_password(resolved_target, port, entered_pass):
+                raise RemoteMountError(
+                    f"Failed to authenticate and install SSH key on '{resolved_target}' with the provided password."
+                )
+
             if self._vault is not None and self._cred_repo is not None:
                 enc = self._vault.encrypt_text(entered_pass)
                 cred = await self._cred_repo.upsert_credential(
@@ -522,16 +496,8 @@ class RemoteMountManager:
                     host_target=host_part,
                     ssh_port=port,
                     encrypted_password=enc,
-                    key_provisioned=False,
+                    key_provisioned=True,
                 )
-
-            if not await self._provision_key_with_password(resolved_target, port, entered_pass):
-                raise RemoteMountError(
-                    f"Failed to authenticate and install SSH key on '{resolved_target}' with the provided password."
-                )
-
-            if self._cred_repo is not None:
-                cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
             return resolved_target, cred
 
     async def authorize_sudo_operation(

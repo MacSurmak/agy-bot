@@ -13,9 +13,12 @@ from antigravity_core.infrastructure.keyring.dbus_profile_mgr import KeyringProf
 
 logger = structlog.get_logger(__name__)
 
-_PERCENT_PATTERN = re.compile(r"(\d{1,3})\s*%")
+_PERCENT_PATTERN: re.Pattern[str] = re.compile(r"(\d{1,3})\s*%")
+_EMAIL_DETECT_RE: re.Pattern[str] = re.compile(
+    r"\b([a-zA-Z0-9_.+-]+@(?:gmail\.com|googlemail\.com|[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+))\b"
+)
 # Universal model slug pattern: lowercase alphanumeric with hyphens/dots, requiring at least one hyphen and at least one digit
-_GENERIC_MODEL_SLUG_RE = re.compile(r"^(?=.*\d)[a-z0-9]+(?:-[a-z0-9.]+)+$")
+_GENERIC_MODEL_SLUG_RE: re.Pattern[str] = re.compile(r"^(?=.*\d)[a-z0-9]+(?:-[a-z0-9.]+)+$")
 _IGNORED_HEADER_WORDS: frozenset[str] = frozenset(
     {"model", "models", "available", "name", "slug", "id", "default", "provider", "status"}
 )
@@ -231,10 +234,14 @@ class AgyCliInspector:
             else (min(all_pcts) if all_pcts else 100)
         )
 
+        email_match = _EMAIL_DETECT_RE.search(raw_output)
+        detected_email = email_match.group(1).lower() if email_match is not None else ""
+
         return {
             "buckets": structured_buckets,
             "min_remaining_pct": min_remaining_pct,
             "parsed_percentages": all_pcts,
+            "detected_email": detected_email,
             "raw_report": raw_output[:1500],
         }
 

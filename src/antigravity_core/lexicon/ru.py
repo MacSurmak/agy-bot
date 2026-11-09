@@ -92,13 +92,13 @@ RU_LEXICON = UiLexicon(
     dashboard_account_backup_ok="🔒 Бэкап Fernet OK",
     dashboard_account_backup_missing="⚠️ Нет токена",
     dashboard_account_item="  • {status_badge} `{slug}` ({email_label}){default_badge} — {quota_str} | {backup_badge}",
-    dashboard_hosts_header="\n🖥 **Удаленные хосты (SSHFS `auto_cache`):**",
+    dashboard_hosts_header="\n🖥 **Удалённые серверы и ключи SSH:**",
     dashboard_hosts_empty=(
-        "  • Пока не добавлены (используйте MCP `register_remote_host` или `/host-onboarding`)."
+        "  • Пока нет сохранённых серверов (подключитесь к любому `user@host` в рабочем топике)."
     ),
-    dashboard_host_mounted_badge="🟢 Смонтирован",
-    dashboard_host_unmounted_badge="🔴 Отключен",
-    dashboard_host_item="  • `{alias}` (`{ssh_user}@{hostname_or_ip}:{ssh_port}`) → `{local_mount_path}` [{m_badge}]",
+    dashboard_host_mounted_badge="🟢 Ключ + Sudo OK",
+    dashboard_host_unmounted_badge="🔑 Ожидает входа",
+    dashboard_host_item="  • `{alias}` (`{ssh_user}@{hostname_or_ip}:{ssh_port}`) [{m_badge}]",
     dashboard_tasks_header="\n⏰ **Активные задачи планировщика:** `{count}`",
     dashboard_task_item="  • `{short_id}` [Топик `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
     dashboard_sensors_header="\n📡 **Активные датчики (Event Sensors):** `{count}`",
@@ -124,7 +124,7 @@ RU_LEXICON = UiLexicon(
     btn_cp_new_topic="➕ Создать топик",
     btn_cp_auth_menu="🔑 Авторизовать / Добавить аккаунт",
     btn_cp_switch_default_acc="🔀 Сменить основной аккаунт",
-    btn_cp_remount_hosts="🔌 Перемонтировать SSHFS",
+    btn_cp_remount_hosts="🖥 Серверы и Пароли SSH",
     btn_cp_tasks_menu="⏰ Расписания и Таймеры",
     btn_cp_settings_menu="⚙️ Настройки",
     btn_cp_show_ssh_key="🔑 SSH-ключ бота",

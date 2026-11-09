@@ -349,9 +349,20 @@ class AccountRepository:
             await session.flush()
             return _map_account(target)
 
+    async def update_email_label(self, account_id: int, email_label: str) -> GoogleAccount:
+        async with self._db.session() as session:
+            stmt = select(GoogleAccountRow).where(GoogleAccountRow.id == account_id)
+            row = (await session.scalars(stmt)).first()
+            if row is None:
+                raise DatabaseIntegrityError(f"GoogleAccount id={account_id} does not exist.")
+            row.email_label = email_label.strip()
+            await session.flush()
+            return _map_account(row)
+
     async def update_token_backup(self, account_id: int, encrypted_token: bytes) -> GoogleAccount:
         async with self._db.session() as session:
-            row = await session.get(GoogleAccountRow, account_id)
+            stmt = select(GoogleAccountRow).where(GoogleAccountRow.id == account_id)
+            row = (await session.scalars(stmt)).first()
             if row is None:
                 raise DatabaseIntegrityError(f"GoogleAccount id={account_id} does not exist.")
             row.encrypted_token_backup = encrypted_token
@@ -503,6 +514,15 @@ class SshCredentialRepository:
             row.updated_at = datetime.now(tz=UTC)
             await session.flush()
             return _map_ssh_credential(row)
+
+    async def delete_credential(self, credential_key: str) -> None:
+        async with self._db.session() as session:
+            await session.execute(
+                delete(SshCredentialRow).where(
+                    SshCredentialRow.credential_key == credential_key
+                )
+            )
+            await session.flush()
 
 
 class TopicRepository:

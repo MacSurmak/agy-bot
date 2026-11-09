@@ -15,6 +15,7 @@ from antigravity_core.application.sensor_service import EventSensorService
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import ExecutionMode, TopicKind, UserRole
+from antigravity_core.domain.models import RemoteHost
 from antigravity_core.infrastructure.agy_runtime.cli_inspector import AgyCliInspector
 from antigravity_core.infrastructure.agy_runtime.environment_bootstrap import (
     AgyEnvironmentBootstrapper,
@@ -26,6 +27,7 @@ from antigravity_core.infrastructure.database.repositories import (
     AccountRepository,
     RemoteHostRepository,
     SettingsRepository,
+    SshCredentialRepository,
 )
 from antigravity_core.infrastructure.keyring.dbus_profile_mgr import (
     KeyringProfileManager,
@@ -78,6 +80,7 @@ class ControlPanelUI:
         settings_repo: SettingsRepository,
         account_repo: AccountRepository,
         host_repo: RemoteHostRepository,
+        cred_repo: SshCredentialRepository,
         access_repo: AccessControlRepository,
     ) -> None:
         self._client = client
@@ -95,6 +98,7 @@ class ControlPanelUI:
         self._settings_repo = settings_repo
         self._account_repo = account_repo
         self._host_repo = host_repo
+        self._cred_repo = cred_repo
         self._access_repo = access_repo
         self._state: _ControlPanelInteractiveState | None = None
 
@@ -159,9 +163,39 @@ class ControlPanelUI:
     async def _build_dashboard_text(self) -> tuple[UiLexicon, str]:
         accounts = await self._account_repo.list_accounts()
         hosts = await self._host_repo.list_hosts()
-        mount_statuses = {
-            h.alias: self._mount_mgr.is_mounted(Path(h.local_mount_path)) for h in hosts
-        }
+        creds = await self._cred_repo.list_credentials()
+        known_keys = {f"{h.ssh_user}@{h.alias}:{h.ssh_port}" for h in hosts}
+        combined_hosts = list(hosts)
+        mount_statuses: dict[str, bool] = {}
+
+        for h in hosts:
+            k = f"{h.ssh_user}@{h.alias}:{h.ssh_port}"
+            matched_cred = next(
+                (c for c in creds if c.credential_key == k or c.host_target == h.alias),
+                None,
+            )
+            mount_statuses[h.alias] = (
+                matched_cred.key_provisioned if matched_cred is not None else True
+            )
+
+        for idx, c in enumerate(creds, start=1000):
+            if c.credential_key not in known_keys:
+                combined_hosts.append(
+                    RemoteHost(
+                        id=idx,
+                        alias=c.credential_key,
+                        hostname_or_ip=c.host_target,
+                        ssh_port=c.ssh_port,
+                        ssh_user=c.ssh_user,
+                        remote_root_path="/",
+                        local_mount_path=f"{c.ssh_user}@{c.host_target}:/",
+                        rule_file_path="",
+                        auto_mount_enabled=False,
+                        jump_host=None,
+                    )
+                )
+                mount_statuses[c.credential_key] = c.key_provisioned
+
         pool_snapshots = await self._pool.get_pool_snapshots()
         tasks = await self._scheduler.list_tasks(topic_id=None)
         sensors = await self._sensors.list_sensors(topic_id=None)
@@ -172,7 +206,7 @@ class ControlPanelUI:
             lex=lex,
             limits=self._cfg.limits,
             accounts=accounts,
-            hosts=hosts,
+            hosts=combined_hosts,
             mount_statuses=mount_statuses,
             pool_snapshots=pool_snapshots,
             tasks=tasks,
@@ -217,11 +251,13 @@ class ControlPanelUI:
             await event.answer(lex.cp_toast_probing_quotas)
             accounts = await self._account_repo.list_enabled_accounts()
             for acc in accounts:
-                try:
-                    q_info = await self._inspector.fetch_account_quota(acc)
-                    await self._account_repo.update_quota_snapshot(acc.id, q_info)
-                except Exception as exc:
-                    logger.warning("Quota probe failed", account=acc.slug, error=str(exc))
+                await self._keyring_mgr.backup_account_token_to_db(acc)
+                q_info = await self._inspector.fetch_account_quota(acc)
+                if "detected_email" in q_info and q_info["detected_email"]:
+                    await self._account_repo.update_email_label(
+                        acc.id, str(q_info["detected_email"])
+                    )
+                await self._account_repo.update_quota_snapshot(acc.id, q_info)
             lex, text = await self._build_dashboard_text()
             await self._safe_edit_event(event, text, build_control_panel_keyboard(lex))
             return
@@ -232,11 +268,26 @@ class ControlPanelUI:
             wide_prompt = "\n".join(
                 [format_wide_header_block(prompt_lines[0]), *prompt_lines[1:]]
             )
+            kb = build_account_auth_keyboard(lex, accounts)
+            kb.insert(
+                -1,
+                [Button.inline("✏️ Задать почту / добавить профиль", b"cp:manual_acc_email")],
+            )
             await self._safe_edit_event(
                 event,
                 wide_prompt,
-                build_account_auth_keyboard(lex, accounts),
+                kb,
             )
+            return
+
+        if data_str == "cp:manual_acc_email":
+            self._state = _ControlPanelInteractiveState(
+                mode="await_new_account",
+                setting_key=None,
+                pending_oauth=None,
+            )
+            await event.respond(lex.cp_register_new_acc_prompt)
+            await event.answer()
             return
 
         if data_str == "cp:register_new_acc":
@@ -336,22 +387,14 @@ class ControlPanelUI:
             return
 
         if data_str == "cp:remount_hosts":
-            await event.answer(lex.cp_toast_remounting_hosts)
-            hosts = await self._host_repo.list_hosts()
-            for host in hosts:
-                if host.auto_mount_enabled:
-                    try:
-                        await self._mount_mgr.ensure_mounted(host)
-                        await self._mount_mgr.sync_host_telemetry_and_rules(host)
-                    except Exception as exc:
-                        max_err = self._cfg.limits.error_summary_max_chars
-                        err_short = str(exc)[:max_err]
-                        await event.respond(
-                            lex.cp_remount_failed.format(alias=host.alias, error=err_short)
-                        )
-            self._bootstrapper.sync_global_agents_md_host_map(hosts)
-            lex, text = await self._build_dashboard_text()
-            await self._safe_edit_event(event, text, build_control_panel_keyboard(lex))
+            await self._render_hosts_and_credentials_menu(event, lex)
+            return
+
+        if data_str.startswith("cp:del_cred:"):
+            cred_key = data_str.split(":", 2)[2]
+            await self._cred_repo.delete_credential(cred_key)
+            await event.answer(f"Пароль для {cred_key} сброшен.")
+            await self._render_hosts_and_credentials_menu(event, lex)
             return
 
         if data_str == "cp:new_topic":
@@ -458,6 +501,12 @@ class ControlPanelUI:
 
         slug = parts[0].strip()
         email_label = parts[1].strip()
+        existing_acc = await self._account_repo.get_by_slug(slug)
+        if existing_acc is not None:
+            await self._account_repo.update_email_label(existing_acc.id, email_label)
+            await self.render_and_pin_dashboard(recreate_at_bottom=True)
+            return
+
         existing = await self._account_repo.list_accounts()
         is_first = len(existing) == 0
         priority = len(existing) + 1
@@ -543,6 +592,32 @@ class ControlPanelUI:
         self, topic_id: int, assigned_dir: str
     ) -> None:
         await self._workspace_ui.initialize_created_topic(topic_id, assigned_dir)
+
+    async def _render_hosts_and_credentials_menu(
+        self, event: events.CallbackQuery.Event, lex: UiLexicon
+    ) -> None:
+        creds = await self._cred_repo.list_credentials()
+        hosts = await self._host_repo.list_hosts()
+        lines = [
+            format_wide_header_block("🖥 Серверы и сохранённые пароли SSH / Sudo"),
+            "Нажмите на сервер ниже, чтобы сбросить его сохранённый пароль (при следующем обращении бот запросит новый пароль в топике):",
+        ]
+        rows: list[list[Button]] = []
+        if not creds and not hosts:
+            lines.append("\n• Сохранённых учётных записей пока нет.")
+        for c in creds:
+            status_icon = "🟢 Ключ OK" if c.key_provisioned else "🔑 Только пароль"
+            lines.append(f"• `{c.credential_key}` — {status_icon}")
+            rows.append(
+                [
+                    Button.inline(
+                        f"🗑 Сбросить пароль: {c.credential_key}",
+                        f"cp:del_cred:{c.credential_key}".encode("utf-8"),
+                    )
+                ]
+            )
+        rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
+        await self._safe_edit_event(event, "\n".join(lines), rows)
 
     async def _render_settings_menu(
         self, event: events.CallbackQuery.Event, lex: UiLexicon
