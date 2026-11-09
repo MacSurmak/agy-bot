@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -116,11 +117,15 @@ class CoreIpcServer:
             response = {"ok": False, "error": str(exc)}
 
         try:
-            writer.write((json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8"))
-            await writer.drain()
+            with contextlib.suppress(ConnectionResetError, BrokenPipeError, OSError):
+                writer.write(
+                    (json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8")
+                )
+                await writer.drain()
         finally:
             writer.close()
-            await writer.wait_closed()
+            with contextlib.suppress(ConnectionResetError, BrokenPipeError, OSError):
+                await writer.wait_closed()
 
     async def _dispatch(
         self, method: str, topic_id: int, params: dict[str, str | int | bool]
@@ -134,11 +139,17 @@ class CoreIpcServer:
             ssh_user = str(params["ssh_user"]) if "ssh_user" in params else ""
             host_alias = str(params["host_alias"]) if "host_alias" in params else ""
             port = int(params["port"]) if "port" in params else 22
+            jump_host = (
+                str(params["jump_host"]).strip() if "jump_host" in params else ""
+            )
             raw_target = f"{ssh_user}@{host_alias}" if ssh_user else host_alias
-            resolved_target, _cred = await self._mount_mgr.ensure_target_access(
-                topic_id=topic_id,
-                raw_target=raw_target,
-                explicit_port=port,
+            resolved_target, _cred = (
+                await self._mount_mgr.ensure_target_access_with_jump(
+                    topic_id=topic_id,
+                    raw_target=raw_target,
+                    explicit_port=port,
+                    jump_host=jump_host,
+                )
             )
             return {"resolved_target": resolved_target}
 
@@ -237,10 +248,39 @@ class CoreIpcServer:
             }
 
         if method == "send_file_to_telegram":
+            raw_file_path = str(params["file_path"]).strip()
+            caption_str = str(params["caption"]) if "caption" in params else ""
+            if raw_file_path.startswith("/ssh:"):
+                topic = await self._topic_repo.get_topic_strict(topic_id)
+                ws_dir = Path(topic.workspace_path)
+                staged_info = await self._mount_mgr.stage_remote_file(
+                    topic_id=topic_id,
+                    workspace_dir=ws_dir,
+                    raw_path=raw_file_path,
+                    for_write=False,
+                )
+                local_path_to_send = (
+                    staged_info["local_path"]
+                    if "local_path" in staged_info
+                    else raw_file_path
+                )
+                try:
+                    return await self._media.send_file_to_topic(
+                        topic_id=topic_id,
+                        file_path_str=local_path_to_send,
+                        caption=caption_str,
+                    )
+                finally:
+                    await self._mount_mgr.commit_remote_file(
+                        topic_id=topic_id,
+                        workspace_dir=ws_dir,
+                        raw_path=raw_file_path,
+                        cleanup_only=True,
+                    )
             return await self._media.send_file_to_topic(
                 topic_id=topic_id,
-                file_path_str=str(params["file_path"]),
-                caption=str(params.get("caption", "")),
+                file_path_str=raw_file_path,
+                caption=caption_str,
             )
 
         if method == "schedule_task":

@@ -21,7 +21,7 @@ Every conversation topic in Telegram corresponds to an isolated workspace.
 ## 2. Native Telegram, Event Sensor & Temporal Scheduler MCP Tools (`telegram-core`)
 
 Never invent text tags like `[SEND_FILE: ...]`, never use the built-in `schedule` tool, and never create system timers via `crontab`, `systemctl`, or long `sleep`. Always call your native MCP tools from server `telegram-core`:
-- `send_file_to_telegram(file_path, caption)` — sends any local or `/mnt/remotes/...` file (up to 2 GB) directly into the current Telegram topic.
+- `send_file_to_telegram(file_path, caption)` — sends any local file OR remote TRAMP file (`/ssh:user@host:/path` or `/ssh:user@jump|ssh:user@target:/path`, up to 2 GB) directly into the current Telegram topic without needing `scp`.
 - `create_sensor(name, command, instruction_prompt, sensor_kind, trigger_condition, poll_interval_sec, match_pattern, action_command, wake_mode, one_shot, cooldown_sec, notify_policy, keep_conversation_context)` — **Two-Stage Zero-Token Event Watcher & Reflex Engine!**
   - Stage 1 (Detector): Monitors `command` (`POLL_COMMAND` or real-time `STREAM_WATCH`) consuming 0 LLM tokens.
   - Stage 2 (Optional Millisecond Reflex `action_command`): If `action_command` is provided, the bot executes it within 10ms of the trigger (e.g. to capture an instant crash dump, `nvidia-smi`, `/proc/interrupts`, or restart a service) *before* waking you up!

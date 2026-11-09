@@ -1,7 +1,9 @@
 import json
 import os
 import re
+import shlex
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -119,6 +121,73 @@ def _is_remote_tramp_or_scp_path(target_path: str) -> bool:
     return ":" in target_path and not target_path.startswith("/")
 
 
+def _pre_onboard_ssh_command(cmd_line: str) -> tuple[bool, str]:
+    """Resolves ssh targets in PreToolUse before run_command starts its background timer."""
+    if "ssh " not in f" {cmd_line} ":
+        return True, ""
+
+    segments = [
+        seg.strip()
+        for seg in re.split(r"(?:&&|\|\||;|\|)", cmd_line)
+        if seg.strip()
+    ]
+    for seg in segments:
+        tokens = (
+            shlex.split(seg, posix=True)
+            if "'" not in seg and '"' not in seg
+            else seg.split()
+        )
+        if not tokens:
+            continue
+        first_bin = Path(tokens[0]).name
+        if first_bin != "ssh" or len(tokens) < 2:
+            continue
+
+        ssh_args = tokens[1:]
+        proc = subprocess.run(
+            ["/usr/bin/ssh", "-G", *ssh_args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            env=dict(os.environ),
+            timeout=5.0,
+            check=False,
+        )
+        if proc.returncode != 0:
+            continue
+
+        ssh_user = ""
+        hostname = ""
+        port = 22
+        proxy_jump = ""
+        for line in proc.stdout.splitlines():
+            parts = line.strip().split(maxsplit=1)
+            if len(parts) == 2:
+                if parts[0] == "user":
+                    ssh_user = parts[1]
+                elif parts[0] == "hostname":
+                    hostname = parts[1]
+                elif parts[0] == "port" and parts[1].isdigit():
+                    port = int(parts[1])
+                elif parts[0] == "proxyjump" and parts[1].lower() != "none":
+                    proxy_jump = parts[1]
+
+        if hostname:
+            ok, err_msg = _ipc_call(
+                "ensure_ssh_target_ready",
+                {
+                    "ssh_user": ssh_user,
+                    "hostname": hostname,
+                    "host_alias": hostname,
+                    "port": port,
+                    "jump_host": proxy_jump,
+                },
+            )
+            if not ok:
+                return False, err_msg
+    return True, ""
+
+
 def _handle_post_tool_use(raw_stdin: str) -> None:
     if not raw_stdin.strip():
         sys.stdout.write("{}\n")
@@ -233,6 +302,13 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
                     }
                 )
                 + "\n"
+            )
+            return
+
+        ok_ssh, err_ssh = _pre_onboard_ssh_command(cmd_line)
+        if not ok_ssh:
+            sys.stdout.write(
+                json.dumps({"decision": "deny", "reason": err_ssh}) + "\n"
             )
             return
 

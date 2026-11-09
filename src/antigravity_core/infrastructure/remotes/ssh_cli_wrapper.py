@@ -74,7 +74,9 @@ def _ipc_call(
     return True, {str(k): str(v) for k, v in res.items() if v is not None}, ""
 
 
-def _resolve_target_via_openssh(ssh_argv: list[str]) -> tuple[str, str, int] | None:
+def _resolve_target_via_openssh(
+    ssh_argv: list[str],
+) -> tuple[str, str, int, str] | None:
     if not ssh_argv:
         return None
     r_fd, w_fd = os.pipe()
@@ -107,6 +109,7 @@ def _resolve_target_via_openssh(ssh_argv: list[str]) -> tuple[str, str, int] | N
     ssh_user = ""
     hostname = ""
     port = 22
+    proxy_jump = ""
     for line in out_text.splitlines():
         parts = line.strip().split(maxsplit=1)
         if len(parts) == 2:
@@ -116,10 +119,12 @@ def _resolve_target_via_openssh(ssh_argv: list[str]) -> tuple[str, str, int] | N
                 hostname = parts[1]
             elif parts[0] == "port" and parts[1].isdigit():
                 port = int(parts[1])
+            elif parts[0] == "proxyjump" and parts[1].lower() != "none":
+                proxy_jump = parts[1]
 
     if not hostname:
         return None
-    return ssh_user, hostname, port
+    return ssh_user, hostname, port, proxy_jump
 
 
 def _contains_sudo_prompt(buffer_tail: bytes) -> bool:
@@ -134,7 +139,7 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
     if resolved is None:
         os.execv("/usr/bin/ssh", ["/usr/bin/ssh", *ssh_argv])
 
-    ssh_user, hostname, port = resolved
+    ssh_user, hostname, port, proxy_jump = resolved
     target_label = f"{ssh_user}@{hostname}" if ssh_user else hostname
 
     ok_ready, _res_ready, err_ready = _ipc_call(
@@ -144,6 +149,7 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
             "hostname": hostname,
             "host_alias": hostname,
             "port": port,
+            "jump_host": proxy_jump,
         },
     )
     if not ok_ready:

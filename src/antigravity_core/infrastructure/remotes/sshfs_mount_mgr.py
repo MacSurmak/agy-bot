@@ -39,6 +39,7 @@ class RemoteFileSpec:
     remote_path: str
     local_stage_path: Path
     stage_root_dir: Path
+    jump_host: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,9 +351,13 @@ class RemoteMountManager:
         cred_key = f"{parsed_user}@{host_part}:{parsed_port}"
         return parsed_user, host_part, parsed_port, cred_key
 
-    async def _test_batch_key_auth(self, resolved_target: str, port: int) -> bool:
+    async def _test_batch_key_auth(
+        self, resolved_target: str, port: int, jump_host: str
+    ) -> bool:
+        jump_args = ["-J", jump_host] if jump_host else []
         proc = await asyncio.create_subprocess_exec(
             "/usr/bin/ssh",
+            *jump_args,
             "-o",
             "BatchMode=yes",
             "-o",
@@ -372,7 +377,7 @@ class RemoteMountManager:
         return proc.returncode == 0
 
     async def _provision_key_with_password(
-        self, resolved_target: str, port: int, password: str
+        self, resolved_target: str, port: int, password: str, jump_host: str
     ) -> bool:
         pub_key = await self.ensure_local_ssh_keypair()
         self._cfg.paths.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -396,9 +401,11 @@ class RemoteMountManager:
             f"printf '%s\\n' {shlex.quote(pub_key)} >> ~/.ssh/authorized_keys) && "
             "chmod 600 ~/.ssh/authorized_keys"
         )
+        jump_args = ["-J", jump_host] if jump_host else []
         try:
             proc = await asyncio.create_subprocess_exec(
                 "/usr/bin/ssh",
+                *jump_args,
                 "-o",
                 "ControlMaster=no",
                 "-o",
@@ -453,6 +460,29 @@ class RemoteMountManager:
     async def ensure_target_access(
         self, topic_id: int, raw_target: str, explicit_port: int
     ) -> tuple[str, SshCredential | None]:
+        return await self.ensure_target_access_with_jump(
+            topic_id=topic_id,
+            raw_target=raw_target,
+            explicit_port=explicit_port,
+            jump_host="",
+        )
+
+    async def ensure_target_access_with_jump(
+        self,
+        topic_id: int,
+        raw_target: str,
+        explicit_port: int,
+        jump_host: str,
+    ) -> tuple[str, SshCredential | None]:
+        clean_jump = jump_host.strip()
+        if clean_jump:
+            await self.ensure_target_access_with_jump(
+                topic_id=topic_id,
+                raw_target=clean_jump,
+                explicit_port=22,
+                jump_host="",
+            )
+
         ssh_user, host_part, port, cred_key = await self._resolve_ssh_target_details(
             raw_target, explicit_port
         )
@@ -467,14 +497,16 @@ class RemoteMountManager:
                 if self._cred_repo is not None
                 else None
             )
-            if await self._test_batch_key_auth(resolved_target, port):
+            if await self._test_batch_key_auth(resolved_target, port, clean_jump):
                 if cred is not None and not cred.key_provisioned and self._cred_repo is not None:
                     cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
                 return resolved_target, cred
 
             if cred is not None and self._vault is not None:
                 saved_pass = self._vault.decrypt_text(cred.encrypted_password)
-                if await self._provision_key_with_password(resolved_target, port, saved_pass):
+                if await self._provision_key_with_password(
+                    resolved_target, port, saved_pass, clean_jump
+                ):
                     if self._cred_repo is not None:
                         cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
                     return resolved_target, cred
@@ -483,7 +515,9 @@ class RemoteMountManager:
                 cred = None
 
             entered_pass = await self._request_password_from_owner(topic_id, resolved_target)
-            if not await self._provision_key_with_password(resolved_target, port, entered_pass):
+            if not await self._provision_key_with_password(
+                resolved_target, port, entered_pass, clean_jump
+            ):
                 raise RemoteMountError(
                     f"Failed to authenticate and install SSH key on '{resolved_target}' with the provided password."
                 )
@@ -579,10 +613,14 @@ class RemoteMountManager:
     ) -> RemoteFileSpec | None:
         cleaned = raw_path.strip()
         is_root_tramp = False
+        jump_host = ""
 
         if cleaned.startswith("/ssh:"):
             is_root_tramp = True
             remainder = cleaned[len("/ssh:") :]
+            if "|ssh:" in remainder:
+                jump_part, remainder = remainder.split("|ssh:", 1)
+                jump_host = jump_part.strip()
         else:
             ws_str = str(workspace_dir.resolve())
             if cleaned.startswith(ws_str + "/"):
@@ -628,6 +666,7 @@ class RemoteMountManager:
             remote_path=remote_path,
             local_stage_path=local_stage_path,
             stage_root_dir=stage_root_dir,
+            jump_host=jump_host,
         )
 
     @staticmethod
@@ -649,10 +688,14 @@ class RemoteMountManager:
         if spec is None:
             return {"status": "local"}
 
-        resolved_target, _cred = await self.ensure_target_access(
-            topic_id, spec.raw_target, spec.ssh_port
+        resolved_target, _cred = await self.ensure_target_access_with_jump(
+            topic_id=topic_id,
+            raw_target=spec.raw_target,
+            explicit_port=spec.ssh_port,
+            jump_host=spec.jump_host,
         )
         qpath = self._quote_remote_path(spec.remote_path)
+        jump_args = ["-J", spec.jump_host] if spec.jump_host else []
 
         probe_cmd = (
             f"if [ -d {qpath} ]; then echo AGY_KIND_DIR; ls -la {qpath}; "
@@ -668,6 +711,7 @@ class RemoteMountManager:
         )
         proc = await asyncio.create_subprocess_exec(
             "/usr/bin/ssh",
+            *jump_args,
             "-o",
             "BatchMode=yes",
             resolved_target,
@@ -694,6 +738,16 @@ class RemoteMountManager:
 
         if header == "AGY_KIND_DIR":
             spec.local_stage_path.mkdir(parents=True, exist_ok=True)
+            for raw_entry in body_bytes.decode("utf-8", errors="replace").splitlines():
+                parts = raw_entry.split()
+                if len(parts) >= 9:
+                    entry_name = " ".join(parts[8:])
+                    if entry_name not in (".", "..") and "/" not in entry_name:
+                        entry_path = spec.local_stage_path / entry_name
+                        if parts[0].startswith("d"):
+                            entry_path.mkdir(parents=True, exist_ok=True)
+                        else:
+                            entry_path.write_bytes(b"")
             return {"status": "staged_dir", "local_path": str(spec.local_stage_path)}
 
         existed = True
@@ -777,10 +831,14 @@ class RemoteMountManager:
             ):
                 return {"status": "unchanged"}
 
-            resolved_target, _cred = await self.ensure_target_access(
-                topic_id, spec.raw_target, spec.ssh_port
+            resolved_target, _cred = await self.ensure_target_access_with_jump(
+                topic_id=topic_id,
+                raw_target=spec.raw_target,
+                explicit_port=spec.ssh_port,
+                jump_host=spec.jump_host,
             )
             qpath = self._quote_remote_path(spec.remote_path)
+            jump_args = ["-J", spec.jump_host] if spec.jump_host else []
             needs_sudo = baseline.requires_sudo_write if baseline is not None else False
 
             if not needs_sudo:
@@ -792,6 +850,7 @@ class RemoteMountManager:
                 )
                 w_proc = await asyncio.create_subprocess_exec(
                     "/usr/bin/ssh",
+                    *jump_args,
                     "-o",
                     "BatchMode=yes",
                     resolved_target,
