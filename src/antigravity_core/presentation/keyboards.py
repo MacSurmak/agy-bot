@@ -190,6 +190,11 @@ def build_topic_header_keyboard(lex: UiLexicon, topic: ForumTopic) -> list[list[
         if topic.execution_mode == ExecutionMode.FULL_ACCESS
         else lex.btn_ws_mode_plan_to_full
     )
+    sudo_label = (
+        lex.btn_ws_sudo_cb_on_to_off
+        if topic.sudo_carte_blanche
+        else lex.btn_ws_sudo_cb_off_to_on
+    )
     return [
         [
             Button.inline(lex.btn_ws_new_session, f"ws:new:{tid}".encode("ascii")),
@@ -199,11 +204,37 @@ def build_topic_header_keyboard(lex: UiLexicon, topic: ForumTopic) -> list[list[
             Button.inline(mode_label, f"ws:toggle_mode:{tid}".encode("ascii")),
         ],
         [
+            Button.inline(sudo_label, f"ws:toggle_sudo:{tid}".encode("ascii")),
+        ],
+        [
             Button.inline(lex.btn_ws_models, f"ws:models:{tid}".encode("ascii")),
             Button.inline(lex.btn_ws_switch_account, f"ws:accounts:{tid}".encode("ascii")),
         ],
         [
             Button.inline(lex.btn_ws_archive_topic, f"ws:archive:{tid}".encode("ascii")),
+        ],
+    ]
+
+
+def build_sudo_approval_keyboard(
+    lex: UiLexicon, topic_id: int, request_id: str
+) -> list[list[Button]]:
+    return [
+        [
+            Button.inline(
+                lex.btn_sudo_approve_once,
+                f"ws:sudo_ok:{topic_id}:{request_id}".encode("ascii"),
+            ),
+            Button.inline(
+                lex.btn_sudo_reject,
+                f"ws:sudo_no:{topic_id}:{request_id}".encode("ascii"),
+            ),
+        ],
+        [
+            Button.inline(
+                lex.btn_sudo_grant_carte_blanche,
+                f"ws:sudo_cb:{topic_id}:{request_id}".encode("ascii"),
+            ),
         ],
     ]
 

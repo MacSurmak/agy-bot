@@ -19,6 +19,7 @@ EN_LEXICON = UiLexicon(
         "🧠 **Model:** `{model_slug}`{effort_str}\n"
         "👤 **Account:** `{account_slug}` ({email_label})\n"
         "🛡 **Permissions:** {mode_str}\n"
+        "🔑 **Sudo Mode:** {sudo_str}\n"
         "📡 **Worker:** {worker_str}"
     ),
     # New Session Divider
@@ -295,4 +296,33 @@ EN_LEXICON = UiLexicon(
     ),
     sensor_trigger_failed="❌ **Sensor Trigger Failed (`{name}`):**\n`{error}`",
     topic_archive_prefix="🗄 [Archive] ",
+    topic_card_sudo_cb_on="🔓 Full Carte Blanche (autonomous 24/7)",
+    topic_card_sudo_cb_off="🔒 On-Demand (button confirmation)",
+    btn_ws_sudo_cb_on_to_off="🔓 Sudo: Carte Blanche ON ⇄ On-Demand",
+    btn_ws_sudo_cb_off_to_on="🔒 Sudo: On-Demand ⇄ Grant Carte Blanche",
+    ws_toast_sudo_cb_on="Full Sudo Carte Blanche enabled for this topic.",
+    ws_toast_sudo_cb_off="Sudo Carte Blanche disabled (button confirmation active).",
+    ssh_password_prompt_card=(
+        "🔑 **First-Time Access to `{target}`**\n"
+        "Send the password for `{target}` as your next message in this topic.\n"
+        "• Your message will be **immediately deleted** from chat (bypassing AI).\n"
+        "• Password will be encrypted in PostgreSQL (`Fernet`) and the SSH key will be installed automatically."
+    ),
+    ssh_password_accepted_card=(
+        "✅ **Password for `{target}` received and encrypted!**\n"
+        "Message deleted from chat, installing SSH key and resuming operation..."
+    ),
+    sudo_approval_prompt_card=(
+        "🛡 **`sudo` Privilege Request on `{target}`**\n"
+        "• **Action:** {action_summary}\n"
+        "```\n{preview}\n```"
+    ),
+    btn_sudo_approve_once="✅ Approve Once (sudo)",
+    btn_sudo_grant_carte_blanche="🔓 Grant Full Carte Blanche",
+    btn_sudo_reject="❌ Reject",
+    sudo_approved_status="✅ **Approved once:** `{action_summary}` on `{target}`.",
+    sudo_carte_blanche_status=(
+        "🔓 **Approved + Full Sudo Carte Blanche enabled** for this topic (`{target}`)."
+    ),
+    sudo_rejected_status="❌ **Rejected by owner:** `{action_summary}` on `{target}`.",
 )

@@ -32,6 +32,7 @@ from antigravity_core.infrastructure.database.repositories import (
     SensorRepository,
     SessionRepository,
     SettingsRepository,
+    SshCredentialRepository,
     TopicRepository,
 )
 from antigravity_core.infrastructure.keyring.dbus_profile_mgr import KeyringProfileManager
@@ -115,6 +116,7 @@ async def run_service(static_config: StaticConfig) -> None:
     settings_repo = SettingsRepository(db_mgr)
     account_repo = AccountRepository(db_mgr)
     host_repo = RemoteHostRepository(db_mgr)
+    cred_repo = SshCredentialRepository(db_mgr)
     topic_repo = TopicRepository(db_mgr)
     session_repo = SessionRepository(db_mgr)
     schedule_repo = ScheduleRepository(db_mgr)
@@ -133,19 +135,15 @@ async def run_service(static_config: StaticConfig) -> None:
     for acc in enabled_accounts:
         await keyring_mgr.ensure_account_bus(acc)
 
-    # Step 4: Ensure local SSH keypair, mount registered SSHFS remote hosts, and sync AGENTS.md host map
+    # Step 4: Ensure local SSH keypair, install native SSH/PTY wrappers, and sync AGENTS.md host map
     mount_mgr = RemoteMountManager(static_config)
+    mount_mgr.install_runtime_wrappers()
     await mount_mgr.ensure_local_ssh_keypair()
     hosts = await host_repo.list_hosts()
     bootstrapper.sync_global_agents_md_host_map(hosts)
     for host in hosts:
+        mount_mgr.write_ssh_config_entry(host)
         mount_mgr.ensure_rule_skeleton(host)
-        if host.auto_mount_enabled:
-            try:
-                await mount_mgr.ensure_mounted(host)
-                asyncio.create_task(mount_mgr.sync_host_telemetry_and_rules(host))
-            except Exception as exc:
-                logger.error("Failed to auto-mount remote host at startup", alias=host.alias, error=str(exc))
 
     # Step 5: Connect Telethon MTProto client
     static_config.telegram.session_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -188,10 +186,19 @@ async def run_service(static_config: StaticConfig) -> None:
         topic_lifecycle=topic_lifecycle,
         cli_inspector=cli_inspector,
         history_reader=history_reader,
+        mount_mgr=mount_mgr,
         settings_repo=settings_repo,
         topic_repo=topic_repo,
         account_repo=account_repo,
         session_repo=session_repo,
+    )
+    mount_mgr.bind_security_gateways(
+        vault=vault,
+        cred_repo=cred_repo,
+        host_repo=host_repo,
+        topic_repo=topic_repo,
+        on_password_prompt=workspace_ui.send_ssh_password_prompt,
+        on_sudo_prompt=workspace_ui.send_sudo_approval_prompt,
     )
 
     scheduler_service = TemporalSchedulerService(
@@ -250,6 +257,7 @@ async def run_service(static_config: StaticConfig) -> None:
         settings_repo=settings_repo,
         access_repo=access_repo,
         media_service=media_service,
+        mount_mgr=mount_mgr,
         batcher=batcher,
         control_panel_ui=control_panel_ui,
         workspace_ui=workspace_ui,

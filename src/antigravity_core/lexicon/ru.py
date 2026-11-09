@@ -19,6 +19,7 @@ RU_LEXICON = UiLexicon(
         "🧠 **Модель:** `{model_slug}`{effort_str}\n"
         "👤 **Аккаунт:** `{account_slug}` ({email_label})\n"
         "🛡 **Права агента:** {mode_str}\n"
+        "🔑 **Режим Sudo:** {sudo_str}\n"
         "📡 **Воркер:** {worker_str}"
     ),
     # New Session Divider
@@ -302,4 +303,33 @@ RU_LEXICON = UiLexicon(
     ),
     sensor_trigger_failed="❌ **Ошибка при срабатывании датчика `{name}`:**\n`{error}`",
     topic_archive_prefix="🗄 [Архив] ",
+    topic_card_sudo_cb_on="🔓 Полный карт-бланш (автономно 24/7)",
+    topic_card_sudo_cb_off="🔒 По запросу (с кнопкой подтверждения)",
+    btn_ws_sudo_cb_on_to_off="🔓 Sudo: Карт-бланш ВКЛ ⇄ По запросу",
+    btn_ws_sudo_cb_off_to_on="🔒 Sudo: По запросу ⇄ Дать карт-бланш",
+    ws_toast_sudo_cb_on="Включен полный карт-бланш Sudo для этого топика.",
+    ws_toast_sudo_cb_off="Карт-бланш Sudo выключен (подтверждение по кнопке).",
+    ssh_password_prompt_card=(
+        "🔑 **Первый вход на сервер `{target}`**\n"
+        "Отправьте пароль для `{target}` следующим сообщением в этот топик.\n"
+        "• Сообщение будет **мгновенно удалено** из чата (в обход ИИ).\n"
+        "• Пароль зашифруется в БД (`Fernet`), а на сервер автоматически пропишется SSH-ключ."
+    ),
+    ssh_password_accepted_card=(
+        "✅ **Пароль для `{target}` получен и зашифрован!**\n"
+        "Сообщение удалено из чата, прописываю SSH-ключ и продолжаю выполнение..."
+    ),
+    sudo_approval_prompt_card=(
+        "🛡 **Запрос привилегий `sudo` на `{target}`**\n"
+        "• **Действие:** {action_summary}\n"
+        "```\n{preview}\n```"
+    ),
+    btn_sudo_approve_once="✅ Разрешить (sudo)",
+    btn_sudo_grant_carte_blanche="🔓 Дать полный карт-бланш",
+    btn_sudo_reject="❌ Отклонить",
+    sudo_approved_status="✅ **Одобрено разово:** `{action_summary}` на `{target}`.",
+    sudo_carte_blanche_status=(
+        "🔓 **Одобрено + включен полный карт-бланш Sudo** для этого топика (`{target}`)."
+    ),
+    sudo_rejected_status="❌ **Отклонено пользователем:** `{action_summary}` на `{target}`.",
 )

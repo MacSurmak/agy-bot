@@ -10,6 +10,7 @@ from antigravity_core.infrastructure.database.repositories import (
     SettingsRepository,
 )
 from antigravity_core.infrastructure.media.mtproto_media import MediaService
+from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
 from antigravity_core.lexicon import get_lexicon
 from antigravity_core.presentation.control_panel_ui import ControlPanelUI
 from antigravity_core.presentation.workspace_topic_ui import WorkspaceTopicUI
@@ -40,6 +41,7 @@ class TelegramEventRouter:
         settings_repo: SettingsRepository,
         access_repo: AccessControlRepository,
         media_service: MediaService,
+        mount_mgr: RemoteMountManager,
         batcher: MessageBatcher,
         control_panel_ui: ControlPanelUI,
         workspace_ui: WorkspaceTopicUI,
@@ -49,6 +51,7 @@ class TelegramEventRouter:
         self._settings_repo = settings_repo
         self._access_repo = access_repo
         self._media = media_service
+        self._mount_mgr = mount_mgr
         self._batcher = batcher
         self._cp_ui = control_panel_ui
         self._ws_ui = workspace_ui
@@ -102,6 +105,12 @@ class TelegramEventRouter:
 
         if topic_id == self._cfg.telegram.control_panel_topic_id:
             await self._cp_ui.handle_text_input(event)
+            return
+
+        if self._mount_mgr.has_pending_password_prompt(topic_id) and raw_text:
+            await message.delete()
+            self._mount_mgr.submit_password_from_telegram(topic_id, raw_text)
+            await self._ws_ui.acknowledge_password_received(topic_id)
             return
 
         if raw_text.startswith("/") and message.media is None:

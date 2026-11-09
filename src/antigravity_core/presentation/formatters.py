@@ -155,6 +155,11 @@ def render_topic_header_card(
         if topic.execution_mode == ExecutionMode.FULL_ACCESS
         else lex.topic_card_mode_read_only
     )
+    sudo_str = (
+        lex.topic_card_sudo_cb_on
+        if topic.sudo_carte_blanche
+        else lex.topic_card_sudo_cb_off
+    )
 
     ttl_min = max(1, worker_ttl_sec // 60)
     worker_str = (
@@ -172,6 +177,7 @@ def render_topic_header_card(
         account_slug=account.slug,
         email_label=account.email_label,
         mode_str=mode_str,
+        sudo_str=sudo_str,
         worker_str=worker_str,
     )
     card_lines = raw_card.splitlines()

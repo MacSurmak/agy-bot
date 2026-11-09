@@ -26,6 +26,7 @@ from antigravity_core.infrastructure.database.repositories import (
     SettingsRepository,
     TopicRepository,
 )
+from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
 from antigravity_core.lexicon import get_lexicon
 from antigravity_core.presentation.formatters import (
     build_final_execution_trace_pages,
@@ -42,8 +43,8 @@ from antigravity_core.presentation.formatters import (
 from antigravity_core.presentation.keyboards import (
     build_live_progress_keyboard,
     build_model_picker_keyboard,
-    build_new_topic_folder_confirm_keyboard,
     build_session_history_keyboard,
+    build_sudo_approval_keyboard,
     build_topic_account_picker_keyboard,
     build_topic_header_keyboard,
     build_turn_response_keyboard,
@@ -65,6 +66,7 @@ class WorkspaceTopicUI:
         topic_lifecycle: TopicLifecycleService,
         cli_inspector: AgyCliInspector,
         history_reader: AgyHistoryReader,
+        mount_mgr: RemoteMountManager,
         settings_repo: SettingsRepository,
         topic_repo: TopicRepository,
         account_repo: AccountRepository,
@@ -77,11 +79,59 @@ class WorkspaceTopicUI:
         self._lifecycle = topic_lifecycle
         self._inspector = cli_inspector
         self._history_reader = history_reader
+        self._mount_mgr = mount_mgr
         self._settings_repo = settings_repo
         self._topic_repo = topic_repo
         self._account_repo = account_repo
         self._session_repo = session_repo
         self._awaiting_custom_dir_topics: set[int] = set()
+        self._password_prompt_msgs: dict[int, tuple[str, int]] = {}
+        self._sudo_prompt_meta: dict[str, tuple[str, str]] = {}
+
+    async def send_ssh_password_prompt(self, topic_id: int, target_label: str) -> None:
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
+        sent = await self._client.send_message(
+            entity=self._cfg.telegram.forum_chat_id,
+            message=lex.ssh_password_prompt_card.format(target=target_label),
+            reply_to=topic_id,
+        )
+        self._password_prompt_msgs[topic_id] = (target_label, sent.id)
+
+    async def acknowledge_password_received(self, topic_id: int) -> None:
+        if topic_id not in self._password_prompt_msgs:
+            return
+        target_label, msg_id = self._password_prompt_msgs.pop(topic_id)
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
+        await self._client.edit_message(
+            entity=self._cfg.telegram.forum_chat_id,
+            message=msg_id,
+            text=lex.ssh_password_accepted_card.format(target=target_label),
+        )
+
+    async def send_sudo_approval_prompt(
+        self,
+        topic_id: int,
+        request_id: str,
+        target_label: str,
+        action_summary: str,
+        diff_or_cmd_preview: str,
+    ) -> None:
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
+        self._sudo_prompt_meta[request_id] = (target_label, action_summary)
+        preview_trimmed = diff_or_cmd_preview[:2800]
+        await self._client.send_message(
+            entity=self._cfg.telegram.forum_chat_id,
+            message=lex.sudo_approval_prompt_card.format(
+                target=target_label,
+                action_summary=action_summary,
+                preview=preview_trimmed,
+            ),
+            reply_to=topic_id,
+            buttons=build_sudo_approval_keyboard(lex, topic_id, request_id),
+        )
 
     async def initialize_created_topic(self, topic_id: int, assigned_dir: str) -> None:
         Path(assigned_dir).mkdir(parents=True, exist_ok=True)
@@ -845,6 +895,49 @@ class WorkspaceTopicUI:
             await event.answer(
                 lex.ws_toast_mode_switched.format(mode=updated.execution_mode.value)
             )
+            return
+
+        if action == "toggle_sudo":
+            updated = await self._lifecycle.toggle_sudo_carte_blanche(topic_id)
+            await self.refresh_pinned_card(topic_id)
+            toast_msg = (
+                lex.ws_toast_sudo_cb_on
+                if updated.sudo_carte_blanche
+                else lex.ws_toast_sudo_cb_off
+            )
+            await event.answer(toast_msg)
+            return
+
+        if action in ("sudo_ok", "sudo_cb", "sudo_no") and len(parts) >= 4:
+            req_id = parts[3]
+            decision_map = {
+                "sudo_ok": "allow",
+                "sudo_cb": "carte_blanche",
+                "sudo_no": "deny",
+            }
+            decision = decision_map[action]
+            self._mount_mgr.resolve_sudo_approval(req_id, decision)
+            meta = (
+                self._sudo_prompt_meta.pop(req_id)
+                if req_id in self._sudo_prompt_meta
+                else ("remote", "sudo")
+            )
+            target_lbl, summary_lbl = meta
+            if action == "sudo_cb":
+                await self._lifecycle.set_sudo_carte_blanche(topic_id, True)
+                await self.refresh_pinned_card(topic_id)
+                status_text = lex.sudo_carte_blanche_status.format(
+                    action_summary=summary_lbl, target=target_lbl
+                )
+            elif action == "sudo_ok":
+                status_text = lex.sudo_approved_status.format(
+                    action_summary=summary_lbl, target=target_lbl
+                )
+            else:
+                status_text = lex.sudo_rejected_status.format(
+                    action_summary=summary_lbl, target=target_lbl
+                )
+            await event.edit(status_text, buttons=None)
             return
 
         if action == "cancel":

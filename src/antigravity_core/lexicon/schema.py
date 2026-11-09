@@ -227,3 +227,20 @@ class UiLexicon:
     sensor_reflex_handled_report: str
     sensor_trigger_failed: str
     topic_archive_prefix: str
+
+    # SSH Onboarding & Sudo Carte Blanche UI
+    topic_card_sudo_cb_on: str
+    topic_card_sudo_cb_off: str
+    btn_ws_sudo_cb_on_to_off: str
+    btn_ws_sudo_cb_off_to_on: str
+    ws_toast_sudo_cb_on: str
+    ws_toast_sudo_cb_off: str
+    ssh_password_prompt_card: str
+    ssh_password_accepted_card: str
+    sudo_approval_prompt_card: str
+    btn_sudo_approve_once: str
+    btn_sudo_grant_carte_blanche: str
+    btn_sudo_reject: str
+    sudo_approved_status: str
+    sudo_carte_blanche_status: str
+    sudo_rejected_status: str
