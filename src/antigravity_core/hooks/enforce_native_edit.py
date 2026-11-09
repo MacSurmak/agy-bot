@@ -1,53 +1,162 @@
 import json
 import os
 import re
+import socket
 import sys
-from typing import Any
 
-_SSHFS_PATH_RE = re.compile(r"(?:/mnt/remotes/|/runtime_data/remotes/)")
-
-_DENY_LOCAL_RUN_COMMAND_REASON = (
-    "Local bash execution ('run_command') inside the LXC brain container is disabled! "
-    "1. To run commands on a remote server/workstation, call MCP tool 'mcp:telegram-core:ssh_exec(host=\"<alias>\", command=\"...\")'. "
-    "2. To run a local Python plotting/helper script in your topic scratchpad, call 'mcp:telegram-core:ssh_exec(host=\"local_scratch\", command=\"...\")'. "
-    "3. To read, create, or edit files, use native file tools (read_file, write_file, edit_file, list_dir) on /remotes/<host>/... or your scratch folder."
+_SAFE_REDIRECT_RE: re.Pattern[str] = re.compile(
+    r"(?:\b\d*>&\d+\b|\b\d*>>?\s*/dev/null\b|&>>?\s*/dev/null\b)"
 )
-
-_DENY_SSHFS_TRAVERSAL_REASON = (
-    "FORBIDDEN (Errata Patch #3): Running local find_by_name/grep_search over a mounted SSHFS path "
-    "(/remotes/<host>/...) causes slow SFTP round-trips. Run searches directly on the remote host via "
-    "MCP tool 'mcp:telegram-core:ssh_exec(host=\"<alias>\", command=\"timeout 10 rg -n ...\")', "
-    "then open specific files with read_file/edit_file on /remotes/<host>/..."
+_SHELL_FILE_EDIT_RE: re.Pattern[str] = re.compile(
+    r"(?:\bsed\s+(?:-[a-zA-Z0-9]*i\b|--in-place\b)"
+    r"|\bawk\b[^\n;|]*-i\s+inplace\b"
+    r"|\bperl\s+-[a-zA-Z0-9]*i\b"
+    r"|\bcat\s*<<)"
 )
-
-
-def main() -> None:
-    raw_stdin = sys.stdin.read()
-    if not raw_stdin.strip():
-        sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
-        return
-
-    try:
-        payload: dict[str, Any] = json.loads(raw_stdin)
-    except json.JSONDecodeError:
-        sys.stdout.write(
-            json.dumps({"decision": "deny", "reason": "Malformed PreToolUse JSON input."}) + "\n"
-        )
-        return
-
-    tool_call = payload.get("toolCall")
-    if not isinstance(tool_call, dict):
-        sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
-        return
-
-    tool_name = str(tool_call.get("name", ""))
-    if os.environ.get("AGY_EXECUTION_MODE") == "READ_ONLY" and tool_name in (
+_WRITE_TOOLS: frozenset[str] = frozenset(
+    {
         "write_file",
         "edit_file",
         "write_to_file",
         "replace_file_content",
         "multi_replace_file_content",
-    ):
+    }
+)
+_ALL_FILE_TOOLS: frozenset[str] = frozenset(
+    {
+        "view_file",
+        "read_file",
+        "list_dir",
+        *_WRITE_TOOLS,
+    }
+)
+_PATH_ARG_KEYS: tuple[str, ...] = (
+    "TargetFile",
+    "AbsolutePath",
+    "Path",
+    "FilePath",
+    "DirectoryPath",
+    "SearchPath",
+    "SearchDirectory",
+)
+
+
+def _ipc_call(
+    method: str, params: dict[str, str | int | bool]
+) -> tuple[bool, str]:
+    if "AGY_CORE_IPC_SOCKET" not in os.environ:
+        return True, ""
+    socket_path = os.environ["AGY_CORE_IPC_SOCKET"].strip()
+    topic_id = (
+        int(os.environ["AGY_CURRENT_TOPIC_ID"])
+        if "AGY_CURRENT_TOPIC_ID" in os.environ
+        else 1
+    )
+    account_slug = (
+        os.environ["AGY_ACCOUNT_SLUG"].strip()
+        if "AGY_ACCOUNT_SLUG" in os.environ
+        else "default"
+    )
+    envelope = {
+        "method": method,
+        "topic_id": topic_id,
+        "account_slug": account_slug,
+        "params": params,
+    }
+    raw_req = (json.dumps(envelope, ensure_ascii=False) + "\n").encode("utf-8")
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(305.0)
+        sock.connect(socket_path)
+        sock.sendall(raw_req)
+
+        chunks: list[bytes] = []
+        while True:
+            data = sock.recv(65536)
+            if not data:
+                break
+            chunks.append(data)
+            if b"\n" in data:
+                break
+
+    raw_resp = b"".join(chunks).decode("utf-8", errors="replace").strip()
+    if not raw_resp:
+        return False, "Empty response from CoreIpcServer."
+
+    parsed = json.loads(raw_resp)
+    if not isinstance(parsed, dict) or not bool(parsed["ok"] if "ok" in parsed else False):
+        err_text = (
+            str(parsed["error"])
+            if isinstance(parsed, dict) and "error" in parsed
+            else "IPC request failed"
+        )
+        return False, err_text
+    return True, ""
+
+
+def _extract_file_path(args: dict[str, str]) -> str:
+    for key in _PATH_ARG_KEYS:
+        if key in args and args[key]:
+            return str(args[key]).strip()
+    return ""
+
+
+def _handle_post_tool_use(raw_stdin: str) -> None:
+    if not raw_stdin.strip():
+        sys.stdout.write("{}\n")
+        return
+
+    parsed = json.loads(raw_stdin)
+    if not isinstance(parsed, dict) or "toolCall" not in parsed:
+        sys.stdout.write("{}\n")
+        return
+
+    tool_call = parsed["toolCall"]
+    if not isinstance(tool_call, dict):
+        sys.stdout.write("{}\n")
+        return
+
+    tool_name = str(tool_call["name"]) if "name" in tool_call else ""
+    raw_args = tool_call["args"] if "args" in tool_call else {}
+    if not isinstance(raw_args, dict) or tool_name not in _ALL_FILE_TOOLS:
+        sys.stdout.write("{}\n")
+        return
+
+    str_args = {str(k): str(v) for k, v in raw_args.items() if v is not None}
+    target_path = _extract_file_path(str_args)
+    if target_path and ":" in target_path:
+        _ipc_call(
+            "commit_remote_file",
+            {
+                "path": target_path,
+                "cleanup_only": tool_name not in _WRITE_TOOLS,
+            },
+        )
+
+    sys.stdout.write("{}\n")
+
+
+def _handle_pre_tool_use(raw_stdin: str) -> None:
+    if not raw_stdin.strip():
+        sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+        return
+
+    parsed = json.loads(raw_stdin)
+    if not isinstance(parsed, dict) or "toolCall" not in parsed:
+        sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+        return
+
+    tool_call = parsed["toolCall"]
+    if not isinstance(tool_call, dict):
+        sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+        return
+
+    tool_name = str(tool_call["name"]) if "name" in tool_call else ""
+    exec_mode = (
+        os.environ["AGY_EXECUTION_MODE"] if "AGY_EXECUTION_MODE" in os.environ else ""
+    )
+
+    if exec_mode == "READ_ONLY" and tool_name in _WRITE_TOOLS:
         sys.stdout.write(
             json.dumps(
                 {
@@ -55,13 +164,6 @@ def main() -> None:
                     "reason": "Topic is currently in READ_ONLY (Plan) mode. File modifications are disabled.",
                 }
             )
-            + "\n"
-        )
-        return
-
-    if tool_name == "run_command":
-        sys.stdout.write(
-            json.dumps({"decision": "deny", "reason": _DENY_LOCAL_RUN_COMMAND_REASON})
             + "\n"
         )
         return
@@ -78,22 +180,60 @@ def main() -> None:
         )
         return
 
-    args = tool_call.get("args")
-    if isinstance(args, dict) and tool_name in ("find_by_name", "grep_search"):
-        search_target = str(
-            args.get("SearchDirectory")
-            or args.get("SearchPath")
-            or args.get("DirectoryPath")
-            or ""
-        )
-        if _SSHFS_PATH_RE.search(search_target) is not None:
+    raw_args = tool_call["args"] if "args" in tool_call else {}
+    str_args = (
+        {str(k): str(v) for k, v in raw_args.items() if v is not None}
+        if isinstance(raw_args, dict)
+        else {}
+    )
+
+    if tool_name == "run_command":
+        cmd_line = str_args["CommandLine"] if "CommandLine" in str_args else ""
+        cleaned_cmd = _SAFE_REDIRECT_RE.sub("", cmd_line)
+        if _SHELL_FILE_EDIT_RE.search(cleaned_cmd) is not None:
             sys.stdout.write(
-                json.dumps({"decision": "deny", "reason": _DENY_SSHFS_TRAVERSAL_REASON})
+                json.dumps(
+                    {
+                        "decision": "deny",
+                        "reason": (
+                            "Editing or creating files via sed -i / awk -i / perl -i / cat << EOF in run_command is forbidden. "
+                            "Use your native file tools (view_file, write_to_file, replace_file_content, multi_replace_file_content) "
+                            "passing remote paths directly as 'user@host:/path' or 'user@host:~/path'."
+                        ),
+                    }
+                )
                 + "\n"
             )
             return
 
+        sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+        return
+
+    if tool_name in _ALL_FILE_TOOLS:
+        target_path = _extract_file_path(str_args)
+        if target_path and ":" in target_path:
+            ok, err_msg = _ipc_call(
+                "stage_remote_file",
+                {
+                    "path": target_path,
+                    "for_write": tool_name in _WRITE_TOOLS,
+                },
+            )
+            if not ok:
+                sys.stdout.write(
+                    json.dumps({"decision": "deny", "reason": err_msg}) + "\n"
+                )
+                return
+
     sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+
+
+def main() -> None:
+    raw_stdin = sys.stdin.read()
+    if len(sys.argv) > 1 and sys.argv[1] == "--post":
+        _handle_post_tool_use(raw_stdin)
+    else:
+        _handle_pre_tool_use(raw_stdin)
 
 
 if __name__ == "__main__":

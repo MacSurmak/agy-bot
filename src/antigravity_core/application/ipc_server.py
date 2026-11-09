@@ -123,13 +123,73 @@ class CoreIpcServer:
             await writer.wait_closed()
 
     async def _dispatch(
-        self, method: str, topic_id: int, params: dict[str, Any]
-    ) -> dict[str, Any]:
+        self, method: str, topic_id: int, params: dict[str, str | int | bool]
+    ) -> dict[str, str | int | bool | list[dict[str, str | int | bool | None]]]:
+        if method == "consume_askpass_token":
+            token = str(params["token"]) if "token" in params else ""
+            secret = self._mount_mgr.consume_askpass_token(token)
+            return {"secret": secret}
+
+        if method == "ensure_ssh_target_ready":
+            ssh_user = str(params["ssh_user"]) if "ssh_user" in params else ""
+            host_alias = str(params["host_alias"]) if "host_alias" in params else ""
+            port = int(params["port"]) if "port" in params else 22
+            raw_target = f"{ssh_user}@{host_alias}" if ssh_user else host_alias
+            resolved_target, _cred = await self._mount_mgr.ensure_target_access(
+                topic_id=topic_id,
+                raw_target=raw_target,
+                explicit_port=port,
+            )
+            return {"resolved_target": resolved_target}
+
+        if method == "authorize_pty_sudo":
+            target = str(params["target"]) if "target" in params else ""
+            port = int(params["port"]) if "port" in params else 22
+            cmd_str = str(params["command"]) if "command" in params else ""
+            resolved_target, sudo_pass, is_root = (
+                await self._mount_mgr.authorize_sudo_operation(
+                    topic_id=topic_id,
+                    raw_target=target,
+                    explicit_port=port,
+                    action_summary=f"Выполнение команды sudo на {target}",
+                    diff_or_cmd_preview=cmd_str,
+                )
+            )
+            return {
+                "resolved_target": resolved_target,
+                "sudo_password": sudo_pass,
+                "is_root": str(is_root),
+            }
+
+        if method == "stage_remote_file":
+            topic = await self._topic_repo.get_topic_strict(topic_id)
+            raw_path = str(params["path"]) if "path" in params else ""
+            for_write = bool(params["for_write"]) if "for_write" in params else False
+            return await self._mount_mgr.stage_remote_file(
+                topic_id=topic_id,
+                workspace_dir=Path(topic.workspace_path),
+                raw_path=raw_path,
+                for_write=for_write,
+            )
+
+        if method == "commit_remote_file":
+            topic = await self._topic_repo.get_topic_strict(topic_id)
+            raw_path = str(params["path"]) if "path" in params else ""
+            cleanup_only = (
+                bool(params["cleanup_only"]) if "cleanup_only" in params else False
+            )
+            return await self._mount_mgr.commit_remote_file(
+                topic_id=topic_id,
+                workspace_dir=Path(topic.workspace_path),
+                raw_path=raw_path,
+                cleanup_only=cleanup_only,
+            )
+
         if method == "ssh_exec":
             topic = await self._topic_repo.get_topic_strict(topic_id)
             host_alias = str(params["host"]).strip()
             command_str = str(params["command"])
-            timeout_sec = int(params.get("timeout_sec", 60))
+            timeout_sec = int(params["timeout_sec"]) if "timeout_sec" in params else 60
             scratch_dir = Path(topic.workspace_path)
 
             if host_alias.lower() in ("local", "local_scratch", "scratch", "lxc"):
@@ -344,12 +404,19 @@ class CoreIpcServer:
             alias = str(params["alias"]).strip()
             hostname_or_ip = str(params["hostname_or_ip"]).strip()
             ssh_user = str(params["ssh_user"]).strip()
-            ssh_port = int(params.get("ssh_port", 22))
-            remote_root_path = str(params.get("remote_root_path", "/")).strip() or "/"
-            jump_host_raw = str(params.get("jump_host") or "").strip()
+            ssh_port = int(params["ssh_port"]) if "ssh_port" in params else 22
+            remote_root_raw = (
+                str(params["remote_root_path"]).strip()
+                if "remote_root_path" in params
+                else "/"
+            )
+            remote_root_path = remote_root_raw if remote_root_raw else "/"
+            jump_host_raw = (
+                str(params["jump_host"]).strip() if "jump_host" in params else ""
+            )
             jump_host = jump_host_raw if jump_host_raw else None
 
-            local_mount = str((self._cfg.paths.remotes_mount_dir / alias).resolve())
+            local_mount = f"{ssh_user}@{alias}:{remote_root_path}"
             rule_file = str(
                 (
                     self._cfg.paths.agy_home_dir / "config" / "rules" / f"infra-{alias}.md"
@@ -363,19 +430,23 @@ class CoreIpcServer:
                 remote_root_path=remote_root_path,
                 local_mount_path=local_mount,
                 rule_file_path=rule_file,
-                auto_mount_enabled=True,
+                auto_mount_enabled=False,
                 jump_host=jump_host,
             )
-            await self._mount_mgr.verify_ssh_connectivity(host)
-            await self._mount_mgr.ensure_mounted(host)
+            self._mount_mgr.write_ssh_config_entry(host)
+            await self._mount_mgr.ensure_target_access(
+                topic_id=topic_id,
+                raw_target=f"{ssh_user}@{alias}",
+                explicit_port=ssh_port,
+            )
             await self._mount_mgr.sync_host_telemetry_and_rules(host)
             all_hosts = await self._host_repo.list_hosts()
             self._bootstrapper.sync_global_agents_md_host_map(all_hosts)
             return {
                 "alias": host.alias,
-                "local_mount_path": host.local_mount_path,
+                "remote_prefix": local_mount,
                 "rule_file_path": host.rule_file_path,
-                "status": "mounted_and_indexed",
+                "status": "onboarded_and_indexed",
             }
 
         if method == "create_workspace_topic":

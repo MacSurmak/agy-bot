@@ -104,9 +104,14 @@ class TopicWorker:
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
         cmd = self._build_command_args(settings)
-        # Errata Patch #1: Inject topic, execution mode, and IPC socket variables for child processes & hooks
+        base_path = (
+            self._account_env["PATH"]
+            if "PATH" in self._account_env
+            else self._cfg.paths.system_path_env
+        )
         worker_env = {
             **self._account_env,
+            "PATH": f"{self._cfg.paths.runtime_bin_dir}:{base_path}",
             "AGY_CURRENT_TOPIC_ID": str(self._topic_id),
             "AGY_EXECUTION_MODE": self._signature.execution_mode.value,
             "AGY_ACCOUNT_SLUG": self._signature.account_slug,

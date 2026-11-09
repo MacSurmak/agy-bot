@@ -3,23 +3,21 @@
 You are running inside the central **Antigravity Telegram Core** LXC orchestrator on Proxmox VE.
 Every conversation topic in Telegram corresponds to an isolated workspace.
 
-## 1. Strict Native File Editing & Hybrid Search Law (Zero Shell File Edits)
+## 1. Native Remote File Tools & Direct SSH Execution Law
 
-1. **All remote machines are mounted via SSHFS (`auto_cache`) under `/mnt/remotes/<host_alias>/`.**
-2. **Reading, creating, and modifying files** (both local and on remote servers under `/mnt/remotes/<host>/...`) **MUST be performed STRICTLY using your native file tools**:
-   - `view_file`
-   - `write_to_file`
-   - `replace_file_content`
-   - `multi_replace_file_content`
-   - `list_dir`
-   - `find_by_name`
-3. **Editing or creating files via `run_command` (`sed -i`, `awk -i inplace`, `perl -pi`, `cat << EOF >`, `echo >`, `tee`, `dd of=`, `truncate`) is STRICTLY FORBIDDEN** and is blocked by the `PreToolUse` security hook.
-4. **Hybrid Search Rule for Large Remote Directories:**
-   - When searching across huge directory trees (thousands of files) on a remote host, you MAY run a fast read-only ripgrep command over SSH:
-     `ssh <host> "rg -n --hidden -g '!.git' '<pattern>' /remote/path 2>/dev/null"`
-   - Once you obtain the exact file paths and line numbers, you MUST open and edit those files using native `view_file` and `replace_file_content` on `/mnt/remotes/<host>/...`!
-5. **Executing Runtime Commands on Remote Hosts:**
-   - To run tests, Docker, systemd, or compilers on a remote host, use `run_command` with `ssh <host> "..."` (safe descriptor redirects like `2>&1` and `2>/dev/null` are permitted).
+1. **Direct Remote Paths in Native File Tools (`user@host:/path` and `user@host:~/path`):**
+   - To read, create, or edit ANY file on a remote server (both user project files in `~/...` and system files in `/etc/...`), **ALWAYS pass the remote path directly to your native file tools**:
+     - `view_file` (e.g. `user@bigcomp:~/md_run/md.mdp` or `user@bigcomp:/etc/slurm/slurm.conf`)
+     - `write_to_file`
+     - `replace_file_content`
+     - `multi_replace_file_content`
+   - The `PreToolUse` and `PostToolUse` hooks automatically stage that single file just-in-time, apply your native edit, push it back (handling `sudo` automatically if needed), and clean up local temporary files.
+2. **Zero Shell File Edits:**
+   - Editing or creating files via `run_command` (`sed -i`, `awk -i inplace`, `perl -pi`, `cat << EOF >`, `echo >`, `tee`, `dd of=`, `truncate`) is **STRICTLY FORBIDDEN** and blocked by `PreToolUse`.
+3. **Executing Commands & Inspection on Remote Hosts (`run_command`):**
+   - To inspect directories (`ls -la`, `find`, `rg`), check logs (`cat`, `head`, `tail`), or run workloads (`sbatch`, `gmx`, `docker`, `systemctl`, `pytest`), use your native `run_command` tool with standard `ssh`:
+     `ssh user@host "command"` (or `ssh <alias> "command"`).
+   - If a command requires administrator privileges, simply write `sudo` inside the command as usual (e.g. `ssh user@host "sudo systemctl restart slurmd"`).
 
 ## 2. Native Telegram, Event Sensor & Temporal Scheduler MCP Tools (`telegram-core`)
 

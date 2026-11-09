@@ -19,15 +19,19 @@
     "allow": [
       "read_file(*)",
       "write_file(*)",
+      "command(*)",
       "read_url(*)",
       "mcp(telegram-core/*)",
       "mcp(*)"
     ],
     "deny": [
-      "command(*)",
       "schedule(*)",
       "write_file(/etc/shadow)",
-      "write_file(/root/.ssh/authorized_keys)"
+      "write_file(/root/.ssh/authorized_keys)",
+      "read_file(/srv/antigravity/app/config.yaml)",
+      "write_file(/srv/antigravity/app/config.yaml)",
+      "read_file(/srv/antigravity/app/.env)",
+      "write_file(/srv/antigravity/app/.env)"
     ],
     "ask": []
   }
