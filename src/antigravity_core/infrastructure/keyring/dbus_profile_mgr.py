@@ -487,69 +487,32 @@ class KeyringProfileManager:
         os.set_blocking(master_fd, False)
         return master_fd, slave_fd
 
+    async def _advance_tos_and_logout_in_pty(self, master_fd: int) -> None:
+        """Executes the exact recorded keystrokes to pass ToS (Space, Tab, Tab, Enter) or /logout (/l, Tab, Enter, Enter)."""
+        os.write(master_fd, b"/l")
+        await asyncio.sleep(0.25)
+        os.write(master_fd, b"\t")
+        await asyncio.sleep(0.25)
+        os.write(master_fd, b"\r")
+        await asyncio.sleep(0.25)
+        os.write(master_fd, b"\r")
+        await asyncio.sleep(0.8)
+
+    async def _complete_tos_screen_in_pty(self, master_fd: int) -> None:
+        """Executes Step 5..8 from recording: Space (check box), Tab (Previous), Tab (Done), Enter."""
+        os.write(master_fd, b" ")
+        await asyncio.sleep(0.25)
+        os.write(master_fd, b"\t")
+        await asyncio.sleep(0.25)
+        os.write(master_fd, b"\t")
+        await asyncio.sleep(0.25)
+        os.write(master_fd, b"\r")
+        await asyncio.sleep(0.4)
+
     async def _purge_existing_session_if_signed_in(
         self, account: GoogleAccount, oauth_env: dict[str, str], workspace_cwd: str
     ) -> None:
         await self._clear_gemini_secret(oauth_env)
-        if not await self.is_account_authenticated(oauth_env):
-            return
-
-        logger.info(
-            "Account is currently signed in; running /logout in PTY to reset session cleanly",
-            account_slug=account.slug,
-        )
-        master_fd, slave_fd = self._spawn_agy_pty_process()
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                str(self._cfg.paths.agy_binary_path),
-                stdin=slave_fd,
-                stdout=slave_fd,
-                stderr=slave_fd,
-                cwd=workspace_cwd,
-                env=oauth_env,
-                start_new_session=True,
-            )
-        except Exception:
-            os.close(master_fd)
-            raise
-        finally:
-            os.close(slave_fd)
-
-        try:
-            accumulated = ""
-            for _ in range(60):
-                with contextlib.suppress(BlockingIOError, OSError):
-                    chunk = os.read(master_fd, 4096)
-                    if chunk:
-                        accumulated += chunk.decode("utf-8", errors="replace")
-                clean = _ANSI_ESCAPE_RE.sub("", accumulated)
-                if "Do you trust the contents" in clean or "Yes, I trust this folder" in clean:
-                    os.write(master_fd, b"\r")
-                    accumulated = ""
-                    await asyncio.sleep(0.3)
-                    continue
-                if "press Enter to continue" in clean or "[Next]" in clean or "Choose a theme" in clean:
-                    os.write(master_fd, b"\r")
-                    accumulated = ""
-                    await asyncio.sleep(0.3)
-                    continue
-                if "[Done]" in clean or "Terms of Service" in clean:
-                    os.write(master_fd, b"\r")
-                    accumulated = ""
-                    await asyncio.sleep(0.4)
-                    continue
-                if "accept-edits" in clean or "Select login method" in clean:
-                    break
-                await asyncio.sleep(0.1)
-
-            os.write(master_fd, b"/logout")
-            await asyncio.sleep(0.25)
-            os.write(master_fd, b"\r")
-            await asyncio.sleep(0.25)
-            os.write(master_fd, b"\r")
-            await asyncio.sleep(1.2)
-        finally:
-            self._cleanup_oauth_pty(proc, master_fd)
 
     async def start_remote_oauth_flow(self, account: GoogleAccount) -> PendingOAuthSession:
         env = await self.ensure_account_bus(account)
@@ -867,13 +830,12 @@ class KeyringProfileManager:
         accumulated = ""
         sent_trust_enter = False
         sent_theme_enter = False
+        sent_done_enter = False
         sent_method_enter = False
-        sent_tui_relogin = False
+        sent_tui_logout = False
         chunk_size = self._cfg.runtime.oauth_stdout_chunk_bytes
         poll_interval = self._cfg.runtime.dbus_socket_poll_interval_sec
         max_ticks = max(100, int(self._cfg.runtime.command_exec_timeout_sec / poll_interval))
-
-        sent_done_enter = False
 
         for _ in range(max_ticks):
             chunk = b""
@@ -882,25 +844,6 @@ class KeyringProfileManager:
 
             if not chunk:
                 if proc.returncode is not None:
-                    if sent_tui_relogin and not sent_method_enter:
-                        self._cleanup_oauth_pty(proc, master_fd)
-                        master_fd, slave_fd = self._spawn_agy_pty_process()
-                        proc = await asyncio.create_subprocess_exec(
-                            str(self._cfg.paths.agy_binary_path),
-                            stdin=slave_fd,
-                            stdout=slave_fd,
-                            stderr=slave_fd,
-                            cwd=workspace_cwd,
-                            env=oauth_env,
-                            start_new_session=True,
-                        )
-                        os.close(slave_fd)
-                        sent_tui_relogin = False
-                        sent_trust_enter = False
-                        sent_theme_enter = False
-                        sent_done_enter = False
-                        accumulated = ""
-                        continue
                     break
                 await asyncio.sleep(poll_interval)
                 continue
@@ -908,67 +851,67 @@ class KeyringProfileManager:
             accumulated += chunk.decode("utf-8", errors="replace")
             clean_text = _ANSI_ESCAPE_RE.sub("", accumulated)
 
-            if not sent_trust_enter and (
-                "Do you trust the contents" in clean_text
-                or "Yes, I trust this folder" in clean_text
-            ):
-                await asyncio.sleep(poll_interval * 4)
-                os.write(master_fd, b"\r")
-                sent_trust_enter = True
-                accumulated = ""
-                continue
-
+            # Step 3->4 in recording: Theme Picker [Next] -> Enter (\r)
             if not sent_theme_enter and (
-                "press Enter to continue" in clean_text
-                or "[Next]" in clean_text
-                or "Choose a theme" in clean_text
+                "[Next]" in clean_text or "Choose a theme" in clean_text
             ):
-                await asyncio.sleep(poll_interval * 4)
+                await asyncio.sleep(0.25)
                 os.write(master_fd, b"\r")
                 sent_theme_enter = True
                 accumulated = ""
                 continue
 
+            # Step 5->8 in recording: Terms of Service [Previous] [Done] -> Space, Tab, Tab, Enter
             if not sent_done_enter and (
-                "[Done]" in clean_text or "Terms of Service" in clean_text
+                "[Previous]" in clean_text
+                or "[Done]" in clean_text
+                or "Terms of Service" in clean_text
             ):
-                await asyncio.sleep(poll_interval * 4)
-                os.write(master_fd, b"\r")
+                await asyncio.sleep(0.25)
+                await self._complete_tos_screen_in_pty(master_fd)
                 sent_done_enter = True
                 accumulated = ""
                 continue
 
-            if (
-                not sent_method_enter
-                and not sent_tui_relogin
-                and "accept-edits" in clean_text
-                and "Select login method" not in clean_text
+            # Step 9 in recording: Workspace Trust -> Enter (\r)
+            if not sent_trust_enter and (
+                "Do you trust the contents" in clean_text
+                or "Yes, I trust this folder" in clean_text
             ):
-                sent_tui_relogin = True
-                await asyncio.sleep(0.3)
-                os.write(master_fd, b"/logout")
                 await asyncio.sleep(0.25)
                 os.write(master_fd, b"\r")
-                await asyncio.sleep(0.25)
-                os.write(master_fd, b"\r")
-                await asyncio.sleep(0.6)
-                os.write(master_fd, b"/login")
-                await asyncio.sleep(0.25)
-                os.write(master_fd, b"\r")
+                sent_trust_enter = True
                 accumulated = ""
                 continue
 
+            # Step 10..15 in recording: Main TUI reached while still signed in -> /l, Tab, Enter, Enter
+            if (
+                not sent_method_enter
+                and not sent_tui_logout
+                and "accept-edits" in clean_text
+                and "Select login method" not in clean_text
+            ):
+                sent_tui_logout = True
+                await asyncio.sleep(0.3)
+                await self._advance_tos_and_logout_in_pty(master_fd)
+                accumulated = ""
+                continue
+
+            # Step 16..17 in recording: Select login method: > 1. Google OAuth -> Enter (\r)
             if not sent_method_enter and (
                 "Select login method" in clean_text
-                or "Google OAuth" in clean_text
+                or "1. Google OAuth" in clean_text
             ):
-                await asyncio.sleep(poll_interval * 4)
+                await asyncio.sleep(0.25)
                 os.write(master_fd, b"\r")
                 sent_method_enter = True
+                accumulated = ""
+                continue
 
+            # Step 18 in recording: OAuth URL printed
             match = _OAUTH_URL_PATTERN.search(clean_text)
             if match is not None and "response_type=" in match.group(1):
-                await asyncio.sleep(poll_interval * 4)
+                await asyncio.sleep(0.25)
                 with contextlib.suppress(BlockingIOError, OSError):
                     while True:
                         extra = os.read(master_fd, chunk_size)
@@ -1007,27 +950,53 @@ class KeyringProfileManager:
         max_ticks = max(100, int(self._cfg.runtime.command_exec_timeout_sec / poll_interval))
         accumulated = ""
         authenticated = False
+        sent_post_theme = False
+        sent_post_tos = False
         sent_post_trust = False
 
         try:
             os.write(pending.pty_master_fd, (clean_code + "\r").encode("utf-8"))
-            for tick in range(1, max_ticks + 1):
+            for _ in range(1, max_ticks + 1):
+                chunk = b""
                 with contextlib.suppress(BlockingIOError, OSError):
                     chunk = os.read(pending.pty_master_fd, chunk_size)
-                    if chunk:
-                        accumulated += chunk.decode("utf-8", errors="replace")
+                if chunk:
+                    accumulated += chunk.decode("utf-8", errors="replace")
 
                 clean_text = _ANSI_ESCAPE_RE.sub("", accumulated)
+
+                if not sent_post_theme and (
+                    "[Next]" in clean_text or "Choose a theme" in clean_text
+                ):
+                    await asyncio.sleep(0.25)
+                    os.write(pending.pty_master_fd, b"\r")
+                    sent_post_theme = True
+                    accumulated = ""
+                    continue
+
+                if not sent_post_tos and (
+                    "[Previous]" in clean_text
+                    or "[Done]" in clean_text
+                    or "Terms of Service" in clean_text
+                ):
+                    await asyncio.sleep(0.25)
+                    await self._complete_tos_screen_in_pty(pending.pty_master_fd)
+                    sent_post_tos = True
+                    accumulated = ""
+                    continue
+
                 if not sent_post_trust and (
                     "Do you trust the contents" in clean_text
                     or "Yes, I trust this folder" in clean_text
                 ):
-                    with contextlib.suppress(OSError):
-                        os.write(pending.pty_master_fd, b"\r")
+                    await asyncio.sleep(0.25)
+                    os.write(pending.pty_master_fd, b"\r")
                     sent_post_trust = True
+                    accumulated = ""
+                    continue
 
-                if tick % 30 == 0 and await self.is_account_authenticated(env):
-                    await asyncio.sleep(0.5)
+                if "accept-edits" in clean_text:
+                    await self._try_extract_and_save_email(pending.account, clean_text)
                     authenticated = True
                     break
 
