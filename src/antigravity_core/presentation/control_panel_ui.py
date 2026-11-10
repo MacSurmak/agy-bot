@@ -321,11 +321,11 @@ class ControlPanelUI:
         if data_str.startswith("cp:del_acc:"):
             acc_id = int(data_str.split(":")[2])
             acc = await self._account_repo.get_by_id(acc_id)
-            await self._keyring_mgr.evict_account_bus(acc_id)
+            await event.answer("Выполняю выход из аккаунта и удаление профиля...")
+            await self._keyring_mgr.logout_account(acc)
             await self._account_repo.delete_account(acc_id)
             shutil.rmtree(Path(acc.xdg_data_dir), ignore_errors=True)
-            await event.answer("Аккаунт удалён.")
-            await self._render_accounts_hub(event, lex, 0, False)
+            await self._render_accounts_hub(event, lex, 0, True)
             return
 
         if data_str == "cp:add_acc_oauth":
@@ -502,7 +502,7 @@ class ControlPanelUI:
         await self.render_and_pin_dashboard(recreate_at_bottom=True)
 
     async def _discard_staged_account(self, account: GoogleAccount) -> None:
-        await self._keyring_mgr.evict_account_bus(account.id)
+        await self._keyring_mgr.logout_account(account)
         await self._account_repo.delete_account(account.id)
         shutil.rmtree(Path(account.xdg_data_dir), ignore_errors=True)
 
@@ -544,8 +544,7 @@ class ControlPanelUI:
         is_new_staged: bool,
     ) -> None:
         await event.answer(lex.cp_toast_launching_oauth)
-        await self._safe_edit_event(
-            event,
+        await self._send_fresh_bottom_panel(
             f"⏳ **Подготовка сессии Google OAuth (`{account.slug}`)**...\nЗапускаю изолированный процесс `agy` и получаю ссылку авторизации...",
             [[Button.inline("❌ Отмена", b"cp:auth_menu")]],
         )

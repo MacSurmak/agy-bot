@@ -124,7 +124,16 @@ class AgyEnvironmentBootstrapper:
         workspaces_dir = str(self._cfg.paths.workspaces_root_dir)
         remotes_dir = str(self._cfg.paths.remotes_mount_dir)
 
+        existing_settings: dict[str, str | int | bool | list[str] | dict[str, list[str]]] = {}
+        if settings_path.is_file():
+            raw_existing = settings_path.read_text(encoding="utf-8", errors="replace").strip()
+            if raw_existing.startswith("{"):
+                loaded = json.loads(raw_existing)
+                if isinstance(loaded, dict):
+                    existing_settings = loaded
+
         payload = {
+            **existing_settings,
             "$schema": "https://antigravity.google/schemas/v1/settings.json",
             "agentMode": "accept-edits",
             "toolPermission": "always-proceed",

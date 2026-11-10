@@ -450,28 +450,34 @@ class KeyringProfileManager:
         return False
 
     async def is_account_authenticated(self, env: dict[str, str]) -> bool:
-        """Deterministically verifies if agy recognizes the account as signed in via `agy models`."""
-        proc = await asyncio.create_subprocess_exec(
-            str(self._cfg.paths.agy_binary_path),
-            "models",
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=10.0)
-        except TimeoutError:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            return False
+        """Verifies if the isolated account keyring holds a stored OAuth token."""
+        if await self._has_gemini_secret(env):
+            return True
+        xdg_dir = env["XDG_DATA_HOME"] if "XDG_DATA_HOME" in env else ""
+        if xdg_dir:
+            keyring_file = Path(xdg_dir) / "keyrings" / "login.keyring"
+            if keyring_file.is_file() and keyring_file.stat().st_size > 128:
+                return True
+        return False
 
-        combined = (
-            stdout_bytes.decode("utf-8", errors="replace")
-            + "\n"
-            + stderr_bytes.decode("utf-8", errors="replace")
-        )
-        return proc.returncode == 0 and "Please sign in" not in combined
+    async def logout_account(self, account: GoogleAccount) -> None:
+        """Logs out the account in agy, clears its keyring secret, and stops its D-Bus daemon."""
+        env = await self.ensure_account_bus(account)
+        oauth_env = {
+            **env,
+            "SSH_CONNECTION": "1",
+            "TERM": "xterm-256color",
+            "COLUMNS": "2000",
+            "LINES": "50",
+            "BROWSER": "/bin/false",
+        }
+        oauth_env.pop("DISPLAY", None)
+        oauth_env.pop("WAYLAND_DISPLAY", None)
+        workspace_cwd = str(self._cfg.paths.workspaces_root_dir)
+        Path(workspace_cwd).mkdir(parents=True, exist_ok=True)
+        await self._purge_existing_session_if_signed_in(account, oauth_env, workspace_cwd)
+        await self._clear_gemini_secret(env)
+        await self.evict_account_bus(account.id)
 
     def _spawn_agy_pty_process(self) -> tuple[int, int]:
         master_fd, slave_fd = pty.openpty()
@@ -528,7 +534,13 @@ class KeyringProfileManager:
                     await asyncio.sleep(0.3)
                     continue
                 if "[Done]" in clean or "Terms of Service" in clean:
+                    os.write(master_fd, b" ")
+                    await asyncio.sleep(0.2)
+                    os.write(master_fd, b"\x1b[B")
+                    await asyncio.sleep(0.2)
                     os.write(master_fd, b"\r")
+                    await asyncio.sleep(0.2)
+                    os.write(master_fd, b"\t\r")
                     accumulated = ""
                     await asyncio.sleep(0.4)
                     continue
@@ -904,7 +916,23 @@ class KeyringProfileManager:
 
             if "[Done]" in clean_text or "Terms of Service" in clean_text:
                 await asyncio.sleep(poll_interval * 4)
+                os.write(master_fd, b" ")
+                await asyncio.sleep(0.2)
+                os.write(master_fd, b"\x1b[B")
+                await asyncio.sleep(0.2)
                 os.write(master_fd, b"\r")
+                await asyncio.sleep(0.2)
+                os.write(master_fd, b"\t\r")
+                await asyncio.sleep(0.2)
+                os.write(master_fd, b"\x1b[C\r")
+                accumulated = ""
+                continue
+
+            if "x]" in clean_text and not sent_method_enter:
+                await asyncio.sleep(0.2)
+                os.write(master_fd, b"\x1b[B\r")
+                await asyncio.sleep(0.2)
+                os.write(master_fd, b"\t\r")
                 accumulated = ""
                 continue
 
