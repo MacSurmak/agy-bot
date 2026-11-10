@@ -107,7 +107,13 @@ class KeyringProfileManager:
                 socket_path.unlink()
             dbus_pid = await self._start_dbus_daemon(socket_path)
 
+        inherited_env = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(("DBUS_", "GNOME_KEYRING_", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"))
+        }
         base_env: dict[str, str] = {
+            **inherited_env,
             "PATH": self._cfg.paths.system_path_env,
             "HOME": str(self._cfg.paths.agy_home_dir.parent),
             "USER": self._cfg.paths.system_user,
@@ -566,6 +572,7 @@ class KeyringProfileManager:
 
         accumulated = ""
         sent_trust_enter = False
+        sent_theme_enter = False
         sent_method_enter = False
         chunk_size = self._cfg.runtime.oauth_stdout_chunk_bytes
         poll_interval = self._cfg.runtime.dbus_socket_poll_interval_sec
@@ -605,6 +612,21 @@ class KeyringProfileManager:
                         accumulated = ""
                         logger.info(
                             "Confirmed workspace trust dialog in OAuth startup PTY",
+                            account_slug=account.slug,
+                        )
+                        continue
+
+                    if not sent_theme_enter and (
+                        "press Enter to continue" in clean_text
+                        or "[Next]" in clean_text
+                        or "Choose a theme" in clean_text
+                    ):
+                        await asyncio.sleep(poll_interval * 4)
+                        os.write(master_fd, b"\r")
+                        sent_theme_enter = True
+                        accumulated = ""
+                        logger.info(
+                            "Confirmed theme/onboarding wizard screen in agy PTY",
                             account_slug=account.slug,
                         )
                         continue
@@ -753,6 +775,39 @@ class KeyringProfileManager:
             with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
                 pgid = os.getpgid(proc.pid)
                 os.killpg(pgid, signal.SIGTERM)
+
+    async def import_terminal_auth(self, account: GoogleAccount) -> bool:
+        """Imports an active terminal agy login from system keyrings into the account profile."""
+        env = await self.ensure_account_bus(account)
+        if await self.is_account_authenticated(env):
+            await self.backup_account_token_to_db(account)
+            return True
+
+        candidate_keyrings = [
+            Path("/root/.local/share/keyrings/login.keyring"),
+            Path("/root/.local/share/keyrings/default.keyring"),
+            Path("/home/macsurmak/.local/share/keyrings/login.keyring"),
+        ]
+        target_keyring = Path(account.xdg_data_dir) / "keyrings" / "login.keyring"
+        for cand in candidate_keyrings:
+            if cand.is_file() and cand.stat().st_size > 0 and cand.resolve() != target_keyring.resolve():
+                target_keyring.parent.mkdir(parents=True, exist_ok=True)
+                target_keyring.write_bytes(cand.read_bytes())
+                os.chmod(target_keyring, 0o600)
+                await self.evict_account_bus(account.id)
+                new_env = await self.ensure_account_bus(account)
+                if await self.is_account_authenticated(new_env):
+                    await self.backup_account_token_to_db(account)
+                    return True
+
+        return await self.is_account_authenticated(env)
+
+    async def evict_account_bus(self, account_id: int) -> None:
+        async with self._lock:
+            runtime = self._runtimes.pop(account_id, None)
+            if runtime is not None and runtime.dbus_pid is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(runtime.dbus_pid, signal.SIGTERM)
 
     async def shutdown_all(self) -> None:
         async with self._lock:

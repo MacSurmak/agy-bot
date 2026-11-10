@@ -340,7 +340,8 @@ class AccountRepository:
 
     async def set_default_account(self, account_id: int) -> GoogleAccount:
         async with self._db.session() as session:
-            target = await session.get(GoogleAccountRow, account_id)
+            stmt = select(GoogleAccountRow).where(GoogleAccountRow.id == account_id)
+            target = (await session.scalars(stmt)).first()
             if target is None:
                 raise DatabaseIntegrityError(f"GoogleAccount id={account_id} does not exist.")
             await session.execute(update(GoogleAccountRow).values(is_default=False))
@@ -348,6 +349,46 @@ class AccountRepository:
             target.is_enabled = True
             await session.flush()
             return _map_account(target)
+
+    async def delete_account(self, account_id: int) -> None:
+        async with self._db.session() as session:
+            stmt = select(GoogleAccountRow).order_by(
+                GoogleAccountRow.is_default.desc(),
+                GoogleAccountRow.priority.asc(),
+                GoogleAccountRow.id.asc(),
+            )
+            all_rows = list((await session.scalars(stmt)).all())
+            target = next((r for r in all_rows if r.id == account_id), None)
+            if target is None:
+                return
+
+            remaining = [r for r in all_rows if r.id != account_id]
+            if remaining:
+                fallback = remaining[0]
+                await session.execute(
+                    update(ForumTopicRow)
+                    .where(ForumTopicRow.assigned_account_id == account_id)
+                    .values(assigned_account_id=fallback.id)
+                )
+                await session.execute(
+                    update(TopicSessionRow)
+                    .where(TopicSessionRow.account_id == account_id)
+                    .values(account_id=fallback.id)
+                )
+                if target.is_default:
+                    fallback.is_default = True
+            else:
+                await session.execute(
+                    delete(TopicSessionRow).where(TopicSessionRow.account_id == account_id)
+                )
+                await session.execute(
+                    delete(ForumTopicRow).where(ForumTopicRow.assigned_account_id == account_id)
+                )
+
+            await session.execute(
+                delete(GoogleAccountRow).where(GoogleAccountRow.id == account_id)
+            )
+            await session.flush()
 
     async def update_email_label(self, account_id: int, email_label: str) -> GoogleAccount:
         async with self._db.session() as session:

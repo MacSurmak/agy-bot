@@ -44,17 +44,35 @@ def build_account_auth_keyboard(
 ) -> list[list[Button]]:
     rows: list[list[Button]] = []
     for acc in accounts:
+        star = "⭐ " if acc.is_default else "👤 "
+        label = (
+            f"{star}{acc.email_label} [{acc.slug}]"
+            if "@" in acc.email_label
+            else f"{star}{acc.slug} ({acc.email_label})"
+        )
         rows.append(
             [
                 Button.inline(
-                    lex.btn_cp_reauth_account.format(
-                        slug=acc.slug, email_label=acc.email_label
-                    ),
-                    f"cp:oauth_start:{acc.id}".encode("ascii"),
+                    label,
+                    f"cp:acc_detail:{acc.id}".encode("ascii"),
                 )
             ]
         )
+        action_row: list[Button] = [
+            Button.inline("🔑 OAuth", f"cp:oauth_start:{acc.id}".encode("ascii")),
+            Button.inline("📥 Из терминала", f"cp:imp_acc:{acc.id}".encode("ascii")),
+        ]
+        if not acc.is_default:
+            action_row.append(
+                Button.inline("⭐ Основной", f"cp:set_def_acc:{acc.id}".encode("ascii"))
+            )
+        action_row.append(
+            Button.inline("🗑 Удалить", f"cp:del_acc:{acc.id}".encode("ascii"))
+        )
+        rows.append(action_row)
+
     rows.append([Button.inline(lex.btn_cp_register_new_acc, b"cp:register_new_acc")])
+    rows.append([Button.inline("✏️ Задать почту профиля", b"cp:manual_acc_email")])
     rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
     return rows
 
