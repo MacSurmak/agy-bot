@@ -268,7 +268,7 @@ async def run_service(static_config: StaticConfig) -> None:
     await ipc_server.start()
     await scheduler_service.start_and_hydrate()
     await sensor_service.start_and_hydrate()
-    await control_panel_ui.render_and_pin_dashboard(recreate_at_bottom=True)
+    await control_panel_ui.render_and_pin_dashboard()
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()

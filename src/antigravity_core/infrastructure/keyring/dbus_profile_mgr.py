@@ -534,13 +534,7 @@ class KeyringProfileManager:
                     await asyncio.sleep(0.3)
                     continue
                 if "[Done]" in clean or "Terms of Service" in clean:
-                    os.write(master_fd, b" ")
-                    await asyncio.sleep(0.2)
-                    os.write(master_fd, b"\x1b[B")
-                    await asyncio.sleep(0.2)
                     os.write(master_fd, b"\r")
-                    await asyncio.sleep(0.2)
-                    os.write(master_fd, b"\t\r")
                     accumulated = ""
                     await asyncio.sleep(0.4)
                     continue
@@ -879,6 +873,8 @@ class KeyringProfileManager:
         poll_interval = self._cfg.runtime.dbus_socket_poll_interval_sec
         max_ticks = max(100, int(self._cfg.runtime.command_exec_timeout_sec / poll_interval))
 
+        sent_done_enter = False
+
         for _ in range(max_ticks):
             chunk = b""
             with contextlib.suppress(BlockingIOError, OSError):
@@ -886,6 +882,25 @@ class KeyringProfileManager:
 
             if not chunk:
                 if proc.returncode is not None:
+                    if sent_tui_relogin and not sent_method_enter:
+                        self._cleanup_oauth_pty(proc, master_fd)
+                        master_fd, slave_fd = self._spawn_agy_pty_process()
+                        proc = await asyncio.create_subprocess_exec(
+                            str(self._cfg.paths.agy_binary_path),
+                            stdin=slave_fd,
+                            stdout=slave_fd,
+                            stderr=slave_fd,
+                            cwd=workspace_cwd,
+                            env=oauth_env,
+                            start_new_session=True,
+                        )
+                        os.close(slave_fd)
+                        sent_tui_relogin = False
+                        sent_trust_enter = False
+                        sent_theme_enter = False
+                        sent_done_enter = False
+                        accumulated = ""
+                        continue
                     break
                 await asyncio.sleep(poll_interval)
                 continue
@@ -914,25 +929,12 @@ class KeyringProfileManager:
                 accumulated = ""
                 continue
 
-            if "[Done]" in clean_text or "Terms of Service" in clean_text:
+            if not sent_done_enter and (
+                "[Done]" in clean_text or "Terms of Service" in clean_text
+            ):
                 await asyncio.sleep(poll_interval * 4)
-                os.write(master_fd, b" ")
-                await asyncio.sleep(0.2)
-                os.write(master_fd, b"\x1b[B")
-                await asyncio.sleep(0.2)
                 os.write(master_fd, b"\r")
-                await asyncio.sleep(0.2)
-                os.write(master_fd, b"\t\r")
-                await asyncio.sleep(0.2)
-                os.write(master_fd, b"\x1b[C\r")
-                accumulated = ""
-                continue
-
-            if "x]" in clean_text and not sent_method_enter:
-                await asyncio.sleep(0.2)
-                os.write(master_fd, b"\x1b[B\r")
-                await asyncio.sleep(0.2)
-                os.write(master_fd, b"\t\r")
+                sent_done_enter = True
                 accumulated = ""
                 continue
 
@@ -947,7 +949,9 @@ class KeyringProfileManager:
                 os.write(master_fd, b"/logout")
                 await asyncio.sleep(0.25)
                 os.write(master_fd, b"\r")
-                await asyncio.sleep(0.8)
+                await asyncio.sleep(0.25)
+                os.write(master_fd, b"\r")
+                await asyncio.sleep(0.6)
                 os.write(master_fd, b"/login")
                 await asyncio.sleep(0.25)
                 os.write(master_fd, b"\r")

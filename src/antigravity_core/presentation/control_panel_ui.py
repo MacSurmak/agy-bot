@@ -103,6 +103,7 @@ class ControlPanelUI:
         self._cred_repo = cred_repo
         self._access_repo = access_repo
         self._state: _ControlPanelInteractiveState | None = None
+        self._last_cp_msg_id: int = 0
 
     async def _load_lexicon(self) -> UiLexicon:
         settings = await self._settings_repo.load_settings()
@@ -152,15 +153,14 @@ class ControlPanelUI:
             reply_to=cp_topic_id,
             buttons=buttons,
         )
+        self._last_cp_msg_id = max(self._last_cp_msg_id, msg.id)
         await self._settings_repo.set_dashboard_msg_id(msg.id)
-        try:
+        with contextlib.suppress(RPCError):
             await self._client.pin_message(
                 entity=self._cfg.telegram.forum_chat_id,
                 message=msg.id,
                 notify=False,
             )
-        except RPCError as exc:
-            logger.warning("Could not pin Control-Panel dashboard message", error=str(exc))
 
     async def _build_dashboard_text(self) -> tuple[UiLexicon, str]:
         accounts = await self._account_repo.list_accounts()
@@ -235,6 +235,7 @@ class ControlPanelUI:
             reply_to=cp_topic_id,
             buttons=buttons,
         )
+        self._last_cp_msg_id = max(self._last_cp_msg_id, msg.id)
         await self._settings_repo.set_dashboard_msg_id(msg.id)
         with contextlib.suppress(RPCError):
             await self._client.pin_message(
@@ -243,7 +244,21 @@ class ControlPanelUI:
                 notify=False,
             )
 
+    async def _update_or_recreate_panel(
+        self,
+        event: events.CallbackQuery.Event,
+        text: str,
+        buttons: list[list[Button]],
+    ) -> None:
+        """Edits the panel in-place if no newer messages were sent after it; otherwise recreates at bottom."""
+        if event.message_id >= self._last_cp_msg_id:
+            self._last_cp_msg_id = max(self._last_cp_msg_id, event.message_id)
+            await self._safe_edit_event(event, text, buttons)
+        else:
+            await self._send_fresh_bottom_panel(text, buttons)
+
     async def handle_text_input(self, event: events.NewMessage.Event) -> None:
+        self._last_cp_msg_id = max(self._last_cp_msg_id, event.message.id)
         raw_text = (event.message.message or "").strip()
 
         if raw_text in ("/start", "/panel", "/dashboard") or self._state is None:
@@ -272,7 +287,9 @@ class ControlPanelUI:
         if data_str == "cp:refresh":
             self._state = None
             lex, text = await self._build_dashboard_text()
-            await self._safe_edit_event(event, text, build_control_panel_keyboard(lex))
+            await self._update_or_recreate_panel(
+                event, text, build_control_panel_keyboard(lex)
+            )
             return
 
         if data_str == "cp:probe_quotas":
@@ -325,7 +342,7 @@ class ControlPanelUI:
             await self._keyring_mgr.logout_account(acc)
             await self._account_repo.delete_account(acc_id)
             shutil.rmtree(Path(acc.xdg_data_dir), ignore_errors=True)
-            await self._render_accounts_hub(event, lex, 0, True)
+            await self._render_accounts_hub(event, lex, 0, False)
             return
 
         if data_str == "cp:add_acc_oauth":
@@ -544,7 +561,8 @@ class ControlPanelUI:
         is_new_staged: bool,
     ) -> None:
         await event.answer(lex.cp_toast_launching_oauth)
-        await self._send_fresh_bottom_panel(
+        await self._update_or_recreate_panel(
+            event,
             f"⏳ **Подготовка сессии Google OAuth (`{account.slug}`)**...\nЗапускаю изолированный процесс `agy` и получаю ссылку авторизации...",
             [[Button.inline("❌ Отмена", b"cp:auth_menu")]],
         )
@@ -555,7 +573,8 @@ class ControlPanelUI:
             max_err = self._cfg.limits.error_summary_max_chars
             err_detail = err_msg[:max_err]
             text, kb = await self._build_accounts_hub_view(lex, 0)
-            await self._send_fresh_bottom_panel(
+            await self._update_or_recreate_panel(
+                event,
                 f"❌ **Не удалось запустить OAuth:**\n`{err_detail}`\n\n" + text,
                 kb,
             )
@@ -567,7 +586,8 @@ class ControlPanelUI:
             pending_oauth=pending,
             is_new_staged_account=is_new_staged,
         )
-        await self._send_fresh_bottom_panel(
+        await self._update_or_recreate_panel(
+            event,
             lex.cp_oauth_instructions.format(
                 slug=account.slug,
                 email_label=account.email_label,
@@ -667,7 +687,7 @@ class ControlPanelUI:
         if recreate_at_bottom:
             await self._send_fresh_bottom_panel(text, kb)
         else:
-            await self._safe_edit_event(event, text, kb)
+            await self._update_or_recreate_panel(event, text, kb)
 
     async def _render_single_account_menu(
         self, event: events.CallbackQuery.Event, lex: UiLexicon, acc_id: int
@@ -685,7 +705,7 @@ class ControlPanelUI:
             f"• **Профиль:** `{acc.slug}` ({star})",
             f"• **Статус:** {tok_status}{min_q}",
         ]
-        await self._safe_edit_event(
+        await self._update_or_recreate_panel(
             event,
             "\n".join(lines),
             build_single_account_manage_keyboard(lex, acc),
