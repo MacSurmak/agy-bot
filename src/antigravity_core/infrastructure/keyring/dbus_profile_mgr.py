@@ -626,7 +626,31 @@ class KeyringProfileManager:
                         sent_theme_enter = True
                         accumulated = ""
                         logger.info(
-                            "Confirmed theme/onboarding wizard screen in agy PTY",
+                            "Confirmed theme wizard screen 1 ([Next]) in agy PTY",
+                            account_slug=account.slug,
+                        )
+                        continue
+
+                    if "[Done]" in clean_text or "Terms of Service" in clean_text:
+                        await asyncio.sleep(poll_interval * 4)
+                        os.write(master_fd, b"\r")
+                        accumulated = ""
+                        logger.info(
+                            "Confirmed Terms of Service screen 2 ([Done]) in agy PTY",
+                            account_slug=account.slug,
+                        )
+                        continue
+
+                    if (
+                        not sent_method_enter
+                        and "Toggle accept-edits" in clean_text
+                        and "Select login method" not in clean_text
+                    ):
+                        await asyncio.sleep(poll_interval * 6)
+                        os.write(master_fd, b"/login\r")
+                        accumulated = ""
+                        logger.info(
+                            "Sent /login command at agy TUI prompt",
                             account_slug=account.slug,
                         )
                         continue
@@ -776,38 +800,15 @@ class KeyringProfileManager:
                 pgid = os.getpgid(proc.pid)
                 os.killpg(pgid, signal.SIGTERM)
 
-    async def import_terminal_auth(self, account: GoogleAccount) -> bool:
-        """Imports an active terminal agy login from system keyrings into the account profile."""
-        env = await self.ensure_account_bus(account)
-        if await self.is_account_authenticated(env):
-            await self.backup_account_token_to_db(account)
-            return True
-
-        candidate_keyrings = [
-            Path("/root/.local/share/keyrings/login.keyring"),
-            Path("/root/.local/share/keyrings/default.keyring"),
-            Path("/home/macsurmak/.local/share/keyrings/login.keyring"),
-        ]
-        target_keyring = Path(account.xdg_data_dir) / "keyrings" / "login.keyring"
-        for cand in candidate_keyrings:
-            if cand.is_file() and cand.stat().st_size > 0 and cand.resolve() != target_keyring.resolve():
-                target_keyring.parent.mkdir(parents=True, exist_ok=True)
-                target_keyring.write_bytes(cand.read_bytes())
-                os.chmod(target_keyring, 0o600)
-                await self.evict_account_bus(account.id)
-                new_env = await self.ensure_account_bus(account)
-                if await self.is_account_authenticated(new_env):
-                    await self.backup_account_token_to_db(account)
-                    return True
-
-        return await self.is_account_authenticated(env)
-
     async def evict_account_bus(self, account_id: int) -> None:
         async with self._lock:
             runtime = self._runtimes.pop(account_id, None)
             if runtime is not None and runtime.dbus_pid is not None:
                 with contextlib.suppress(ProcessLookupError):
                     os.kill(runtime.dbus_pid, signal.SIGTERM)
+
+    def cancel_pending_oauth(self, pending: PendingOAuthSession) -> None:
+        self._cleanup_oauth_pty(pending.process, pending.pty_master_fd)
 
     async def shutdown_all(self) -> None:
         async with self._lock:

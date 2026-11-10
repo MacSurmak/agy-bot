@@ -14,6 +14,9 @@ from antigravity_core.domain.models import (
 from antigravity_core.lexicon.schema import UiLexicon
 
 
+_ACCOUNTS_PAGE_SIZE: int = 5
+
+
 def build_control_panel_keyboard(lex: UiLexicon) -> list[list[Button]]:
     return [
         [
@@ -25,15 +28,14 @@ def build_control_panel_keyboard(lex: UiLexicon) -> list[list[Button]]:
             Button.inline(lex.btn_cp_auth_menu, b"cp:auth_menu"),
         ],
         [
-            Button.inline(lex.btn_cp_switch_default_acc, b"cp:switch_default_acc"),
             Button.inline(lex.btn_cp_remount_hosts, b"cp:remount_hosts"),
-        ],
-        [
             Button.inline(lex.btn_cp_tasks_menu, b"cp:tasks_menu"),
-            Button.inline(lex.btn_cp_settings_menu, b"cp:settings_menu"),
         ],
         [
+            Button.inline(lex.btn_cp_settings_menu, b"cp:settings_menu"),
             Button.inline(lex.btn_cp_show_ssh_key, b"cp:show_ssh_key"),
+        ],
+        [
             Button.inline(lex.btn_cp_create_invite, b"cp:create_invite"),
         ],
     ]
@@ -42,45 +44,92 @@ def build_control_panel_keyboard(lex: UiLexicon) -> list[list[Button]]:
 def build_account_auth_keyboard(
     lex: UiLexicon, accounts: list[GoogleAccount]
 ) -> list[list[Button]]:
+    return build_paginated_accounts_keyboard(lex, accounts, 0)
+
+
+def build_paginated_accounts_keyboard(
+    lex: UiLexicon, accounts: list[GoogleAccount], page: int
+) -> list[list[Button]]:
     rows: list[list[Button]] = []
-    for acc in accounts:
+    total = len(accounts)
+    max_page = max(0, (total - 1) // _ACCOUNTS_PAGE_SIZE) if total > 0 else 0
+    curr_page = max(0, min(page, max_page))
+    start_idx = curr_page * _ACCOUNTS_PAGE_SIZE
+    page_items = accounts[start_idx : start_idx + _ACCOUNTS_PAGE_SIZE]
+
+    for acc in page_items:
         star = "⭐ " if acc.is_default else "👤 "
         label = (
-            f"{star}{acc.email_label} [{acc.slug}]"
+            f"{star}{acc.email_label}"
             if "@" in acc.email_label
-            else f"{star}{acc.slug} ({acc.email_label})"
+            else f"{star}{acc.email_label} ({acc.slug})"
         )
         rows.append(
             [
                 Button.inline(
                     label,
-                    f"cp:acc_detail:{acc.id}".encode("ascii"),
+                    f"cp:acc_view:{acc.id}".encode("ascii"),
                 )
             ]
         )
-        action_row: list[Button] = [
-            Button.inline("🔑 OAuth", f"cp:oauth_start:{acc.id}".encode("ascii")),
-            Button.inline("📥 Из терминала", f"cp:imp_acc:{acc.id}".encode("ascii")),
-        ]
-        if not acc.is_default:
-            action_row.append(
-                Button.inline("⭐ Основной", f"cp:set_def_acc:{acc.id}".encode("ascii"))
-            )
-        action_row.append(
-            Button.inline("🗑 Удалить", f"cp:del_acc:{acc.id}".encode("ascii"))
-        )
-        rows.append(action_row)
 
-    rows.append([Button.inline(lex.btn_cp_register_new_acc, b"cp:register_new_acc")])
-    rows.append([Button.inline("✏️ Задать почту профиля", b"cp:manual_acc_email")])
+    if total > _ACCOUNTS_PAGE_SIZE:
+        nav_row: list[Button] = []
+        if curr_page > 0:
+            nav_row.append(
+                Button.inline("⬅️", f"cp:auth_page:{curr_page - 1}".encode("ascii"))
+            )
+        nav_row.append(
+            Button.inline(f"{curr_page + 1}/{max_page + 1}", b"cp:auth_noop")
+        )
+        if curr_page < max_page:
+            nav_row.append(
+                Button.inline("➡️", f"cp:auth_page:{curr_page + 1}".encode("ascii"))
+            )
+        rows.append(nav_row)
+
+    rows.append([Button.inline("➕ Добавить аккаунт", b"cp:add_acc_oauth")])
     rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
+    return rows
+
+
+def build_single_account_manage_keyboard(
+    lex: UiLexicon, account: GoogleAccount
+) -> list[list[Button]]:
+    rows: list[list[Button]] = []
+    if not account.is_default:
+        rows.append(
+            [
+                Button.inline(
+                    "⭐ Сделать основным",
+                    f"cp:set_def_acc:{account.id}".encode("ascii"),
+                )
+            ]
+        )
+    rows.append(
+        [
+            Button.inline(
+                "🔄 Переавторизовать (OAuth)",
+                f"cp:oauth_start:{account.id}".encode("ascii"),
+            )
+        ]
+    )
+    rows.append(
+        [
+            Button.inline(
+                "🗑 Удалить аккаунт",
+                f"cp:del_acc:{account.id}".encode("ascii"),
+            )
+        ]
+    )
+    rows.append([Button.inline("⬅️ Назад к аккаунтам", b"cp:auth_menu")])
     return rows
 
 
 def build_oauth_url_keyboard(lex: UiLexicon, auth_url: str) -> list[list[Button]]:
     return [
         [Button.url(lex.btn_cp_open_oauth_url, auth_url)],
-        [Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")],
+        [Button.inline("❌ Отменить вход", b"cp:cancel_oauth")],
     ]
 
 

@@ -1,5 +1,6 @@
-import json
+import contextlib
 import secrets
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,7 +16,8 @@ from antigravity_core.application.sensor_service import EventSensorService
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import ExecutionMode, TopicKind, UserRole
-from antigravity_core.domain.models import RemoteHost
+from antigravity_core.domain.exceptions import AccountAuthFlowError
+from antigravity_core.domain.models import GoogleAccount, RemoteHost
 from antigravity_core.infrastructure.agy_runtime.cli_inspector import AgyCliInspector
 from antigravity_core.infrastructure.agy_runtime.environment_bootstrap import (
     AgyEnvironmentBootstrapper,
@@ -40,24 +42,25 @@ from antigravity_core.presentation.formatters import (
     render_control_panel_dashboard,
 )
 from antigravity_core.presentation.keyboards import (
-    build_account_auth_keyboard,
     build_control_panel_keyboard,
     build_default_account_picker_keyboard,
     build_oauth_url_keyboard,
+    build_paginated_accounts_keyboard,
     build_setting_options_keyboard,
-    build_settings_menu_keyboard,
+    build_single_account_manage_keyboard,
     build_tasks_management_keyboard,
 )
 from antigravity_core.presentation.workspace_topic_ui import WorkspaceTopicUI
 
-logger = structlog.get_logger(__name__)
+logger: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class _ControlPanelInteractiveState:
     mode: str
     setting_key: str | None
     pending_oauth: PendingOAuthSession | None
+    is_new_staged_account: bool
 
 
 class ControlPanelUI:
@@ -214,29 +217,55 @@ class ControlPanelUI:
             sensors=sensors,
         )
 
+    async def _send_fresh_bottom_panel(
+        self, text: str, buttons: list[list[Button]]
+    ) -> None:
+        """Deletes the previous Control-Panel card above and posts a fresh one at the very bottom."""
+        cp_topic_id = self._cfg.telegram.control_panel_topic_id
+        stored_msg_id = await self._settings_repo.get_dashboard_msg_id()
+        if stored_msg_id is not None:
+            with contextlib.suppress(RPCError):
+                await self._client.delete_messages(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message_ids=[stored_msg_id],
+                )
+
+        msg = await self._client.send_message(
+            entity=self._cfg.telegram.forum_chat_id,
+            message=text,
+            reply_to=cp_topic_id,
+            buttons=buttons,
+        )
+        await self._settings_repo.set_dashboard_msg_id(msg.id)
+        with contextlib.suppress(RPCError):
+            await self._client.pin_message(
+                entity=self._cfg.telegram.forum_chat_id,
+                message=msg.id,
+                notify=False,
+            )
+
     async def handle_text_input(self, event: events.NewMessage.Event) -> None:
         raw_text = (event.message.message or "").strip()
-        cp_topic_id = self._cfg.telegram.control_panel_topic_id
 
-        if raw_text in ("/start", "/panel", "/dashboard"):
+        if raw_text in ("/start", "/panel", "/dashboard") or self._state is None:
+            if self._state is not None and self._state.pending_oauth is not None:
+                self._keyring_mgr.cancel_pending_oauth(self._state.pending_oauth)
+                if self._state.is_new_staged_account:
+                    await self._discard_staged_account(self._state.pending_oauth.account)
             self._state = None
-            await self.render_and_pin_dashboard(recreate_at_bottom=True)
-            return
-
-        if self._state is None:
             await self.render_and_pin_dashboard(recreate_at_bottom=True)
             return
 
         state = self._state
-        if state.mode == "await_new_account":
-            self._state = None
-            await self._process_new_account_input(raw_text)
-            return
+        self._state = None
 
         if state.mode == "await_oauth_code" and state.pending_oauth is not None:
-            self._state = None
-            await self._process_oauth_code_input(state.pending_oauth, raw_text)
+            await self._process_oauth_code_input(
+                state.pending_oauth, raw_text, state.is_new_staged_account
+            )
             return
+
+        await self.render_and_pin_dashboard(recreate_at_bottom=True)
 
     async def handle_callback(self, event: events.CallbackQuery.Event, data_str: str) -> None:
         lex = await self._load_lexicon()
@@ -262,112 +291,52 @@ class ControlPanelUI:
             await self._safe_edit_event(event, text, build_control_panel_keyboard(lex))
             return
 
-        if data_str == "cp:auth_menu" or data_str.startswith("cp:acc_detail:"):
-            await self._render_accounts_hub(event, lex)
+        if data_str == "cp:auth_noop":
+            await event.answer()
             return
 
-        if data_str == "cp:manual_acc_email":
-            self._state = _ControlPanelInteractiveState(
-                mode="await_new_account",
-                setting_key=None,
-                pending_oauth=None,
-            )
-            await event.respond(lex.cp_register_new_acc_prompt)
-            await event.answer()
+        if data_str == "cp:cancel_oauth":
+            if self._state is not None and self._state.pending_oauth is not None:
+                self._keyring_mgr.cancel_pending_oauth(self._state.pending_oauth)
+                if self._state.is_new_staged_account:
+                    await self._discard_staged_account(self._state.pending_oauth.account)
+            self._state = None
+            await event.answer("Авторизация отменена.")
+            await self._render_accounts_hub(event, lex, 0, False)
+            return
+
+        if data_str == "cp:auth_menu":
+            await self._render_accounts_hub(event, lex, 0, False)
+            return
+
+        if data_str.startswith("cp:auth_page:"):
+            page = int(data_str.split(":")[2])
+            await self._render_accounts_hub(event, lex, page, False)
+            return
+
+        if data_str.startswith("cp:acc_view:"):
+            acc_id = int(data_str.split(":")[2])
+            await self._render_single_account_menu(event, lex, acc_id)
             return
 
         if data_str.startswith("cp:del_acc:"):
             acc_id = int(data_str.split(":")[2])
+            acc = await self._account_repo.get_by_id(acc_id)
             await self._keyring_mgr.evict_account_bus(acc_id)
             await self._account_repo.delete_account(acc_id)
-            await event.answer("Профиль аккаунта удалён.")
-            await self._render_accounts_hub(event, lex)
+            shutil.rmtree(Path(acc.xdg_data_dir), ignore_errors=True)
+            await event.answer("Аккаунт удалён.")
+            await self._render_accounts_hub(event, lex, 0, False)
             return
 
-        if data_str.startswith("cp:imp_acc:"):
-            acc_id = int(data_str.split(":")[2])
-            account = await self._account_repo.get_by_id(acc_id)
-            await event.answer("Проверяю и импортирую сессию из терминала...")
-            ok = await self._keyring_mgr.import_terminal_auth(account)
-            if ok:
-                q_info = await self._inspector.fetch_account_quota(account)
-                if "detected_email" in q_info and q_info["detected_email"]:
-                    await self._account_repo.update_email_label(
-                        account.id, str(q_info["detected_email"])
-                    )
-                await self._account_repo.update_quota_snapshot(account.id, q_info)
-                await event.answer("Авторизация успешно подтянута!", alert=True)
-            else:
-                await event.answer(
-                    "Не найдена активная сессия в терминале. Используйте 🔑 OAuth.",
-                    alert=True,
-                )
-            await self._render_accounts_hub(event, lex)
-            return
-
-        if data_str == "cp:register_new_acc":
-            existing = await self._account_repo.list_accounts()
-            used_nums = {
-                int(a.slug.split("_")[1])
-                for a in existing
-                if a.slug.startswith("acc_") and a.slug.split("_")[1].isdigit()
-            }
-            next_idx = 1
-            while next_idx in used_nums:
-                next_idx += 1
-            slug = f"acc_{next_idx}"
-            email_label = f"Google Account #{next_idx}"
-            xdg_dir = str((self._cfg.paths.profiles_data_dir / slug).resolve())
-            dbus_sock = str((self._cfg.paths.runtime_dir / f"bus_{slug}.sock").resolve())
-            keyring_password = secrets.token_urlsafe(self._cfg.runtime.keyring_password_bytes)
-            encrypted_pass = self._vault.encrypt_text(keyring_password)
-
-            await self._account_repo.create_account(
-                slug=slug,
-                email_label=email_label,
-                xdg_data_dir=xdg_dir,
-                dbus_socket_path=dbus_sock,
-                encrypted_keyring_pass=encrypted_pass,
-                is_default=(len(existing) == 0),
-                priority=next_idx,
-            )
-            await self._render_accounts_hub(event, lex)
-            await event.answer(f"Создан профиль {slug}. Выберите 🔑 OAuth или 📥 Из терминала.")
+        if data_str == "cp:add_acc_oauth":
+            await self._start_oauth_for_new_staged_account(event, lex)
             return
 
         if data_str.startswith("cp:oauth_start:"):
             acc_id = int(data_str.split(":")[2])
             account = await self._account_repo.get_by_id(acc_id)
-            await event.answer(lex.cp_toast_launching_oauth)
-            try:
-                pending = await self._keyring_mgr.start_remote_oauth_flow(account)
-            except Exception as exc:
-                max_err = self._cfg.limits.error_summary_max_chars
-                err_detail = f"{type(exc).__name__}: {exc}"[:max_err]
-                logger.error(
-                    "OAuth flow start failed",
-                    account_slug=account.slug,
-                    error=err_detail,
-                    exc_info=True,
-                )
-                await event.respond(
-                    lex.cp_oauth_start_failed.format(slug=account.slug, error=err_detail)
-                )
-                return
-
-            self._state = _ControlPanelInteractiveState(
-                mode="await_oauth_code",
-                setting_key=None,
-                pending_oauth=pending,
-            )
-            await event.respond(
-                lex.cp_oauth_instructions.format(
-                    slug=account.slug,
-                    email_label=account.email_label,
-                    auth_url=pending.auth_url,
-                ),
-                buttons=build_oauth_url_keyboard(lex, pending.auth_url),
-            )
+            await self._start_oauth_for_account(event, lex, account, False)
             return
 
         if data_str == "cp:switch_default_acc":
@@ -383,7 +352,7 @@ class ControlPanelUI:
             acc_id = int(data_str.split(":")[2])
             await self._account_repo.set_default_account(acc_id)
             await event.answer(lex.cp_toast_default_acc_updated)
-            await self._render_accounts_hub(event, lex)
+            await self._render_single_account_menu(event, lex, acc_id)
             return
 
         if data_str == "cp:remount_hosts":
@@ -533,32 +502,104 @@ class ControlPanelUI:
         )
         await self.render_and_pin_dashboard(recreate_at_bottom=True)
 
+    async def _discard_staged_account(self, account: GoogleAccount) -> None:
+        await self._keyring_mgr.evict_account_bus(account.id)
+        await self._account_repo.delete_account(account.id)
+        shutil.rmtree(Path(account.xdg_data_dir), ignore_errors=True)
+
+    async def _start_oauth_for_new_staged_account(
+        self, event: events.CallbackQuery.Event, lex: UiLexicon
+    ) -> None:
+        existing = await self._account_repo.list_accounts()
+        used_nums = {
+            int(a.slug.split("_")[1])
+            for a in existing
+            if a.slug.startswith("acc_") and a.slug.split("_")[1].isdigit()
+        }
+        next_idx = 1
+        while next_idx in used_nums:
+            next_idx += 1
+        slug = f"acc_{next_idx}"
+        email_label = f"Google Account #{next_idx}"
+        xdg_dir = str((self._cfg.paths.profiles_data_dir / slug).resolve())
+        dbus_sock = str((self._cfg.paths.runtime_dir / f"bus_{slug}.sock").resolve())
+        keyring_password = secrets.token_urlsafe(self._cfg.runtime.keyring_password_bytes)
+        encrypted_pass = self._vault.encrypt_text(keyring_password)
+
+        staged_acc = await self._account_repo.create_account(
+            slug=slug,
+            email_label=email_label,
+            xdg_data_dir=xdg_dir,
+            dbus_socket_path=dbus_sock,
+            encrypted_keyring_pass=encrypted_pass,
+            is_default=(len(existing) == 0),
+            priority=next_idx,
+        )
+        await self._start_oauth_for_account(event, lex, staged_acc, True)
+
+    async def _start_oauth_for_account(
+        self,
+        event: events.CallbackQuery.Event,
+        lex: UiLexicon,
+        account: GoogleAccount,
+        is_new_staged: bool,
+    ) -> None:
+        await event.answer(lex.cp_toast_launching_oauth)
+        try:
+            pending = await self._keyring_mgr.start_remote_oauth_flow(account)
+        except AccountAuthFlowError as exc:
+            if is_new_staged:
+                await self._discard_staged_account(account)
+            max_err = self._cfg.limits.error_summary_max_chars
+            err_detail = str(exc)[:max_err]
+            await self._render_accounts_hub(event, lex, 0, False)
+            await event.answer(f"Ошибка запуска OAuth: {err_detail[:160]}", alert=True)
+            raise
+
+        self._state = _ControlPanelInteractiveState(
+            mode="await_oauth_code",
+            setting_key=None,
+            pending_oauth=pending,
+            is_new_staged_account=is_new_staged,
+        )
+        await self._safe_edit_event(
+            event,
+            lex.cp_oauth_instructions.format(
+                slug=account.slug,
+                email_label=account.email_label,
+                auth_url=pending.auth_url,
+            ),
+            build_oauth_url_keyboard(lex, pending.auth_url),
+        )
+
     async def _process_oauth_code_input(
-        self, pending: PendingOAuthSession, verification_code: str
+        self,
+        pending: PendingOAuthSession,
+        verification_code: str,
+        is_new_staged: bool,
     ) -> None:
         lex = await self._load_lexicon()
         try:
             await self._keyring_mgr.complete_remote_oauth_flow(pending, verification_code)
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=lex.cp_oauth_success.format(slug=pending.account.slug),
-                reply_to=self._cfg.telegram.control_panel_topic_id,
-            )
-        except Exception as exc:
+            q_info = await self._inspector.fetch_account_quota(pending.account)
+            if "detected_email" in q_info and q_info["detected_email"]:
+                await self._account_repo.update_email_label(
+                    pending.account.id, str(q_info["detected_email"])
+                )
+            await self._account_repo.update_quota_snapshot(pending.account.id, q_info)
+            updated_acc = await self._account_repo.get_by_id(pending.account.id)
+            status_banner = f"✅ **Аккаунт `{updated_acc.email_label}` успешно авторизован!**\n\n"
+            text, kb = await self._build_accounts_hub_view(lex, 0)
+            await self._send_fresh_bottom_panel(status_banner + text, kb)
+        except AccountAuthFlowError as exc:
+            if is_new_staged:
+                await self._discard_staged_account(pending.account)
             max_err = self._cfg.limits.error_summary_max_chars
-            err_detail = f"{type(exc).__name__}: {exc}"[:max_err]
-            logger.error(
-                "OAuth verification failed",
-                account_slug=pending.account.slug,
-                error=err_detail,
-                exc_info=True,
-            )
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=lex.cp_oauth_failed.format(error=err_detail),
-                reply_to=self._cfg.telegram.control_panel_topic_id,
-            )
-        await self.render_and_pin_dashboard(recreate_at_bottom=True)
+            err_detail = str(exc)[:max_err]
+            status_banner = f"❌ **Ошибка авторизации (аккаунт не добавлен):**\n`{err_detail}`\n\n"
+            text, kb = await self._build_accounts_hub_view(lex, 0)
+            await self._send_fresh_bottom_panel(status_banner + text, kb)
+            raise
 
     async def _create_topic_immediately(
         self, event: events.CallbackQuery.Event, lex: UiLexicon
@@ -593,36 +634,51 @@ class ControlPanelUI:
     ) -> None:
         await self._workspace_ui.initialize_created_topic(topic_id, assigned_dir)
 
-    async def _render_accounts_hub(
-        self, event: events.CallbackQuery.Event, lex: UiLexicon
-    ) -> None:
+    async def _build_accounts_hub_view(
+        self, lex: UiLexicon, page: int
+    ) -> tuple[str, list[list[Button]]]:
         accounts = await self._account_repo.list_accounts()
         lines = [
-            format_wide_header_block("👤 Управление аккаунтами Google AI Pro"),
-            "Для каждого профиля доступны:",
-            "• **🔑 OAuth** — вход по ссылке через браузер",
-            "• **📥 Из терминала** — подтянуть уже выполненный вход из консоли LXC",
-            "• **⭐ Основной** — назначить для новых топиков",
-            "• **🗑 Удалить** — удалить профиль (топики переведутся на основной)\n",
+            format_wide_header_block("🔑 Управление аккаунтами Google AI Pro"),
+            "Выберите аккаунт для управления или добавьте новый:",
         ]
         if not accounts:
-            lines.append("⚠️ Нет зарегистрированных профилей. Нажмите кнопку ниже, чтобы создать первый профиль.")
-        for acc in accounts:
-            star = "⭐ **[ОСНОВНОЙ]** " if acc.is_default else ""
-            tok_status = "🟢 Токен OK" if acc.encrypted_token_backup else "⚠️ Нет токена"
-            min_q = (
-                f" | Квота: `{acc.last_quota_json['min_remaining_pct']}%`"
-                if acc.last_quota_json and "min_remaining_pct" in acc.last_quota_json
-                else ""
-            )
-            lines.append(
-                f"▸ `{acc.slug}` — **{acc.email_label}** {star}({tok_status}{min_q})"
-            )
+            lines.append("\n⚠️ Нет подключенных аккаунтов. Нажмите **➕ Добавить аккаунт**.")
+        return "\n".join(lines), build_paginated_accounts_keyboard(lex, accounts, page)
 
+    async def _render_accounts_hub(
+        self,
+        event: events.CallbackQuery.Event,
+        lex: UiLexicon,
+        page: int,
+        recreate_at_bottom: bool,
+    ) -> None:
+        text, kb = await self._build_accounts_hub_view(lex, page)
+        if recreate_at_bottom:
+            await self._send_fresh_bottom_panel(text, kb)
+        else:
+            await self._safe_edit_event(event, text, kb)
+
+    async def _render_single_account_menu(
+        self, event: events.CallbackQuery.Event, lex: UiLexicon, acc_id: int
+    ) -> None:
+        acc = await self._account_repo.get_by_id(acc_id)
+        star = "⭐ **Основной аккаунт**" if acc.is_default else "👤 Дополнительный аккаунт"
+        tok_status = "🟢 Авторизован (Fernet Backup OK)" if acc.encrypted_token_backup else "⚠️ Требуется вход"
+        min_q = (
+            f"\n📊 **Остаток квоты:** `{acc.last_quota_json['min_remaining_pct']}%`"
+            if acc.last_quota_json and "min_remaining_pct" in acc.last_quota_json
+            else ""
+        )
+        lines = [
+            format_wide_header_block(f"👤 Аккаунт: {acc.email_label}"),
+            f"• **Профиль:** `{acc.slug}` ({star})",
+            f"• **Статус:** {tok_status}{min_q}",
+        ]
         await self._safe_edit_event(
             event,
             "\n".join(lines),
-            build_account_auth_keyboard(lex, accounts),
+            build_single_account_manage_keyboard(lex, acc),
         )
 
     async def _render_hosts_and_credentials_menu(
