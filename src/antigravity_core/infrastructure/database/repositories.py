@@ -481,6 +481,13 @@ class RemoteHostRepository:
             await session.flush()
             return _map_remote_host(row)
 
+    async def delete_host(self, alias: str) -> None:
+        async with self._db.session() as session:
+            await session.execute(
+                delete(RemoteHostRow).where(RemoteHostRow.alias == alias)
+            )
+            await session.flush()
+
 
 class SshCredentialRepository:
     def __init__(self, db: DatabaseManager) -> None:

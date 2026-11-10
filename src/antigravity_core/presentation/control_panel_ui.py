@@ -376,9 +376,25 @@ class ControlPanelUI:
             return
 
         if data_str.startswith("cp:del_cred:"):
-            cred_key = data_str.split(":", 2)[2]
+            _, _, cred_key = data_str.split(":", 2)
             await self._cred_repo.delete_credential(cred_key)
             await event.answer(f"Пароль для {cred_key} сброшен.")
+            await self._render_hosts_and_credentials_menu(event, lex)
+            return
+
+        if data_str.startswith("cp:del_host:"):
+            _, _, alias = data_str.split(":", 2)
+            host_entry = await self._host_repo.get_by_alias(alias)
+            if host_entry is not None:
+                await self._host_repo.delete_host(alias)
+                self._mount_mgr.remove_host_config(alias)
+                cred_key_alias = f"{host_entry.ssh_user}@{host_entry.alias}:{host_entry.ssh_port}"
+                cred_key_ip = f"{host_entry.ssh_user}@{host_entry.hostname_or_ip}:{host_entry.ssh_port}"
+                await self._cred_repo.delete_credential(cred_key_alias)
+                await self._cred_repo.delete_credential(cred_key_ip)
+                all_hosts = await self._host_repo.list_hosts()
+                self._bootstrapper.sync_global_agents_md_host_map(all_hosts)
+            await event.answer(f"Хост {alias} удалён из картотеки.")
             await self._render_hosts_and_credentials_menu(event, lex)
             return
 
@@ -714,18 +730,59 @@ class ControlPanelUI:
     async def _render_hosts_and_credentials_menu(
         self, event: events.CallbackQuery.Event, lex: UiLexicon
     ) -> None:
-        creds = await self._cred_repo.list_credentials()
         hosts = await self._host_repo.list_hosts()
+        creds = await self._cred_repo.list_credentials()
+        cred_map = {c.credential_key: c for c in creds}
+        processed_creds: set[str] = set()
+
         lines = [
             format_wide_header_block("🖥 Серверы и сохранённые пароли SSH / Sudo"),
-            "Нажмите на сервер ниже, чтобы сбросить его сохранённый пароль (при следующем обращении бот запросит новый пароль в топике):",
+            "Реестр всех известных серверов инфраструктуры:\n",
         ]
         rows: list[list[Button]] = []
-        if not creds and not hosts:
-            lines.append("\n• Сохранённых учётных записей пока нет.")
+
+        if not hosts and not creds:
+            lines.append("• Серверов пока нет. Зарегистрируйте хост или обратитесь к `user@host`.")
+
+        for h in hosts:
+            k_alias = f"{h.ssh_user}@{h.alias}:{h.ssh_port}"
+            k_ip = f"{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}"
+            matched_c = cred_map.get(k_alias) if k_alias in cred_map else cred_map.get(k_ip)
+            if matched_c is not None:
+                processed_creds.add(matched_c.credential_key)
+
+            route_info = f" (via `{h.jump_host}`)" if h.jump_host else ""
+            key_badge = "🟢 Ключ OK" if (matched_c and matched_c.key_provisioned) else "🔑 Авторизован"
+            sudo_badge = "🔒 Sudo-пароль сохранён" if matched_c else "⚠️ Sudo-пароль не задан"
+
+            lines.append(
+                f"▸ **`{h.alias}`** (`{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}`{route_info})\n"
+                f"   └─ {key_badge} │ {sudo_badge}"
+            )
+            row: list[Button] = []
+            if matched_c is not None:
+                row.append(
+                    Button.inline(
+                        f"🔄 Сбросить пароль: {h.alias}",
+                        f"cp:del_cred:{matched_c.credential_key}".encode("utf-8"),
+                    )
+                )
+            row.append(
+                Button.inline(
+                    f"🗑 Удалить сервер: {h.alias}",
+                    f"cp:del_host:{h.alias}".encode("utf-8"),
+                )
+            )
+            rows.append(row)
+
         for c in creds:
-            status_icon = "🟢 Ключ OK" if c.key_provisioned else "🔑 Только пароль"
-            lines.append(f"• `{c.credential_key}` — {status_icon}")
+            if c.credential_key in processed_creds:
+                continue
+            key_badge = "🟢 Ключ OK" if c.key_provisioned else "⚠️ Нет ключа"
+            lines.append(
+                f"▸ **`{c.credential_key}`**\n"
+                f"   └─ {key_badge} │ 🔒 Sudo-пароль сохранён"
+            )
             rows.append(
                 [
                     Button.inline(
@@ -734,6 +791,7 @@ class ControlPanelUI:
                     )
                 ]
             )
+
         rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
         await self._safe_edit_event(event, "\n".join(lines), rows)
 

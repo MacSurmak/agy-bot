@@ -292,6 +292,11 @@ class RemoteMountManager:
         os.chmod(config_file, 0o600)
         return config_file
 
+    def remove_host_config(self, alias: str) -> None:
+        conf_file = self._cfg.paths.ssh_config_dir / f"{alias.strip()}.conf"
+        if conf_file.is_file():
+            conf_file.unlink()
+
     async def verify_ssh_connectivity(self, host: RemoteHost) -> None:
         self.write_ssh_config_entry(host)
         proc = await asyncio.create_subprocess_exec(
@@ -509,39 +514,6 @@ class RemoteMountManager:
         finally:
             self._pending_passwords.pop(topic_id, None)
 
-    async def _try_propagate_key_via_jump_host(
-        self, jump_host: str, target_user: str, target_host: str, port: int
-    ) -> bool:
-        if not jump_host:
-            return False
-        pub_key = await self.ensure_local_ssh_keypair()
-        install_cmd = (
-            "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
-            f"(grep -qxF {shlex.quote(pub_key)} ~/.ssh/authorized_keys 2>/dev/null || "
-            f"printf '%s\\n' {shlex.quote(pub_key)} >> ~/.ssh/authorized_keys) && "
-            "chmod 600 ~/.ssh/authorized_keys"
-        )
-        nested_ssh = (
-            f"ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "
-            f"-o ConnectTimeout={self._cfg.remotes.ssh_connect_timeout_sec} "
-            f"-p {port} {shlex.quote(f'{target_user}@{target_host}')} {shlex.quote(install_cmd)}"
-        )
-        proc = await asyncio.create_subprocess_exec(
-            "/usr/bin/ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            f"ConnectTimeout={self._cfg.remotes.ssh_connect_timeout_sec}",
-            jump_host,
-            nested_ssh,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._internal_ssh_env(),
-        )
-        await proc.communicate()
-        return proc.returncode == 0
-
     async def ensure_target_access(
         self, topic_id: int, raw_target: str, explicit_port: int
     ) -> tuple[str, SshCredential | None]:
@@ -584,16 +556,27 @@ class RemoteMountManager:
                 if self._cred_repo is not None
                 else None
             )
-            if await self._test_batch_key_auth(resolved_target, port, clean_jump):
+            key_ok = await self._test_batch_key_auth(resolved_target, port, clean_jump)
+            if key_ok:
                 if cred is not None and not cred.key_provisioned and self._cred_repo is not None:
                     cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
-                return resolved_target, cred
-
-            if clean_jump and await self._try_propagate_key_via_jump_host(
-                clean_jump, ssh_user, host_part, port
-            ):
-                if await self._test_batch_key_auth(resolved_target, port, clean_jump):
+                if cred is not None or ssh_user == "root":
                     return resolved_target, cred
+
+                entered_sudo_pass = await self._request_password_from_owner(
+                    topic_id, f"sudo@{resolved_target}"
+                )
+                if self._vault is not None and self._cred_repo is not None:
+                    enc = self._vault.encrypt_text(entered_sudo_pass)
+                    cred = await self._cred_repo.upsert_credential(
+                        credential_key=cred_key,
+                        ssh_user=ssh_user,
+                        host_target=host_part,
+                        ssh_port=port,
+                        encrypted_password=enc,
+                        key_provisioned=True,
+                    )
+                return resolved_target, cred
 
             if cred is not None and self._vault is not None:
                 saved_pass = self._vault.decrypt_text(cred.encrypted_password)
@@ -608,13 +591,6 @@ class RemoteMountManager:
                 cred = None
 
             entered_pass = await self._request_password_from_owner(topic_id, resolved_target)
-            if not await self._provision_key_with_password(
-                resolved_target, port, entered_pass, clean_jump
-            ):
-                raise RemoteMountError(
-                    f"Failed to authenticate and install SSH key on '{resolved_target}' with the provided password."
-                )
-
             if self._vault is not None and self._cred_repo is not None:
                 enc = self._vault.encrypt_text(entered_pass)
                 cred = await self._cred_repo.upsert_credential(
@@ -623,8 +599,20 @@ class RemoteMountManager:
                     host_target=host_part,
                     ssh_port=port,
                     encrypted_password=enc,
-                    key_provisioned=True,
+                    key_provisioned=False,
                 )
+
+            if not await self._provision_key_with_password(
+                resolved_target, port, entered_pass, clean_jump
+            ):
+                if self._cred_repo is not None:
+                    await self._cred_repo.delete_credential(cred_key)
+                raise RemoteMountError(
+                    f"Failed to authenticate and install SSH key on '{resolved_target}' with the provided password."
+                )
+
+            if self._cred_repo is not None:
+                cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
             return resolved_target, cred
 
     async def authorize_sudo_operation(
