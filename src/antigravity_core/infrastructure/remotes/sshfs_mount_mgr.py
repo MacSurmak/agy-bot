@@ -135,10 +135,17 @@ class RemoteMountManager:
         app_root = str(self._cfg.paths.workspaces_root_dir.parent.parent.resolve())
         brain_dir = str((self._cfg.paths.agy_home_dir / "antigravity-cli" / "brain").resolve())
 
+        wrapper_src = Path(__file__).with_name("ssh_cli_wrapper.py")
+        standalone_wrapper = bin_dir / "ssh_cli_wrapper.py"
+        standalone_wrapper.write_text(
+            wrapper_src.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        os.chmod(standalone_wrapper, 0o755)
+
         ssh_wrapper = bin_dir / "ssh"
         ssh_script = (
             "#!/bin/sh\n"
-            f'exec "{python_bin}" -m antigravity_core.infrastructure.remotes.ssh_cli_wrapper "$@"\n'
+            f'exec "{python_bin}" "{standalone_wrapper}" "$@"\n'
         )
         ssh_wrapper.write_text(ssh_script, encoding="utf-8")
         os.chmod(ssh_wrapper, 0o755)

@@ -12,7 +12,7 @@ Every conversation topic in Telegram corresponds to an isolated workspace.
 2. **Stage 2 — Work Directly via Registered Alias (`/ssh:user@<alias>:/path` & `ssh user@<alias>`):**
    - Once a host is registered, **ALWAYS address it directly by `<alias>`** (never pass manual `-J` flags or `|ssh:` pipes):
      - Native file tools (`view_file`, `read_file`, `write_to_file`, `write_file`, `replace_file_content`, `multi_replace_file_content`, `edit_file`, `list_dir`):
-       `/ssh:user@<alias>:/abs/path` or `/ssh:user@<alias>:~/rel/path` (e.g. `/ssh:user@bigcomp:/home/user/test.txt` or `/ssh:user@bigcomp:~/test.txt`).
+       `/ssh:user@<alias>:/abs/path` (always use full absolute paths like `/ssh:user@bigcomp:/home/user/test.txt`, never use `~`).
      - If `read_file` / `view_file` reports `REMOTE FILE DOES NOT EXIST`, do NOT panic or debug the container — it simply means the file has not been created on the remote server yet. Call `write_file` / `write_to_file` on `/ssh:user@<alias>:/path` to create it!
      - Shell commands (`run_command`):
        `ssh user@<alias> "command"` (write plain `sudo` inside the command when root privileges are needed).

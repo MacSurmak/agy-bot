@@ -96,7 +96,7 @@ class AgyEnvironmentBootstrapper:
             "2. **STAGE 2 — WORK DIRECTLY BY ALIAS (`/ssh:user@<alias>:/path` & `ssh user@<alias>`):**\n"
             "   - Once a host is registered, **ALWAYS address it directly by its `<alias>`** (OpenSSH handles `ProxyJump` automatically; never use manual `-J` or `|ssh:` pipes):\n"
             "   - Native file tools (`view_file`, `read_file`, `write_to_file`, `write_file`, `replace_file_content`, `multi_replace_file_content`, `edit_file`, `list_dir`): "
-            "`/ssh:user@<alias>:/abs/path` or `/ssh:user@<alias>:~/rel/path`.\n"
+            "`/ssh:user@<alias>:/abs/path` (always use full absolute paths like `/home/user/...`, never use `~`).\n"
             "   - If `read_file` / `view_file` returns `REMOTE FILE DOES NOT EXIST`, it simply means the file does not exist on the remote host yet — call `write_file` / `write_to_file` on `/ssh:user@<alias>:/path` to create it. Never debug the LXC container or look for `/mnt/remotes` or FUSE.\n"
             "   - Never edit files via `sed -i`, `awk`, `python3 -c`, or `cat << EOF >` in shell commands.\n"
             "   - Shell commands (`run_command`): `ssh user@<alias> \"command\"` (write plain `sudo` inside the command when root privileges are needed).\n"
