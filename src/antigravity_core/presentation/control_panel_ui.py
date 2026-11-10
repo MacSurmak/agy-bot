@@ -16,7 +16,6 @@ from antigravity_core.application.sensor_service import EventSensorService
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import ExecutionMode, TopicKind, UserRole
-from antigravity_core.domain.exceptions import AccountAuthFlowError
 from antigravity_core.domain.models import GoogleAccount, RemoteHost
 from antigravity_core.infrastructure.agy_runtime.cli_inspector import AgyCliInspector
 from antigravity_core.infrastructure.agy_runtime.environment_bootstrap import (
@@ -545,16 +544,23 @@ class ControlPanelUI:
         is_new_staged: bool,
     ) -> None:
         await event.answer(lex.cp_toast_launching_oauth)
-        try:
-            pending = await self._keyring_mgr.start_remote_oauth_flow(account)
-        except AccountAuthFlowError as exc:
+        await self._safe_edit_event(
+            event,
+            f"⏳ **Подготовка сессии Google OAuth (`{account.slug}`)**...\nЗапускаю изолированный процесс `agy` и получаю ссылку авторизации...",
+            [[Button.inline("❌ Отмена", b"cp:auth_menu")]],
+        )
+        pending, err_msg = await self._keyring_mgr.try_start_remote_oauth_flow(account)
+        if pending is None:
             if is_new_staged:
                 await self._discard_staged_account(account)
             max_err = self._cfg.limits.error_summary_max_chars
-            err_detail = str(exc)[:max_err]
-            await self._render_accounts_hub(event, lex, 0, False)
-            await event.answer(f"Ошибка запуска OAuth: {err_detail[:160]}", alert=True)
-            raise
+            err_detail = err_msg[:max_err]
+            text, kb = await self._build_accounts_hub_view(lex, 0)
+            await self._send_fresh_bottom_panel(
+                f"❌ **Не удалось запустить OAuth:**\n`{err_detail}`\n\n" + text,
+                kb,
+            )
+            return
 
         self._state = _ControlPanelInteractiveState(
             mode="await_oauth_code",
@@ -562,8 +568,7 @@ class ControlPanelUI:
             pending_oauth=pending,
             is_new_staged_account=is_new_staged,
         )
-        await self._safe_edit_event(
-            event,
+        await self._send_fresh_bottom_panel(
             lex.cp_oauth_instructions.format(
                 slug=account.slug,
                 email_label=account.email_label,
@@ -579,27 +584,33 @@ class ControlPanelUI:
         is_new_staged: bool,
     ) -> None:
         lex = await self._load_lexicon()
-        try:
-            await self._keyring_mgr.complete_remote_oauth_flow(pending, verification_code)
-            q_info = await self._inspector.fetch_account_quota(pending.account)
-            if "detected_email" in q_info and q_info["detected_email"]:
-                await self._account_repo.update_email_label(
-                    pending.account.id, str(q_info["detected_email"])
-                )
-            await self._account_repo.update_quota_snapshot(pending.account.id, q_info)
-            updated_acc = await self._account_repo.get_by_id(pending.account.id)
-            status_banner = f"✅ **Аккаунт `{updated_acc.email_label}` успешно авторизован!**\n\n"
-            text, kb = await self._build_accounts_hub_view(lex, 0)
-            await self._send_fresh_bottom_panel(status_banner + text, kb)
-        except AccountAuthFlowError as exc:
+        ok, err_msg = await self._keyring_mgr.try_complete_remote_oauth_flow(
+            pending, verification_code
+        )
+        if not ok:
             if is_new_staged:
                 await self._discard_staged_account(pending.account)
             max_err = self._cfg.limits.error_summary_max_chars
-            err_detail = str(exc)[:max_err]
-            status_banner = f"❌ **Ошибка авторизации (аккаунт не добавлен):**\n`{err_detail}`\n\n"
+            err_detail = err_msg[:max_err]
+            status_banner = (
+                f"❌ **Ошибка авторизации (аккаунт не добавлен):**\n`{err_detail}`\n\n"
+            )
             text, kb = await self._build_accounts_hub_view(lex, 0)
             await self._send_fresh_bottom_panel(status_banner + text, kb)
-            raise
+            return
+
+        q_info = await self._inspector.fetch_account_quota(pending.account)
+        if "detected_email" in q_info and q_info["detected_email"]:
+            await self._account_repo.update_email_label(
+                pending.account.id, str(q_info["detected_email"])
+            )
+        await self._account_repo.update_quota_snapshot(pending.account.id, q_info)
+        updated_acc = await self._account_repo.get_by_id(pending.account.id)
+        status_banner = (
+            f"✅ **Аккаунт `{updated_acc.email_label}` успешно авторизован!**\n\n"
+        )
+        text, kb = await self._build_accounts_hub_view(lex, 0)
+        await self._send_fresh_bottom_panel(status_banner + text, kb)
 
     async def _create_topic_immediately(
         self, event: events.CallbackQuery.Event, lex: UiLexicon
