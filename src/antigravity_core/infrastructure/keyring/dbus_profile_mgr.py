@@ -2,9 +2,11 @@ import asyncio
 import base64
 import contextlib
 import fcntl
+import json
 import os
 import pty
 import re
+import shutil
 import signal
 import struct
 import termios
@@ -83,6 +85,65 @@ class KeyringProfileManager:
         except OSError:
             return False
 
+    def _prepare_isolated_account_home(self, xdg_dir: Path) -> Path:
+        """Creates an isolated HOME for the account with shared symlinks for rules/brain/ssh and isolated token files."""
+        acc_home = xdg_dir / "home"
+        acc_gemini = acc_home / ".gemini"
+        acc_cli = acc_gemini / "antigravity-cli"
+        acc_cache = acc_cli / "cache"
+        acc_cache.mkdir(parents=True, exist_ok=True)
+        os.chmod(acc_home, 0o700)
+
+        global_home = self._cfg.paths.agy_home_dir.parent
+        global_gemini = self._cfg.paths.agy_home_dir
+        global_cli = global_gemini / "antigravity-cli"
+
+        symlinks: list[tuple[Path, Path]] = [
+            (acc_home / ".ssh", global_home / ".ssh"),
+            (acc_gemini / "AGENTS.md", global_gemini / "AGENTS.md"),
+            (acc_gemini / "config", global_gemini / "config"),
+            (acc_cli / "settings.json", global_cli / "settings.json"),
+            (acc_cli / "conversation_summaries.db", global_cli / "conversation_summaries.db"),
+            (acc_cli / "brain", global_cli / "brain"),
+            (acc_cli / "conversations", global_cli / "conversations"),
+        ]
+        (global_cli / "brain").mkdir(parents=True, exist_ok=True)
+        (global_cli / "conversations").mkdir(parents=True, exist_ok=True)
+
+        for link_path, target_path in symlinks:
+            if link_path.is_symlink():
+                if link_path.resolve() == target_path.resolve():
+                    continue
+                link_path.unlink()
+            elif link_path.exists():
+                if link_path.is_dir():
+                    shutil.rmtree(link_path, ignore_errors=True)
+                else:
+                    link_path.unlink()
+            link_path.symlink_to(target_path)
+
+        onboarding_file = acc_cache / "onboarding.json"
+        if not onboarding_file.is_file():
+            mac_onboarding = Path("/home/macsurmak/.gemini/antigravity-cli/cache/onboarding.json")
+            if mac_onboarding.is_file():
+                onboarding_file.write_bytes(mac_onboarding.read_bytes())
+            else:
+                onboarding_file.write_text(
+                    '{"onboardingCompleted":true,"termsAccepted":true,"theme":"default"}\n',
+                    encoding="utf-8",
+                )
+
+        default_proj = acc_cache / "default_project_id.txt"
+        mac_proj = Path("/home/macsurmak/.gemini/antigravity-cli/cache/default_project_id.txt")
+        if not default_proj.is_file() and mac_proj.is_file():
+            default_proj.write_bytes(mac_proj.read_bytes())
+
+        return acc_home
+
+    @staticmethod
+    def _account_cli_dir(xdg_dir: Path) -> Path:
+        return xdg_dir / "home" / ".gemini" / "antigravity-cli"
+
     async def _initialize_account_bus_locked(self, account: GoogleAccount) -> dict[str, str]:
         xdg_dir = Path(account.xdg_data_dir)
         keyrings_dir = xdg_dir / "keyrings"
@@ -92,6 +153,11 @@ class KeyringProfileManager:
         os.chmod(xdg_dir, 0o700)
         os.chmod(keyrings_dir, 0o700)
         os.chmod(acc_runtime_dir, 0o700)
+
+        acc_home = self._prepare_isolated_account_home(xdg_dir)
+        acc_cli = self._account_cli_dir(xdg_dir)
+        token_file = acc_cli / "antigravity-oauth-token"
+        jetski_file = acc_cli / "jetski_state.pbtxt"
 
         default_ptr = keyrings_dir / "default"
         if not default_ptr.exists():
@@ -115,7 +181,7 @@ class KeyringProfileManager:
         base_env: dict[str, str] = {
             **inherited_env,
             "PATH": self._cfg.paths.system_path_env,
-            "HOME": str(self._cfg.paths.agy_home_dir.parent),
+            "HOME": str(acc_home),
             "USER": self._cfg.paths.system_user,
             "LOGNAME": self._cfg.paths.system_logname,
             "XDG_DATA_HOME": str(xdg_dir),
@@ -125,39 +191,50 @@ class KeyringProfileManager:
 
         raw_password = self._vault.decrypt_text(account.encrypted_keyring_pass)
 
-        # Errata Patch #5 - Step 1: Unlock keyring via --daemonize --login without trailing newline
         login_env_vars = await self._run_keyring_login_phase(base_env, raw_password)
         profile_env = {**base_env, **login_env_vars}
 
-        # Errata Patch #5 - Step 2: Activate Secret Service component via --start --components=secrets
         start_env_vars = await self._run_keyring_start_phase(profile_env)
         profile_env.update(start_env_vars)
 
-        # Errata Patch #5 - Step 3: Strict Fail-Fast verification via secret-tool
         if not await self._verify_secret_service(profile_env):
             raise KeyringInitializationError(
                 f"Secret Service verification failed on account '{account.slug}' "
                 f"(socket={socket_path}, xdg={xdg_dir})."
             )
 
-        # Restore OAuth token or login.keyring backup from PostgreSQL if keyring is fresh
-        has_token = await self._has_gemini_secret(profile_env)
-        keyring_file = keyrings_dir / "login.keyring"
-        if not has_token and account.encrypted_token_backup is not None:
+        if not token_file.is_file() and account.encrypted_token_backup is not None:
             restored_payload = self._vault.decrypt_text(account.encrypted_token_backup)
-            if restored_payload.startswith("keyring-b64:"):
-                b64_data = restored_payload[len("keyring-b64:") :]
-                if not keyring_file.exists():
-                    keyring_file.write_bytes(base64.b64decode(b64_data.encode("ascii")))
-                    os.chmod(keyring_file, 0o600)
+            if restored_payload.startswith("agy-bundle-v1:"):
+                bundle_json = restored_payload[len("agy-bundle-v1:") :]
+                bundle = json.loads(bundle_json)
+                if isinstance(bundle, dict):
+                    if "oauth_token_b64" in bundle and bundle["oauth_token_b64"]:
+                        token_file.write_bytes(
+                            base64.b64decode(str(bundle["oauth_token_b64"]).encode("ascii"))
+                        )
+                        os.chmod(token_file, 0o600)
+                    if "jetski_b64" in bundle and bundle["jetski_b64"]:
+                        jetski_file.write_bytes(
+                            base64.b64decode(str(bundle["jetski_b64"]).encode("ascii"))
+                        )
+                        os.chmod(jetski_file, 0o600)
                     logger.info(
-                        "Restored login.keyring binary from Fernet backup",
+                        "Restored antigravity-oauth-token bundle from Fernet backup",
                         account_slug=account.slug,
                     )
-            elif not restored_payload.startswith("oauth-verified:"):
-                await self._store_gemini_secret(profile_env, restored_payload)
+        elif not token_file.is_file() and account.is_default:
+            # First-time bootstrap: if /home/macsurmak has a working token and acc_1 is fresh, seed it
+            mac_token = Path("/home/macsurmak/.gemini/antigravity-cli/antigravity-oauth-token")
+            mac_jetski = Path("/home/macsurmak/.gemini/antigravity-cli/jetski_state.pbtxt")
+            if mac_token.is_file() and mac_token.stat().st_size > 0:
+                token_file.write_bytes(mac_token.read_bytes())
+                os.chmod(token_file, 0o600)
+                if mac_jetski.is_file():
+                    jetski_file.write_bytes(mac_jetski.read_bytes())
+                    os.chmod(jetski_file, 0o600)
                 logger.info(
-                    "Restored OAuth token from Fernet backup into keyring",
+                    "Seeded default account token from /home/macsurmak/.gemini",
                     account_slug=account.slug,
                 )
 
@@ -427,6 +504,33 @@ class KeyringProfileManager:
 
     async def backup_account_token_to_db(self, account: GoogleAccount) -> bool:
         env = await self.ensure_account_bus(account)
+        acc_cli = self._account_cli_dir(Path(account.xdg_data_dir))
+        token_file = acc_cli / "antigravity-oauth-token"
+        jetski_file = acc_cli / "jetski_state.pbtxt"
+
+        if jetski_file.is_file() and jetski_file.stat().st_size > 0:
+            await self._try_extract_and_save_email(
+                account, jetski_file.read_text(encoding="utf-8", errors="ignore")
+            )
+
+        if token_file.is_file() and token_file.stat().st_size > 0:
+            tok_bytes = token_file.read_bytes()
+            await self._try_extract_and_save_email(
+                account, tok_bytes.decode("utf-8", errors="ignore")
+            )
+            jet_b64 = (
+                base64.b64encode(jetski_file.read_bytes()).decode("ascii")
+                if jetski_file.is_file()
+                else ""
+            )
+            bundle = {
+                "oauth_token_b64": base64.b64encode(tok_bytes).decode("ascii"),
+                "jetski_b64": jet_b64,
+            }
+            encrypted = self._vault.encrypt_text("agy-bundle-v1:" + json.dumps(bundle))
+            await self._account_repo.update_token_backup(account.id, encrypted)
+            return True
+
         secret_val = await self._lookup_gemini_secret(env)
         if secret_val:
             await self._try_extract_and_save_email(account, secret_val)
@@ -434,48 +538,25 @@ class KeyringProfileManager:
             await self._account_repo.update_token_backup(account.id, encrypted)
             return True
 
-        keyrings_dir = Path(account.xdg_data_dir) / "keyrings"
-        keyring_file = keyrings_dir / "login.keyring"
-
-        if keyring_file.is_file() and keyring_file.stat().st_size > 0:
-            raw_bytes = keyring_file.read_bytes()
-            await self._try_extract_and_save_email(
-                account, raw_bytes.decode("utf-8", errors="ignore")
-            )
-            b64_str = base64.b64encode(raw_bytes).decode("ascii")
-            encrypted = self._vault.encrypt_text(f"keyring-b64:{b64_str}")
-            await self._account_repo.update_token_backup(account.id, encrypted)
-            return True
-
         return False
 
     async def is_account_authenticated(self, env: dict[str, str]) -> bool:
-        """Verifies if the isolated account keyring holds a stored OAuth token."""
-        if await self._has_gemini_secret(env):
-            return True
-        xdg_dir = env["XDG_DATA_HOME"] if "XDG_DATA_HOME" in env else ""
-        if xdg_dir:
-            keyring_file = Path(xdg_dir) / "keyrings" / "login.keyring"
-            if keyring_file.is_file() and keyring_file.stat().st_size > 128:
+        """Verifies if the account's isolated .gemini directory holds an antigravity-oauth-token."""
+        home_str = env["HOME"] if "HOME" in env else ""
+        if home_str:
+            token_file = Path(home_str) / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+            if token_file.is_file() and token_file.stat().st_size > 0:
                 return True
-        return False
+        return await self._has_gemini_secret(env)
 
     async def logout_account(self, account: GoogleAccount) -> None:
-        """Logs out the account in agy, clears its keyring secret, and stops its D-Bus daemon."""
+        """Purges the account's antigravity-oauth-token, state files, keyring secret, and stops its D-Bus daemon."""
         env = await self.ensure_account_bus(account)
-        oauth_env = {
-            **env,
-            "SSH_CONNECTION": "1",
-            "TERM": "xterm-256color",
-            "COLUMNS": "2000",
-            "LINES": "50",
-            "BROWSER": "/bin/false",
-        }
-        oauth_env.pop("DISPLAY", None)
-        oauth_env.pop("WAYLAND_DISPLAY", None)
-        workspace_cwd = str(self._cfg.paths.workspaces_root_dir)
-        Path(workspace_cwd).mkdir(parents=True, exist_ok=True)
-        await self._purge_existing_session_if_signed_in(account, oauth_env, workspace_cwd)
+        acc_cli = self._account_cli_dir(Path(account.xdg_data_dir))
+        for fname in ("antigravity-oauth-token", "jetski_state.pbtxt", "jetbox_summaries_proto.pb"):
+            fpath = acc_cli / fname
+            if fpath.is_file():
+                fpath.unlink()
         await self._clear_gemini_secret(env)
         await self.evict_account_bus(account.id)
 
@@ -512,6 +593,11 @@ class KeyringProfileManager:
     async def _purge_existing_session_if_signed_in(
         self, account: GoogleAccount, oauth_env: dict[str, str], workspace_cwd: str
     ) -> None:
+        acc_cli = self._account_cli_dir(Path(account.xdg_data_dir))
+        for fname in ("antigravity-oauth-token", "jetski_state.pbtxt", "jetbox_summaries_proto.pb"):
+            fpath = acc_cli / fname
+            if fpath.is_file():
+                fpath.unlink()
         await self._clear_gemini_secret(oauth_env)
 
     async def start_remote_oauth_flow(self, account: GoogleAccount) -> PendingOAuthSession:
