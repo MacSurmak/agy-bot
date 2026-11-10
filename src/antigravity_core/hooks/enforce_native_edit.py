@@ -1,30 +1,9 @@
 import json
 import os
-import re
-import shlex
 import socket
-import subprocess
 import sys
 from pathlib import Path
 
-_SAFE_REDIRECT_RE: re.Pattern[str] = re.compile(
-    r"(?:\b\d*>&\d+\b|\b\d*>>?\s*/dev/null\b|&>>?\s*/dev/null\b)"
-)
-_SHELL_FILE_EDIT_RE: re.Pattern[str] = re.compile(
-    r"(?:\bsed\s+(?:-[a-zA-Z0-9]*i\b|--in-place\b)"
-    r"|\bawk\b[^\n;|]*-i\s+inplace\b"
-    r"|\bperl\s+-[a-zA-Z0-9]*i\b"
-    r"|\bcat\s*<<"
-    r"|\bpython[23]?\s+-c\s+.*(?:\.write\(|\.writelines\(|open\([^\n)]*['\"][wa]['\"]))"
-)
-_SELF_INSPECT_CMD_RE: re.Pattern[str] = re.compile(
-    r"(?:\bantigravity_core\b"
-    r"|/srv/antigravity/app/src\b"
-    r"|/srv/antigravity/app/config\.yaml\b"
-    r"|/srv/antigravity/app/\.env\b"
-    r"|bot_ipc\.sock\b"
-    r"|telethon_bot\.session\b)"
-)
 _WRITE_TOOLS: frozenset[str] = frozenset(
     {
         "write_file",
@@ -52,6 +31,12 @@ _PATH_ARG_KEYS: tuple[str, ...] = (
     "DirectoryPath",
     "SearchPath",
     "SearchDirectory",
+)
+_ALLOWED_LOCAL_PREFIXES: tuple[str, ...] = (
+    "/srv/antigravity/app/runtime_data/workspaces",
+    "/srv/antigravity/app/runtime_data/inbox",
+    "/root/.gemini/config/rules",
+    "/tmp",
 )
 
 
@@ -115,83 +100,6 @@ def _extract_file_path(args: dict[str, str]) -> str:
     return ""
 
 
-def _is_remote_tramp_or_scp_path(target_path: str) -> bool:
-    if target_path.startswith("/ssh:"):
-        return True
-    return ":" in target_path and not target_path.startswith("/")
-
-
-def _pre_onboard_ssh_command(cmd_line: str) -> tuple[bool, str]:
-    """Resolves ssh targets in PreToolUse before run_command starts its background timer."""
-    if "ssh " not in f" {cmd_line} ":
-        return True, ""
-
-    segments = [
-        seg.strip()
-        for seg in re.split(r"(?:&&|\|\||;|\|)", cmd_line)
-        if seg.strip()
-    ]
-    for seg in segments:
-        tokens = (
-            shlex.split(seg, posix=True)
-            if "'" not in seg and '"' not in seg
-            else seg.split()
-        )
-        if not tokens:
-            continue
-        first_bin = Path(tokens[0]).name
-        if first_bin != "ssh" or len(tokens) < 2:
-            continue
-
-        ssh_args = tokens[1:]
-        proc = subprocess.run(
-            ["/usr/bin/ssh", "-G", *ssh_args],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            env=dict(os.environ),
-            timeout=5.0,
-            check=False,
-        )
-        if proc.returncode != 0:
-            continue
-
-        ssh_user = ""
-        hostname = ""
-        port = 22
-        proxy_jump = ""
-        for line in proc.stdout.splitlines():
-            parts = line.strip().split(maxsplit=1)
-            if len(parts) == 2:
-                if parts[0] == "user":
-                    ssh_user = parts[1]
-                elif parts[0] == "hostname":
-                    hostname = parts[1]
-                elif parts[0] == "port" and parts[1].isdigit():
-                    port = int(parts[1])
-                elif parts[0] == "proxyjump" and parts[1].lower() != "none":
-                    raw_pj = parts[1].replace("[", "").replace("]", "")
-                    if raw_pj.endswith(":22"):
-                        raw_pj = raw_pj[:-3]
-                    proxy_jump = raw_pj
-
-        clean_host = hostname.replace("[", "").replace("]", "")
-        if clean_host:
-            ok, err_msg = _ipc_call(
-                "ensure_ssh_target_ready",
-                {
-                    "ssh_user": ssh_user,
-                    "hostname": clean_host,
-                    "host_alias": clean_host,
-                    "port": port,
-                    "jump_host": proxy_jump,
-                },
-            )
-            if not ok:
-                return False, err_msg
-    return True, ""
-
-
 def _handle_post_tool_use(raw_stdin: str) -> None:
     if not raw_stdin.strip():
         sys.stdout.write("{}\n")
@@ -215,7 +123,7 @@ def _handle_post_tool_use(raw_stdin: str) -> None:
 
     str_args = {str(k): str(v) for k, v in raw_args.items() if v is not None}
     target_path = _extract_file_path(str_args)
-    if target_path and _is_remote_tramp_or_scp_path(target_path):
+    if target_path.startswith("/ssh:"):
         _ipc_call(
             "commit_remote_file",
             {
@@ -278,30 +186,21 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
         else {}
     )
 
-    if tool_name == "run_command":
-        cmd_line = str_args["CommandLine"] if "CommandLine" in str_args else ""
-        if _SELF_INSPECT_CMD_RE.search(cmd_line) is not None:
-            sys.stdout.write(
-                json.dumps(
-                    {
-                        "decision": "deny",
-                        "reason": "Access to internal Antigravity Core orchestrator files, source code, and secrets is strictly forbidden.",
-                    }
-                )
-                + "\n"
-            )
+    if tool_name in _ALL_FILE_TOOLS:
+        target_path = _extract_file_path(str_args)
+        if not target_path:
+            sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
             return
 
-        cleaned_cmd = _SAFE_REDIRECT_RE.sub("", cmd_line)
-        if _SHELL_FILE_EDIT_RE.search(cleaned_cmd) is not None:
+        if ":" in target_path and not target_path.startswith("/"):
             sys.stdout.write(
                 json.dumps(
                     {
                         "decision": "deny",
                         "reason": (
-                            "Editing or creating files via shell commands or python -c is forbidden. "
-                            "Use your native file tools (view_file, read_file, write_to_file, replace_file_content, multi_replace_file_content) "
-                            "passing remote paths in TRAMP format: '/ssh:user@host:/path' or '/ssh:user@host:~/path'."
+                            f"INVALID REMOTE PATH FORMAT: '{target_path}'. "
+                            f"Native file tools require an absolute TRAMP path starting with '/ssh:'. "
+                            f"Call this tool with '/ssh:{target_path}' instead."
                         ),
                     }
                 )
@@ -309,25 +208,17 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
             )
             return
 
-        ok_ssh, err_ssh = _pre_onboard_ssh_command(cmd_line)
-        if not ok_ssh:
-            sys.stdout.write(
-                json.dumps({"decision": "deny", "reason": err_ssh}) + "\n"
-            )
-            return
-
-        sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
-        return
-
-    if tool_name in _ALL_FILE_TOOLS:
-        target_path = _extract_file_path(str_args)
-        if target_path and _is_remote_tramp_or_scp_path(target_path):
+        if target_path.startswith("/ssh:"):
             if tool_name in ("find_by_name", "grep_search"):
                 sys.stdout.write(
                     json.dumps(
                         {
                             "decision": "deny",
-                            "reason": "For searching across remote directories, run 'ssh user@host \"rg ...\"' via run_command, then open specific files with '/ssh:user@host:/path'.",
+                            "reason": (
+                                "SEARCH ON REMOTE HOST: Do not run local find_by_name/grep_search on '/ssh:...' paths. "
+                                "Run 'ssh user@<alias> \"rg -n ...\"' or 'ssh user@<alias> \"find ...\"' via run_command, "
+                                "then open the specific files with view_file/read_file/edit_file on '/ssh:user@<alias>:/path'."
+                            ),
                         }
                     )
                     + "\n"
@@ -346,27 +237,26 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
                     json.dumps({"decision": "deny", "reason": err_msg}) + "\n"
                 )
                 return
-        elif target_path:
-            resolved_local = str(Path(target_path).expanduser().resolve())
-            allowed_local_prefixes = (
-                "/srv/antigravity/app/runtime_data/workspaces",
-                "/srv/antigravity/app/runtime_data/inbox",
-                "/root/.gemini/config/rules",
-                "/tmp",
-            )
-            if resolved_local.startswith("/srv/antigravity") and not resolved_local.startswith(
-                allowed_local_prefixes
-            ):
-                sys.stdout.write(
-                    json.dumps(
-                        {
-                            "decision": "deny",
-                            "reason": "Access to internal Antigravity Core application code and configuration (/srv/antigravity) is strictly forbidden.",
-                        }
-                    )
-                    + "\n"
+            sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+            return
+
+        resolved_local = str(Path(target_path).expanduser().resolve())
+        if not resolved_local.startswith(_ALLOWED_LOCAL_PREFIXES):
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "decision": "deny",
+                        "reason": (
+                            f"LOCAL LXC SANDBOX RESTRICTION: Access to '{resolved_local}' inside the LXC brain container is forbidden. "
+                            "You may only access your topic workspace (/srv/antigravity/app/runtime_data/workspaces/...), "
+                            "inbox (/srv/antigravity/app/runtime_data/inbox/...), host passports (/root/.gemini/config/rules/...), or /tmp. "
+                            "To access files on a remote machine, use '/ssh:user@<alias>:/path'."
+                        ),
+                    }
                 )
-                return
+                + "\n"
+            )
+            return
 
     sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
 

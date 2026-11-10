@@ -132,6 +132,8 @@ class RemoteMountManager:
         bin_dir = self._cfg.paths.runtime_bin_dir
         bin_dir.mkdir(parents=True, exist_ok=True)
         python_bin = str(self._cfg.paths.venv_python_path)
+        app_root = str(self._cfg.paths.workspaces_root_dir.parent.parent.resolve())
+        brain_dir = str((self._cfg.paths.agy_home_dir / "antigravity-cli" / "brain").resolve())
 
         ssh_wrapper = bin_dir / "ssh"
         ssh_script = (
@@ -140,6 +142,28 @@ class RemoteMountManager:
         )
         ssh_wrapper.write_text(ssh_script, encoding="utf-8")
         os.chmod(ssh_wrapper, 0o755)
+
+        bash_wrapper = bin_dir / "bash"
+        bash_script = (
+            "#!/bin/sh\n"
+            'if [ "${AGY_SANDBOX_ACTIVE:-0}" = "1" ]; then\n'
+            '    exec /usr/bin/bash "$@"\n'
+            "fi\n"
+            "export AGY_SANDBOX_ACTIVE=1\n"
+            "exec /usr/bin/unshare -m /bin/sh -c '\n"
+            f'    mount -t tmpfs -o size=1M tmpfs "{app_root}/src" 2>/dev/null || true\n'
+            f'    mount -t tmpfs -o size=1M tmpfs "{app_root}/migrations" 2>/dev/null || true\n'
+            f'    mount -t tmpfs -o size=1M tmpfs "{app_root}/runtime_data/logs" 2>/dev/null || true\n'
+            f'    mount -t tmpfs -o size=1M tmpfs "{app_root}/runtime_data/data" 2>/dev/null || true\n'
+            f'    mount -t tmpfs -o size=1M tmpfs "{app_root}/runtime_data/profiles" 2>/dev/null || true\n'
+            f'    mount -t tmpfs -o size=1M tmpfs "{brain_dir}" 2>/dev/null || true\n'
+            f'    mount --bind /dev/null "{app_root}/config.yaml" 2>/dev/null || true\n'
+            f'    mount --bind /dev/null "{app_root}/.env" 2>/dev/null || true\n'
+            '    exec /usr/bin/bash "$@"\n'
+            '\' /usr/bin/bash "$@"\n'
+        )
+        bash_wrapper.write_text(bash_script, encoding="utf-8")
+        os.chmod(bash_wrapper, 0o755)
 
     def _ensure_main_ssh_config_include(self) -> None:
         ssh_dir = self._cfg.paths.ssh_config_dir
@@ -478,6 +502,39 @@ class RemoteMountManager:
         finally:
             self._pending_passwords.pop(topic_id, None)
 
+    async def _try_propagate_key_via_jump_host(
+        self, jump_host: str, target_user: str, target_host: str, port: int
+    ) -> bool:
+        if not jump_host:
+            return False
+        pub_key = await self.ensure_local_ssh_keypair()
+        install_cmd = (
+            "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
+            f"(grep -qxF {shlex.quote(pub_key)} ~/.ssh/authorized_keys 2>/dev/null || "
+            f"printf '%s\\n' {shlex.quote(pub_key)} >> ~/.ssh/authorized_keys) && "
+            "chmod 600 ~/.ssh/authorized_keys"
+        )
+        nested_ssh = (
+            f"ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "
+            f"-o ConnectTimeout={self._cfg.remotes.ssh_connect_timeout_sec} "
+            f"-p {port} {shlex.quote(f'{target_user}@{target_host}')} {shlex.quote(install_cmd)}"
+        )
+        proc = await asyncio.create_subprocess_exec(
+            "/usr/bin/ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            f"ConnectTimeout={self._cfg.remotes.ssh_connect_timeout_sec}",
+            jump_host,
+            nested_ssh,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._internal_ssh_env(),
+        )
+        await proc.communicate()
+        return proc.returncode == 0
+
     async def ensure_target_access(
         self, topic_id: int, raw_target: str, explicit_port: int
     ) -> tuple[str, SshCredential | None]:
@@ -524,6 +581,12 @@ class RemoteMountManager:
                 if cred is not None and not cred.key_provisioned and self._cred_repo is not None:
                     cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
                 return resolved_target, cred
+
+            if clean_jump and await self._try_propagate_key_via_jump_host(
+                clean_jump, ssh_user, host_part, port
+            ):
+                if await self._test_batch_key_auth(resolved_target, port, clean_jump):
+                    return resolved_target, cred
 
             if cred is not None and self._vault is not None:
                 saved_pass = self._vault.decrypt_text(cred.encrypted_password)
@@ -812,6 +875,13 @@ class RemoteMountManager:
             existed = False
             requires_sudo_write = True
             body_bytes = b""
+
+        if not existed and not for_write:
+            raise RemoteMountError(
+                f"REMOTE FILE DOES NOT EXIST: '{spec.remote_path}' was not found on host '{resolved_target}' "
+                f"(SSH connection to '{resolved_target}' is healthy and working). "
+                f"To create a new file at this path, call 'write_file' or 'write_to_file' with '{raw_path}'."
+            )
 
         spec.local_stage_path.parent.mkdir(parents=True, exist_ok=True)
         if existed or for_write:
