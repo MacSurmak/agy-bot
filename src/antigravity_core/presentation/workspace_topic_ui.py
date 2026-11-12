@@ -640,7 +640,17 @@ class WorkspaceTopicUI:
     ) -> None:
         if not topic.title.startswith(("💬", "Рабочий топик #", "Workspace #")):
             return
-        summary = self._history_reader.get_conversation_summary(conversation_id)
+        summary = None
+        for _ in range(4):
+            summary = self._history_reader.get_conversation_summary(conversation_id)
+            if (
+                summary is not None
+                and summary.title.strip()
+                and summary.title != "Untitled Session"
+            ):
+                break
+            await asyncio.sleep(0.5)
+
         if (
             summary is not None
             and summary.title.strip()

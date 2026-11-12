@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import UUID
 
@@ -37,10 +37,38 @@ class AgyHistoryReader:
             / "conversation_summaries.db"
         )
 
+    def _extract_title_from_pbtxt(self, conversation_id: UUID) -> str:
+        pbtxt_path = (
+            self._cfg.paths.agy_home_dir
+            / "antigravity-cli"
+            / "annotations"
+            / f"{conversation_id}.pbtxt"
+        )
+        if not pbtxt_path.is_file():
+            return ""
+        content = pbtxt_path.read_text(encoding="utf-8", errors="replace").strip()
+        if content.startswith('title:"') and content.endswith('"'):
+            candidate = content[7:-1].strip()
+            if candidate and candidate != "Untitled Session":
+                return candidate
+        return ""
+
     def get_conversation_summary(
         self, conversation_id: UUID
     ) -> AgyConversationSummary | None:
+        pbtxt_title = self._extract_title_from_pbtxt(conversation_id)
+
         if not self._db_path.is_file():
+            if pbtxt_title:
+                return AgyConversationSummary(
+                    conversation_id=conversation_id,
+                    parent_conversation_id="",
+                    title=pbtxt_title,
+                    preview="",
+                    step_count=0,
+                    last_modified_time="",
+                    workspace_uris=(),
+                )
             return None
 
         uri = f"file:{self._db_path}?mode=ro"
@@ -67,8 +95,22 @@ class AgyHistoryReader:
             ) from exc
 
         if row is None:
+            if pbtxt_title:
+                return AgyConversationSummary(
+                    conversation_id=conversation_id,
+                    parent_conversation_id="",
+                    title=pbtxt_title,
+                    preview="",
+                    step_count=0,
+                    last_modified_time="",
+                    workspace_uris=(),
+                )
             return None
-        return self._map_row(row)
+
+        summary = self._map_row(row)
+        if (not summary.title or summary.title == "Untitled Session") and pbtxt_title:
+            return replace(summary, title=pbtxt_title)
+        return summary
 
     def list_recent_root_conversations(
         self, limit: int

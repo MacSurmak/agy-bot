@@ -93,7 +93,7 @@ class KeyringProfileManager:
         acc_gemini = acc_home / ".gemini"
         acc_cli = acc_gemini / "antigravity-cli"
         acc_cache = acc_cli / "cache"
-        acc_cache.mkdir(parents=True, exist_ok=True)
+        acc_cli.mkdir(parents=True, exist_ok=True)
         os.chmod(acc_home, 0o700)
 
         global_home = self._cfg.paths.agy_home_dir.parent
@@ -111,9 +111,13 @@ class KeyringProfileManager:
             ),
             (acc_cli / "brain", global_cli / "brain"),
             (acc_cli / "conversations", global_cli / "conversations"),
+            (acc_cli / "annotations", global_cli / "annotations"),
+            (acc_cli / "cache", global_cli / "cache"),
         ]
         (global_cli / "brain").mkdir(parents=True, exist_ok=True)
         (global_cli / "conversations").mkdir(parents=True, exist_ok=True)
+        (global_cli / "annotations").mkdir(parents=True, exist_ok=True)
+        (global_cli / "cache").mkdir(parents=True, exist_ok=True)
 
         for link_path, target_path in symlinks:
             if link_path.is_symlink():
