@@ -36,6 +36,7 @@ _ALLOWED_LOCAL_WRITE_PREFIXES: Final[tuple[str, ...]] = (
     "/srv/antigravity/app/runtime_data/workspaces",
     "/srv/antigravity/app/runtime_data/inbox",
     "/root/.gemini/config/rules",
+    "/root/.gemini/config/skills",
     "/tmp",
 )
 

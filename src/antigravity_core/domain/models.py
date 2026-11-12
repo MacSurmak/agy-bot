@@ -19,6 +19,11 @@ from antigravity_core.domain.enums import (
 )
 
 
+type QuotaJsonValue = (
+    int | float | str | list[int] | dict[str, dict[str, int | float | str]]
+)
+
+
 @dataclass(frozen=True, slots=True)
 class GoogleAccount:
     id: int
@@ -31,8 +36,12 @@ class GoogleAccount:
     is_enabled: bool
     is_default: bool
     priority: int
-    last_quota_json: dict[str, object] | None
+    last_quota_json: dict[str, QuotaJsonValue] | None
     last_quota_check_at: datetime | None
+
+    @property
+    def display_email(self) -> str:
+        return self.email_label.strip() if self.email_label.strip() else self.slug
 
 
 @dataclass(frozen=True, slots=True)

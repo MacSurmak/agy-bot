@@ -89,6 +89,7 @@ class WorkspaceTopicUI:
         self._password_prompt_msgs: dict[int, tuple[str, int]] = {}
         self._sudo_prompt_meta: dict[str, tuple[str, str]] = {}
         self._relocate_trace_topics: set[int] = set()
+        self._last_trace_edit_ts: dict[int, float] = {}
 
     async def send_ssh_password_prompt(self, topic_id: int, target_label: str) -> None:
         settings = await self._settings_repo.load_settings()
@@ -384,11 +385,9 @@ class WorkspaceTopicUI:
         )
 
         start_ts = time.monotonic()
-        last_edit_ts = start_ts
+        self._last_trace_edit_ts[topic_id] = start_ts
 
-        acc_display = (
-            account.email_label if "@" in account.email_label else account.slug
-        )
+        acc_display = account.display_email
         status_msg = await self._client.send_message(
             entity=self._cfg.telegram.forum_chat_id,
             message=lex.ws_starting_turn_msg.format(
@@ -499,7 +498,6 @@ class WorkspaceTopicUI:
                 )
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
-            nonlocal last_edit_ts
             now = time.monotonic()
             pages = build_live_progress_pages(
                 lex=lex,
@@ -507,15 +505,20 @@ class WorkspaceTopicUI:
                 event=progress,
                 elapsed_sec=now - start_ts,
                 model_slug=topic.model_slug,
-                account_slug=account.slug,
+                account_slug=acc_display,
             )
             is_new_page_spillover = len(pages) > len(trace_msgs)
+            prev_ts = (
+                self._last_trace_edit_ts[topic_id]
+                if topic_id in self._last_trace_edit_ts
+                else 0.0
+            )
             if (
                 not is_new_page_spillover
-                and (now - last_edit_ts) < settings.tg_edit_throttle_sec
+                and (now - prev_ts) < settings.tg_edit_throttle_sec
             ):
                 return
-            last_edit_ts = now
+            self._last_trace_edit_ts[topic_id] = now
             # Fire-and-forget UI sync so Telegram FloodWaits never block agy stdout reading
             asyncio.create_task(_bg_sync_pages(pages))
 
@@ -545,11 +548,7 @@ class WorkspaceTopicUI:
         updated_account = await self._account_repo.get_by_id(
             updated_topic.assigned_account_id
         )
-        upd_acc_display = (
-            updated_account.email_label
-            if "@" in updated_account.email_label
-            else updated_account.slug
-        )
+        upd_acc_display = updated_account.display_email
 
         final_pages = build_final_execution_trace_pages(
             lex=lex,
@@ -671,13 +670,14 @@ class WorkspaceTopicUI:
         lex = get_lexicon(settings.ui_language)
 
         start_ts = time.monotonic()
-        last_edit_ts = start_ts
+        self._last_trace_edit_ts[topic_id] = start_ts
+        acc_display = account.display_email
 
         status_msg = await self._client.send_message(
             entity=self._cfg.telegram.forum_chat_id,
             message=f"{badge_prefix}\n"
             + lex.ws_starting_turn_msg.format(
-                model_slug=topic.model_slug, account_slug=account.slug
+                model_slug=topic.model_slug, account_slug=acc_display
             ),
             reply_to=topic_id,
             silent=True,
@@ -751,7 +751,6 @@ class WorkspaceTopicUI:
                     await _sync_trace_pages(pages, is_final=False)
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
-            nonlocal last_edit_ts
             now = time.monotonic()
             pages = build_live_progress_pages(
                 lex=lex,
@@ -759,15 +758,20 @@ class WorkspaceTopicUI:
                 event=progress,
                 elapsed_sec=now - start_ts,
                 model_slug=topic.model_slug,
-                account_slug=account.slug,
+                account_slug=f"{badge_prefix} │ {acc_display}",
             )
             is_new_page_spillover = len(pages) > len(trace_msgs)
+            prev_ts = (
+                self._last_trace_edit_ts[topic_id]
+                if topic_id in self._last_trace_edit_ts
+                else 0.0
+            )
             if (
                 not is_new_page_spillover
-                and (now - last_edit_ts) < settings.tg_edit_throttle_sec
+                and (now - prev_ts) < settings.tg_edit_throttle_sec
             ):
                 return
-            last_edit_ts = now
+            self._last_trace_edit_ts[topic_id] = now
             asyncio.create_task(_bg_sync_pages(pages))
 
         try:
@@ -791,13 +795,14 @@ class WorkspaceTopicUI:
         updated_account = await self._account_repo.get_by_id(
             updated_topic.assigned_account_id
         )
+        upd_acc_display = updated_account.display_email
 
         final_pages = build_final_execution_trace_pages(
             lex=lex,
             limits=self._cfg.limits,
             result=result,
             model_slug=updated_topic.model_slug,
-            account_slug=updated_account.slug,
+            account_slug=f"{badge_prefix} │ {upd_acc_display}",
         )
         if final_pages:
             async with sync_lock:
@@ -816,7 +821,7 @@ class WorkspaceTopicUI:
             limits=self._cfg.limits,
             result=result,
             model_slug=updated_topic.model_slug,
-            account_slug=updated_account.slug,
+            account_slug=upd_acc_display,
         )
         body_text = (
             cleaned_resp
@@ -883,7 +888,7 @@ class WorkspaceTopicUI:
         sensor_bar = lex.sensor_footer_bar.format(
             sensor_name=sensor_name,
             model_slug=topic.model_slug,
-            account_slug=account.slug,
+            account_slug=account.display_email,
         )
         formatted_chunks = render_Formatted_response_chunks(
             body_markdown=reflex_report_text,

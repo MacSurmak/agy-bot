@@ -431,9 +431,6 @@ def _paginate_quote_blocks(
     for idx, blocks in enumerate(raw_pages, start=1):
         if idx == 1 and total_pages == 1:
             hdr = first_page_header
-        elif idx < total_pages:
-            # Sealed earlier pages always get a clean static page title
-            hdr = lex.trace_page_continuation_header.format(page_num=idx)
         else:
             hdr = lex.trace_active_page_suffix.format(
                 header=first_page_header, page_num=idx
@@ -916,6 +913,7 @@ def render_control_panel_dashboard(
             format_wide_header_block(raw_hdr_lines[0]),
             *raw_hdr_lines[1:],
         ]
+    accounts_by_slug = {a.slug: a.display_email for a in accounts}
     for snap in pool_snapshots:
         if snap.is_warm:
             state_badge = (
@@ -923,12 +921,17 @@ def render_control_panel_dashboard(
                 if snap.is_running_turn
                 else lex.dashboard_worker_warm_badge
             )
+            acc_label = (
+                accounts_by_slug[snap.account_slug]
+                if snap.account_slug and snap.account_slug in accounts_by_slug
+                else snap.account_slug
+            )
             lines.append(
                 lex.dashboard_worker_item.format(
                     topic_id=snap.topic_id,
                     state_badge=state_badge,
                     model_slug=snap.model_slug,
-                    account_slug=snap.account_slug,
+                    account_slug=acc_label,
                 )
             )
 

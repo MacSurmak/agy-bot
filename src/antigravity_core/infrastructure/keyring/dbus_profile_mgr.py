@@ -336,28 +336,28 @@ class KeyringProfileManager:
         proc = await asyncio.create_subprocess_exec(
             "gnome-keyring-daemon",
             "--daemonize",
+            "--replace",
             "--components=secrets",
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
             env=env,
             start_new_session=True,
         )
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            stdout_bytes, _ = await asyncio.wait_for(
                 proc.communicate(),
                 timeout=self._cfg.runtime.command_exec_timeout_sec,
             )
         except TimeoutError as exc:
             proc.kill()
             raise KeyringInitializationError(
-                "gnome-keyring-daemon --start --components=secrets timed out."
+                "gnome-keyring-daemon --daemonize --replace --components=secrets timed out."
             ) from exc
 
         if proc.returncode != 0:
             raise KeyringInitializationError(
-                f"gnome-keyring-daemon --start --components=secrets failed (code {proc.returncode}): "
-                f"{stderr_bytes.decode('utf-8', errors='replace')}"
+                f"gnome-keyring-daemon --daemonize --replace --components=secrets failed (code {proc.returncode})."
             )
 
         return self._parse_keyring_env_output(

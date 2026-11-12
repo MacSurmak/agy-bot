@@ -240,8 +240,8 @@ class TopicWorker:
             ) from exc
 
         turn_start_monotonic = time.monotonic()
-        accumulated_text = ""
         accumulated_thinking = ""
+        text_by_step: dict[int, str] = {}
         tools_by_step: dict[int, ToolCallSummary] = {}
         active_subagents: dict[str, SubagentState] = {}
 
@@ -297,7 +297,14 @@ class TopicWorker:
                                 accumulated_thinking += "\n"
                             accumulated_thinking += event.thinking_delta
                         if event.text_delta is not None:
-                            accumulated_text += event.text_delta
+                            prev_step_txt = (
+                                text_by_step[event.step_index]
+                                if event.step_index in text_by_step
+                                else ""
+                            )
+                            text_by_step[event.step_index] = (
+                                prev_step_txt + event.text_delta
+                            )
                         if event.tool_summary is not None:
                             prev_tool = tools_by_step.get(event.tool_summary.step_index)
                             if prev_tool is not None:
@@ -344,14 +351,43 @@ class TopicWorker:
                                 )
                             active_subagents[sub.conversation_id] = sub
 
+                        max_tool_step = max(tools_by_step.keys(), default=-1)
+                        merged_tools_and_notes: dict[int, ToolCallSummary] = dict(
+                            tools_by_step
+                        )
+                        trailing_text_parts: list[str] = []
+                        for s_idx, s_txt in sorted(text_by_step.items()):
+                            cleaned_s_txt = s_txt.strip()
+                            if not cleaned_s_txt:
+                                continue
+                            if s_idx < max_tool_step:
+                                first_line = cleaned_s_txt.splitlines()[0][:100]
+                                merged_tools_and_notes[s_idx] = ToolCallSummary(
+                                    step_index=s_idx,
+                                    tool_name="💬 agent_note",
+                                    state=StepState.DONE,
+                                    duration_seconds=None,
+                                    target_hint=first_line,
+                                    parameters_text=None,
+                                    output_text=cleaned_s_txt,
+                                )
+                            else:
+                                trailing_text_parts.append(cleaned_s_txt)
+
+                        ordered_steps = tuple(
+                            merged_tools_and_notes[k]
+                            for k in sorted(merged_tools_and_notes.keys())
+                        )
+                        current_draft = "\n\n".join(trailing_text_parts)
+
                         progress_event = TurnProgressEvent(
                             conversation_id=event.conversation_id,
                             step_index=event.step_index,
                             step_type=event.step_type,
                             state=event.state,
                             thinking_text=accumulated_thinking.strip() or None,
-                            text_accumulated=accumulated_text,
-                            active_tools=tuple(tools_by_step.values()),
+                            text_accumulated=current_draft,
+                            active_tools=ordered_steps,
                             active_subagents=tuple(active_subagents.values()),
                         )
                         await on_progress(progress_event)
@@ -394,11 +430,45 @@ class TopicWorker:
                             cached_tokens=event.cumulative_usage.cache_read_tokens,
                             tools_used=len(tools_by_step),
                         )
+                        max_tool_step = max(tools_by_step.keys(), default=-1)
+                        final_tools_and_notes: dict[int, ToolCallSummary] = dict(
+                            tools_by_step
+                        )
+                        final_trailing_parts: list[str] = []
+                        for s_idx, s_txt in sorted(text_by_step.items()):
+                            cleaned_s_txt = s_txt.strip()
+                            if not cleaned_s_txt:
+                                continue
+                            if s_idx < max_tool_step:
+                                first_line = cleaned_s_txt.splitlines()[0][:100]
+                                final_tools_and_notes[s_idx] = ToolCallSummary(
+                                    step_index=s_idx,
+                                    tool_name="💬 agent_note",
+                                    state=StepState.DONE,
+                                    duration_seconds=None,
+                                    target_hint=first_line,
+                                    parameters_text=None,
+                                    output_text=cleaned_s_txt,
+                                )
+                            else:
+                                final_trailing_parts.append(cleaned_s_txt)
+
+                        ordered_final_steps = tuple(
+                            final_tools_and_notes[k]
+                            for k in sorted(final_tools_and_notes.keys())
+                        )
+                        final_clean_response = (
+                            "\n\n".join(final_trailing_parts).strip()
+                            if final_trailing_parts
+                            else event.response_text
+                        )
+
                         return replace(
                             event,
+                            response_text=final_clean_response,
                             turn_delta_duration_sec=actual_turn_sec,
                             thinking_text=accumulated_thinking.strip() or None,
-                            tool_calls=tuple(tools_by_step.values()),
+                            tool_calls=ordered_final_steps,
                             subagents=tuple(active_subagents.values()),
                         )
         except TimeoutError as exc:

@@ -17,7 +17,7 @@ RU_LEXICON = UiLexicon(
         "💬 **Сессия:** {session_str}\n"
         "📂 **Папка:** `{workspace_path}`\n"
         "🧠 **Модель:** `{model_slug}`{effort_str}\n"
-        "👤 **Аккаунт:** `{account_slug}` ({email_label})\n"
+        "👤 **Аккаунт:** `{email_label}`\n"
         "🛡 **Права агента:** {mode_str}\n"
         "🔑 **Режим Sudo:** {sudo_str}\n"
         "📡 **Воркер:** {worker_str}"
@@ -91,7 +91,7 @@ RU_LEXICON = UiLexicon(
     dashboard_account_quota_probed="остаток: `{min_pct}%`",
     dashboard_account_backup_ok="🔒 Бэкап Fernet OK",
     dashboard_account_backup_missing="⚠️ Нет токена",
-    dashboard_account_item="  • {status_badge} `{slug}` ({email_label}){default_badge} — {quota_str} | {backup_badge}",
+    dashboard_account_item="  • {status_badge} `{email_label}`{default_badge} — {quota_str} | {backup_badge}",
     dashboard_hosts_header="\n🖥 **Удалённые серверы и ключи SSH:**",
     dashboard_hosts_empty=(
         "  • Пока нет сохранённых серверов (подключитесь к любому `user@host` в рабочем топике)."
@@ -142,7 +142,7 @@ RU_LEXICON = UiLexicon(
     btn_cp_open_oauth_url="🔗 Открыть страницу входа Google",
     btn_cp_register_new_acc="➕ Зарегистрировать новый профиль",
     btn_cp_back_to_dashboard="⬅️ Назад к дашборду",
-    btn_cp_default_acc_item="{mark}{slug} ({email_label})",
+    btn_cp_default_acc_item="{mark}{email_label}",
     btn_cp_cancel_task_item="🗑 Таймер {short_id} (Топик {topic_id}: {trigger_spec})",
     btn_cp_cancel_sensor_item="🗑 Датчик {short_id}: {name} (Топик {topic_id})",
     btn_cp_edit_setting_item="✏️ Изменить {key}",
@@ -172,7 +172,7 @@ RU_LEXICON = UiLexicon(
     btn_ws_effort_item="Effort: {effort}",
     btn_ws_close_submenu="⬅️ Закрыть",
     btn_ws_session_history_item="{mark}{short_id}... ({turns_count} ход., {tok_k:.1f}k ток.)",
-    btn_ws_account_picker_item="{mark}{slug} ({email_label})",
+    btn_ws_account_picker_item="{mark}{email_label}",
     # Control Panel Interactive Messages & Toasts
     cp_reserved_notice=(
         "ℹ️ Топик **#Control-Panel** предназначен исключительно для управления системой.\n"

@@ -17,7 +17,7 @@ EN_LEXICON = UiLexicon(
         "💬 **Session:** {session_str}\n"
         "📂 **Workspace:** `{workspace_path}`\n"
         "🧠 **Model:** `{model_slug}`{effort_str}\n"
-        "👤 **Account:** `{account_slug}` ({email_label})\n"
+        "👤 **Account:** `{email_label}`\n"
         "🛡 **Permissions:** {mode_str}\n"
         "🔑 **Sudo Mode:** {sudo_str}\n"
         "📡 **Worker:** {worker_str}"
@@ -87,7 +87,7 @@ EN_LEXICON = UiLexicon(
     dashboard_account_quota_probed="min remaining: `{min_pct}%`",
     dashboard_account_backup_ok="🔒 Fernet Backup OK",
     dashboard_account_backup_missing="⚠️ No Token",
-    dashboard_account_item="  • {status_badge} `{slug}` ({email_label}){default_badge} — {quota_str} | {backup_badge}",
+    dashboard_account_item="  • {status_badge} `{email_label}`{default_badge} — {quota_str} | {backup_badge}",
     dashboard_hosts_header="\n🖥 **Remote Servers & SSH Keys:**",
     dashboard_hosts_empty="  • None saved yet (connect to any `user@host` in a workspace topic).",
     dashboard_host_mounted_badge="🟢 Key + Sudo OK",
@@ -135,7 +135,7 @@ EN_LEXICON = UiLexicon(
     btn_cp_open_oauth_url="🔗 Open Google Sign-In Page",
     btn_cp_register_new_acc="➕ Register New Account Profile",
     btn_cp_back_to_dashboard="⬅️ Back to Dashboard",
-    btn_cp_default_acc_item="{mark}{slug} ({email_label})",
+    btn_cp_default_acc_item="{mark}{email_label}",
     btn_cp_cancel_task_item="🗑 Timer {short_id} (Topic {topic_id}: {trigger_spec})",
     btn_cp_cancel_sensor_item="🗑 Sensor {short_id}: {name} (Topic {topic_id})",
     btn_cp_edit_setting_item="✏️ Edit {key}",
@@ -165,7 +165,7 @@ EN_LEXICON = UiLexicon(
     btn_ws_effort_item="Effort: {effort}",
     btn_ws_close_submenu="⬅️ Close",
     btn_ws_session_history_item="{mark}{short_id}... ({turns_count} turns, {tok_k:.1f}k tok)",
-    btn_ws_account_picker_item="{mark}{slug} ({email_label})",
+    btn_ws_account_picker_item="{mark}{email_label}",
     # Control Panel Interactive Messages & Toasts
     cp_reserved_notice=(
         "ℹ️ **#Control-Panel** is reserved for system administration.\n"

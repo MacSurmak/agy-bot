@@ -72,7 +72,7 @@ class AgyEnvironmentBootstrapper:
             for h in hosts:
                 route_note = f" (via `{h.jump_host}`)" if h.jump_host else ""
                 table_lines.append(
-                    f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}`{route_note} | `/ssh:{h.ssh_user}@{h.alias}:/path` or `/ssh:{h.ssh_user}@{h.alias}:~/path` | `{h.rule_file_path}` |"
+                    f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}`{route_note} | `/ssh:{h.ssh_user}@{h.alias}:{h.remote_root_path}` | `{h.rule_file_path}` |"
                 )
             hosts_table_md = "\n".join(table_lines)
         else:

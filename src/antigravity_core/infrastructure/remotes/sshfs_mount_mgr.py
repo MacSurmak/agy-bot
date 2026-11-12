@@ -1005,8 +1005,10 @@ class RemoteMountManager:
             )
 
         spec.local_stage_path.parent.mkdir(parents=True, exist_ok=True)
-        if existed or for_write:
+        if existed:
             spec.local_stage_path.write_bytes(body_bytes)
+        else:
+            spec.local_stage_path.unlink(missing_ok=True)
 
         self._staged_baselines[(topic_id, str(spec.local_stage_path))] = (
             _StagedFileBaseline(

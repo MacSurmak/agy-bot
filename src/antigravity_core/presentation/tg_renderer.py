@@ -230,7 +230,7 @@ def normalize_latex_outside_code(line: str) -> str:
 
 
 def make_wide_single_line_bar(text: str) -> str:
-    """Formats a single-line status/header bar padded with invisible non-breaking spaces (zero dashes!)."""
+    """Formats a single-line status/header bar padded with invisible non-breaking spaces and Word Joiner anchor."""
     clean = text.replace("**", "").replace("`", "").strip()
     parts = [
         ln.strip()
@@ -239,6 +239,6 @@ def make_wide_single_line_bar(text: str) -> str:
     ]
     single_line = "  │  ".join(parts) if parts else ""
     if len(single_line) >= WIDE_BAR_TARGET_COLS:
-        return single_line
+        return single_line + "\u2060"
     pad_count = max(1, WIDE_BAR_TARGET_COLS - len(single_line))
-    return single_line + ("\u00a0" * pad_count)
+    return single_line + ("\u00a0" * pad_count) + "\u2060"
