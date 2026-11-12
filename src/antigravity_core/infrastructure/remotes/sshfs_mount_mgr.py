@@ -891,8 +891,11 @@ class RemoteMountManager:
             f"    cat {qpath}; "
             f"  else echo AGY_NEED_SUDO_READ; fi; "
             f"else "
-            f"  parent_dir=$(dirname {qpath}); "
-            f'  if [ -w "$parent_dir" ]; then echo AGY_MISSING_RW; else echo AGY_MISSING_SUDO; fi; '
+            f"  check_dir={qpath}; "
+            f'  while [ ! -e "$check_dir" ] && [ "$check_dir" != "/" ] && [ "$check_dir" != "." ]; do '
+            f'    check_dir=$(dirname "$check_dir"); '
+            f"  done; "
+            f'  if [ -w "$check_dir" ]; then echo AGY_MISSING_RW; else echo AGY_MISSING_SUDO; fi; '
             f"fi"
         )
         proc = await asyncio.create_subprocess_exec(

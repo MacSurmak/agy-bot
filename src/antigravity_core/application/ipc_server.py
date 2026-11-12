@@ -195,39 +195,6 @@ class CoreIpcServer:
                 cleanup_only=cleanup_only,
             )
 
-        if method == "ssh_exec":
-            topic = await self._topic_repo.get_topic_strict(topic_id)
-            host_alias = str(params["host"]).strip()
-            command_str = str(params["command"])
-            timeout_sec = int(params["timeout_sec"]) if "timeout_sec" in params else 60
-            scratch_dir = Path(topic.workspace_path)
-
-            if host_alias.lower() in ("local", "local_scratch", "scratch", "lxc"):
-                return await self._mount_mgr.execute_remote_ssh(
-                    host=None,
-                    command=command_str,
-                    timeout_sec=timeout_sec,
-                    execution_mode=topic.execution_mode,
-                    local_scratch_dir=scratch_dir,
-                )
-
-            remote_host = await self._host_repo.get_by_alias(host_alias)
-            if remote_host is None:
-                all_hosts = await self._host_repo.list_hosts()
-                known = ", ".join(h.alias for h in all_hosts) or "none"
-                raise ValueError(
-                    f"Unknown remote host alias '{host_alias}'. Registered hosts: [{known}]. "
-                    f"Call 'register_remote_host' first or use host='local_scratch' for local plotting scripts."
-                )
-
-            return await self._mount_mgr.execute_remote_ssh(
-                host=remote_host,
-                command=command_str,
-                timeout_sec=timeout_sec,
-                execution_mode=topic.execution_mode,
-                local_scratch_dir=scratch_dir,
-            )
-
         if method == "update_host_knowledge":
             host_alias = str(params["host"]).strip()
             remote_host = await self._host_repo.get_by_alias(host_alias)

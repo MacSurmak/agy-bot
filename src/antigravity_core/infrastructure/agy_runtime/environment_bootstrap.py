@@ -86,34 +86,34 @@ class AgyEnvironmentBootstrapper:
             "## 1. Live Registered Infrastructure Map\n\n"
             f"{hosts_table_md}\n\n"
             "## 2. Two-Stage Workflow for Remote Computers\n\n"
-            "1. **STAGE 1 — CHECK & ONBOARD NEW HOSTS FIRST (`register_remote_host`):**\n"
+            "1. **STAGE 1 — CHECK & ONBOARD NEW HOSTS FIRST (`mcp_telegram-core_register_remote_host`):**\n"
             "   - Before working on a server, check if it is in the **Live Registered Infrastructure Map** above.\n"
             "   - If the host is NOT in the table yet (e.g. a new server IP or an internal LAN/Slurm node discovered behind a gateway), "
-            "**IMMEDIATELY call `mcp:telegram-core:register_remote_host(alias, hostname_or_ip, ssh_user, ssh_port, remote_root_path, jump_host)`**!\n"
-            '   - If the node is behind a gateway, pass `jump_host="user@gateway"`. Never manually scrape `/root/.ssh/id_*`, never run interactive `srun` jobs to copy keys, and never inspect local `~/.ssh/config`.\n'
-            "2. **STAGE 2 — WORK DIRECTLY BY ALIAS (`/ssh:user@<alias>:/path` & `ssh user@<alias>`):**\n"
+            "**IMMEDIATELY call `mcp_telegram-core_register_remote_host`**!\n"
+            '   - If the node is behind a gateway, pass `jump_host="user@<gateway_alias>"`. Never manually scrape `/root/.ssh/id_*`, never run interactive `srun` jobs to copy keys, and never inspect local `~/.ssh/config`.\n'
+            "2. **STAGE 2 — WORK DIRECTLY BY ALIAS (`/ssh:user@<alias>:/abs/path` & `ssh user@<alias>`):**\n"
             "   - Once a host is registered, **ALWAYS address it directly by its `<alias>`** (OpenSSH handles `ProxyJump` automatically; never use manual `-J` or `|ssh:` pipes):\n"
-            "   - Native file tools (`view_file`, `read_file`, `write_to_file`, `write_file`, `replace_file_content`, `multi_replace_file_content`, `edit_file`, `list_dir`): "
+            "   - Native file tools (`read_file`, `write_file`, `edit_file`): "
             "`/ssh:user@<alias>:/abs/path` (always use full absolute paths like `/home/user/...`, never use `~`).\n"
-            "   - If `read_file` / `view_file` returns `REMOTE FILE DOES NOT EXIST`, it simply means the file does not exist on the remote host yet — call `write_file` / `write_to_file` on `/ssh:user@<alias>:/path` to create it. Never debug the LXC container or look for `/mnt/remotes` or FUSE.\n"
-            "   - Never edit files via `sed -i`, `awk`, `python3 -c`, or `cat << EOF >` in shell commands.\n"
+            "   - If `read_file` returns `REMOTE FILE DOES NOT EXIST`, it simply means the file does not exist on the remote host yet — call `write_file` on `/ssh:user@<alias>:/abs/path` to create it.\n"
+            "   - Never edit files via `sed -i`, `awk`, or `perl -pi` in shell commands.\n"
             '   - Shell commands (`run_command`): `ssh user@<alias> "command"` (write plain `sudo` inside the command when root privileges are needed).\n'
-            "   - Local container access is restricted strictly to your topic scratchpad and `/tmp`. Never inspect `/srv/antigravity` or `/root`.\n"
+            "   - Local container access is restricted strictly to your topic scratchpad and `/tmp`. Never inspect `/srv/antigravity` or `/root/.gemini/antigravity-cli/mcp`.\n"
             "3. **DIRECT REMOTE FILE SENDING TO TELEGRAM:**\n"
-            "   - Pass TRAMP paths (`/ssh:user@<alias>:/path/to/file.png`) directly into `mcp:telegram-core:send_file_to_telegram(file_path, caption)` — never run manual `scp`.\n"
+            "   - Pass TRAMP paths (`/ssh:user@<alias>:/path/to/file.png`) directly into `mcp_telegram-core_send_file_to_telegram` — never run manual `scp`.\n"
             "4. **SELF-UPDATING INFRASTRUCTURE MEMORY:**\n"
             f"   - Each known host has a passport in `{rules_dir}/infra-<alias>.md`.\n"
-            "   - Whenever you discover project paths, databases, or services on a host, record insights using "
-            '`mcp:telegram-core:update_host_knowledge(host="<alias>", notes_markdown="...")`.\n\n'
-            "## 3. MCP Toolset (`telegram-core`)\n\n"
-            "- `send_file_to_telegram(file_path, caption)` — send any local file or remote TRAMP file (`/ssh:user@host:/path`) directly to the current Telegram topic.\n"
-            "- `create_sensor(name, command, instruction_prompt, sensor_kind, trigger_condition, poll_interval_sec, match_pattern, action_command, wake_mode, one_shot, cooldown_sec, notify_policy, keep_conversation_context)` — zero-token background event/stream watcher.\n"
-            "- `list_sensors()` / `cancel_sensor(sensor_id)`\n"
-            "- `schedule_task(schedule_kind, trigger_spec, instruction_prompt, notify_policy, keep_conversation_context)`\n"
-            "- `list_scheduled_tasks()` / `cancel_scheduled_task(task_id)`\n"
-            "- `register_remote_host(alias, hostname_or_ip, ssh_user, ssh_port, remote_root_path, jump_host)`\n"
-            "- `update_host_knowledge(host, notes_markdown, append)`\n"
-            "- `create_workspace_topic(title, execution_mode)`\n"
+            "   - Whenever you discover project paths, databases, or services on a host, record insights using `mcp_telegram-core_update_host_knowledge`.\n\n"
+            "## 3. Native Eager MCP Tools (`telegram-core`)\n\n"
+            "All tools from MCP server `telegram-core` are pre-registered with `\"eager\": true` in your native tool declarations (`mcp_telegram-core_<tool>`). "
+            "Call them directly in a single step without reading schema files from `~/.gemini/antigravity-cli/mcp/telegram-core/`:\n"
+            "- `mcp_telegram-core_register_remote_host`\n"
+            "- `mcp_telegram-core_update_host_knowledge`\n"
+            "- `mcp_telegram-core_send_file_to_telegram`\n"
+            "- `mcp_telegram-core_schedule_task` / `mcp_telegram-core_list_scheduled_tasks` / `mcp_telegram-core_cancel_scheduled_task`\n"
+            "- `mcp_telegram-core_create_sensor` / `mcp_telegram-core_list_sensors` / `mcp_telegram-core_cancel_sensor`\n"
+            "- `mcp_telegram-core_create_workspace_topic`\n"
+            "- `mcp_telegram-core_get_bot_ssh_public_key`\n"
         )
         root_agents.write_text(content, encoding="utf-8")
         config_agents.write_text(content, encoding="utf-8")
@@ -205,14 +205,31 @@ class AgyEnvironmentBootstrapper:
         hooks_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     def _write_mcp_config_json(self, mcp_config_path: Path) -> None:
-        # Errata Patch #1: Connect telegram-core strictly via child stdio_proxy
+        # Errata Patch #1: Connect telegram-core strictly via child stdio_proxy with native eager tool loading
         python_bin = str(self._cfg.paths.venv_python_path)
-        payload: dict[str, Any] = {
+        eager_tools: dict[str, dict[str, bool]] = {
+            name: {"eager": True}
+            for name in (
+                "register_remote_host",
+                "update_host_knowledge",
+                "send_file_to_telegram",
+                "schedule_task",
+                "list_scheduled_tasks",
+                "cancel_scheduled_task",
+                "create_sensor",
+                "list_sensors",
+                "cancel_sensor",
+                "create_workspace_topic",
+                "get_bot_ssh_public_key",
+            )
+        }
+        payload = {
             "mcpServers": {
                 "telegram-core": {
                     "command": python_bin,
                     "args": ["-m", "antigravity_core.mcp.stdio_proxy"],
                     "timeoutSeconds": self._cfg.runtime.mcp_stdio_timeout_sec,
+                    "tools": eager_tools,
                 }
             }
         }

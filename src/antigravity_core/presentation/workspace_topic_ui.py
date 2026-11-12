@@ -135,7 +135,6 @@ class WorkspaceTopicUI:
             reply_to=topic_id,
             buttons=build_sudo_approval_keyboard(lex, topic_id, request_id),
         )
-        self._relocate_trace_topics.add(topic_id)
 
     async def initialize_created_topic(self, topic_id: int, assigned_dir: str) -> None:
         Path(assigned_dir).mkdir(parents=True, exist_ok=True)
@@ -988,7 +987,6 @@ class WorkspaceTopicUI:
                 status_text = lex.sudo_rejected_status.format(
                     action_summary=summary_lbl, target=target_lbl
                 )
-            self._relocate_trace_topics.add(topic_id)
             await event.edit(status_text, buttons=None)
             return
 

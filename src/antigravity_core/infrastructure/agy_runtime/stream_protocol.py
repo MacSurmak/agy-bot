@@ -176,6 +176,10 @@ def _parse_step_update_event(
                     "Pattern",
                     "file_path",
                     "alias",
+                    "host",
+                    "name",
+                    "trigger_spec",
+                    "title",
                 ):
                     if key in params and params[key] is not None:
                         raw_hint = str(params[key]).replace("\n", " ").strip()
@@ -192,9 +196,11 @@ def _parse_step_update_event(
                     param_lines.append(f"{k}: {val_str}")
                 parameters_text = "\n".join(param_lines)
 
-                # Unwrap MCP call_mcp_tool so ssh_exec, create_sensor, etc. display their real tool name and host/command
-                if tool_name == "call_mcp_tool" and "ToolName" in params:
-                    mcp_tool = str(params.get("ToolName", "")).strip()
+                if tool_name.startswith("mcp_telegram-core_"):
+                    short_mcp = tool_name[len("mcp_telegram-core_") :]
+                    tool_name = f"mcp:{short_mcp}"
+                elif tool_name == "call_mcp_tool" and "ToolName" in params:
+                    mcp_tool = str(params["ToolName"]).strip()
                     raw_args = params.get("Arguments")
                     parsed_mcp_args: dict[str, Any] = {}
                     if isinstance(raw_args, dict):

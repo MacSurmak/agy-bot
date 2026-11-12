@@ -4,17 +4,71 @@ import errno
 import json
 import os
 import pty
+import secrets
 import select
+import shlex
 import socket
 import sys
-import termios
 from typing import Final
 
-_SUDO_PROMPT_MARKERS: Final[tuple[bytes, ...]] = (
-    b"[sudo] password for ",
-    b"Password:",
-    b"password for ",
+_REMOTE_OPTIONS_WITH_ARG: Final[frozenset[str]] = frozenset(
+    {
+        "-b",
+        "-c",
+        "-D",
+        "-E",
+        "-e",
+        "-F",
+        "-I",
+        "-i",
+        "-J",
+        "-L",
+        "-l",
+        "-m",
+        "-O",
+        "-o",
+        "-p",
+        "-Q",
+        "-R",
+        "-S",
+        "-W",
+        "-w",
+    }
 )
+
+
+def _inject_sudo_prompt_token_into_ssh_argv(
+    ssh_argv: list[str], prompt_marker: str
+) -> list[str]:
+    idx = 0
+    n = len(ssh_argv)
+    while idx < n:
+        arg = ssh_argv[idx]
+        if arg == "--":
+            idx += 1
+            break
+        if arg.startswith("-"):
+            if arg in _REMOTE_OPTIONS_WITH_ARG:
+                idx += 2
+            else:
+                idx += 1
+            continue
+        break
+
+    if idx >= n - 1:
+        return list(ssh_argv)
+
+    host_And_opts = ssh_argv[: idx + 1]
+    remote_cmd_parts = ssh_argv[idx + 1 :]
+    raw_remote_cmd = " ".join(remote_cmd_parts)
+    if "sudo" not in raw_remote_cmd:
+        return list(ssh_argv)
+
+    wrapped_cmd = (
+        f"export SUDO_PROMPT={shlex.quote(prompt_marker)}; "
+        f"{raw_remote_cmd}"
+    )
+    return [*host_And_opts, wrapped_cmd]
 
 
 def _ipc_call(
@@ -134,14 +188,6 @@ def _resolve_target_via_openssh(
     return ssh_user, clean_host, port, proxy_jump
 
 
-def _contains_sudo_prompt(buffer_tail: bytes, master_fd: int) -> bool:
-    if not any(marker in buffer_tail for marker in _SUDO_PROMPT_MARKERS):
-        return False
-    tty_attrs = termios.tcgetattr(master_fd)
-    lflag = int(tty_attrs[3])
-    return (lflag & termios.ECHO) == 0
-
-
 def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
     if "AGY_CORE_IPC_SOCKET" not in os.environ:
         os.execv("/usr/bin/ssh", ["/usr/bin/ssh", *ssh_argv])
@@ -167,6 +213,12 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
         sys.stderr.write(f"SSH onboarding failed for {target_label}: {err_ready}\n")
         return 255
 
+    prompt_marker_str = f"__AGY_SUDO_{secrets.token_hex(8)}__:"
+    prompt_marker_bytes = prompt_marker_str.encode("ascii")
+    effective_argv = _inject_sudo_prompt_token_into_ssh_argv(
+        ssh_argv, prompt_marker_str
+    )
+
     child_env = {
         **os.environ,
         "LC_ALL": "C",
@@ -184,14 +236,15 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
             os.close(slave_fd)
         os.execve(
             "/usr/bin/ssh",
-            ["/usr/bin/ssh", "-tt", "-o", "LogLevel=ERROR", *ssh_argv],
+            ["/usr/bin/ssh", "-tt", "-o", "LogLevel=ERROR", *effective_argv],
             child_env,
         )
 
     os.close(slave_fd)
     cached_sudo_secret: str | None = None
-    rolling_tail = b""
+    pending_buf = b""
     cmd_display = " ".join(ssh_argv)
+    keep_tail_len = len(prompt_marker_bytes) - 1
 
     try:
         while True:
@@ -199,6 +252,9 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
             if not rlist:
                 wpid, status = os.waitpid(pid, os.WNOHANG)
                 if wpid == pid:
+                    if pending_buf:
+                        sys.stdout.buffer.write(pending_buf)
+                        sys.stdout.buffer.flush()
                     return os.waitstatus_to_exitcode(status)
                 continue
 
@@ -212,9 +268,16 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
             if not chunk:
                 break
 
-            rolling_tail = (rolling_tail + chunk)[-256:]
-            if _contains_sudo_prompt(rolling_tail, master_fd):
-                rolling_tail = b""
+            pending_buf += chunk
+            if prompt_marker_bytes in pending_buf:
+                before_marker, after_marker = pending_buf.split(
+                    prompt_marker_bytes, 1
+                )
+                if before_marker:
+                    sys.stdout.buffer.write(before_marker)
+                    sys.stdout.buffer.flush()
+                pending_buf = after_marker
+
                 if cached_sudo_secret is None:
                     ok, auth_res, err_msg = _ipc_call(
                         "authorize_pty_sudo",
@@ -234,9 +297,15 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
                     )
 
                 os.write(master_fd, (cached_sudo_secret + "\n").encode("utf-8"))
-            else:
-                sys.stdout.buffer.write(chunk)
+            elif len(pending_buf) > keep_tail_len:
+                flush_part = pending_buf[:-keep_tail_len]
+                pending_buf = pending_buf[-keep_tail_len:]
+                sys.stdout.buffer.write(flush_part)
                 sys.stdout.buffer.flush()
+
+        if pending_buf:
+            sys.stdout.buffer.write(pending_buf)
+            sys.stdout.buffer.flush()
     finally:
         os.close(master_fd)
 

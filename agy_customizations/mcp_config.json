@@ -3,7 +3,20 @@
     "telegram-core": {
       "command": "/srv/antigravity/venv/bin/python",
       "args": ["-m", "antigravity_core.mcp.stdio_proxy"],
-      "timeoutSeconds": 960
+      "timeoutSeconds": 960,
+      "tools": {
+        "register_remote_host": { "eager": true },
+        "update_host_knowledge": { "eager": true },
+        "send_file_to_telegram": { "eager": true },
+        "schedule_task": { "eager": true },
+        "list_scheduled_tasks": { "eager": true },
+        "cancel_scheduled_task": { "eager": true },
+        "create_sensor": { "eager": true },
+        "list_sensors": { "eager": true },
+        "cancel_sensor": { "eager": true },
+        "create_workspace_topic": { "eager": true },
+        "get_bot_ssh_public_key": { "eager": true }
+      }
     }
   }
 }
