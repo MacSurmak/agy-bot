@@ -578,6 +578,22 @@ class RemoteMountManager:
                     and self._cred_repo is not None
                 ):
                     cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
+                if cred is not None or ssh_user == "root":
+                    return resolved_target, cred
+
+                entered_host_pass = await self._request_password_from_owner(
+                    topic_id, resolved_target
+                )
+                if self._vault is not None and self._cred_repo is not None:
+                    enc = self._vault.encrypt_text(entered_host_pass)
+                    cred = await self._cred_repo.upsert_credential(
+                        credential_key=cred_key,
+                        ssh_user=ssh_user,
+                        host_target=host_part,
+                        ssh_port=port,
+                        encrypted_password=enc,
+                        key_provisioned=True,
+                    )
                 return resolved_target, cred
 
             lower_err = ssh_err.lower()

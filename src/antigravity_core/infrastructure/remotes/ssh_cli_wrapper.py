@@ -279,6 +279,11 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
                 pending_buf = after_marker
 
                 if cached_sudo_secret is None:
+                    sys.stderr.write(
+                        f"\n[Antigravity Sudo Gateway]: Waiting for owner to click [Approve Sudo] in Telegram for {target_label}... "
+                        "DO NOT kill or cancel this task!\n"
+                    )
+                    sys.stderr.flush()
                     ok, auth_res, err_msg = _ipc_call(
                         "authorize_pty_sudo",
                         {
@@ -290,8 +295,13 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
                     if not ok:
                         os.write(master_fd, b"\x03\n")
                         sys.stderr.write(f"\nSudo rejected: {err_msg}\n")
+                        sys.stderr.flush()
                         continue
 
+                    sys.stderr.write(
+                        f"[Antigravity Sudo Gateway]: Owner approved sudo on {target_label}. Executing command...\n"
+                    )
+                    sys.stderr.flush()
                     cached_sudo_secret = (
                         auth_res["sudo_password"] if "sudo_password" in auth_res else ""
                     )
