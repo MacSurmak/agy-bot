@@ -532,6 +532,25 @@ class SshCredentialRepository:
             row = (await session.scalars(stmt)).first()
             return _map_ssh_credential(row) if row is not None else None
 
+    async def find_matching_credential(
+        self,
+        ssh_user: str,
+        candidate_targets: tuple[str, ...],
+        ssh_port: int,
+    ) -> SshCredential | None:
+        async with self._db.session() as session:
+            stmt = (
+                select(SshCredentialRow)
+                .where(
+                    SshCredentialRow.ssh_user == ssh_user,
+                    SshCredentialRow.ssh_port == ssh_port,
+                    SshCredentialRow.host_target.in_(candidate_targets),
+                )
+                .order_by(SshCredentialRow.updated_at.desc())
+            )
+            row = (await session.scalars(stmt)).first()
+            return _map_ssh_credential(row) if row is not None else None
+
     async def list_credentials(self) -> list[SshCredential]:
         async with self._db.session() as session:
             stmt = select(SshCredentialRow).order_by(

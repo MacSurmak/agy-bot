@@ -1,10 +1,12 @@
 import json
 import os
+import re
 import socket
 import sys
+from typing import Final
 from pathlib import Path
 
-_WRITE_TOOLS: frozenset[str] = frozenset(
+_WRITE_TOOLS: Final[frozenset[str]] = frozenset(
     {
         "write_file",
         "edit_file",
@@ -32,11 +34,30 @@ _PATH_ARG_KEYS: tuple[str, ...] = (
     "SearchPath",
     "SearchDirectory",
 )
-_ALLOWED_LOCAL_PREFIXES: tuple[str, ...] = (
+_REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
+_RUNTIME_DATA_DIR: Final[Path] = (_REPO_ROOT / "runtime_data").resolve()
+
+_ALLOWED_LOCAL_WRITE_PREFIXES: Final[tuple[str, ...]] = (
+    str(_RUNTIME_DATA_DIR / "workspaces"),
+    str(_RUNTIME_DATA_DIR / "inbox"),
     "/srv/antigravity/app/runtime_data/workspaces",
     "/srv/antigravity/app/runtime_data/inbox",
     "/root/.gemini/config/rules",
     "/tmp",
+)
+
+_ALLOWED_LOCAL_READ_ONLY_SEGMENTS: Final[tuple[str, ...]] = (
+    "/.gemini/antigravity-cli/mcp/",
+    "/.gemini/config/rules/",
+    "/.gemini/config/skills/",
+    "/.gemini/AGENTS.md",
+)
+
+_SAFE_FD_REDIRECT_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?:\b\d*>&\d+\b|\b\d*>>?\s*/dev/null\b|&>>?\s*/dev/null\b)"
+)
+_FORBIDDEN_INPLACE_EDIT_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:sed\s+(?:-[a-zA-Z]*i|--in-place)|awk\s+-i\s+inplace|perl\s+-[a-zA-Z]*p[a-zA-Z]*i)\b"
 )
 
 
@@ -186,6 +207,27 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
         else {}
     )
 
+    if tool_name == "run_command":
+        cmd_line = str_args["CommandLine"] if "CommandLine" in str_args else ""
+        cleaned_cmd = _SAFE_FD_REDIRECT_RE.sub("", cmd_line)
+        if _FORBIDDEN_INPLACE_EDIT_RE.search(cleaned_cmd) is not None:
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "decision": "deny",
+                        "reason": (
+                            "POLICY VIOLATION: In-place file editing via sed -i / awk -i / perl -pi in run_command is forbidden. "
+                            "Use native file tools (read_file, view_file, edit_file, replace_file_content, write_file) "
+                            "on local scratchpad files or remote TRAMP paths (/ssh:user@<alias>:/abs/path)."
+                        ),
+                    }
+                )
+                + "\n"
+            )
+            return
+        sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+        return
+
     if tool_name in _ALL_FILE_TOOLS:
         target_path = _extract_file_path(str_args)
         if not target_path:
@@ -241,7 +283,12 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
             return
 
         resolved_local = str(Path(target_path).expanduser().resolve())
-        if not resolved_local.startswith(_ALLOWED_LOCAL_PREFIXES):
+        is_allowed_write = resolved_local.startswith(_ALLOWED_LOCAL_WRITE_PREFIXES)
+        is_allowed_ro = (tool_name not in _WRITE_TOOLS) and any(
+            seg in resolved_local or seg in target_path
+            for seg in _ALLOWED_LOCAL_READ_ONLY_SEGMENTS
+        )
+        if not is_allowed_write and not is_allowed_ro:
             sys.stdout.write(
                 json.dumps(
                     {
@@ -250,7 +297,7 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
                             f"LOCAL LXC SANDBOX RESTRICTION: Access to '{resolved_local}' inside the LXC brain container is forbidden. "
                             "You may only access your topic workspace (/srv/antigravity/app/runtime_data/workspaces/...), "
                             "inbox (/srv/antigravity/app/runtime_data/inbox/...), host passports (/root/.gemini/config/rules/...), or /tmp. "
-                            "To access files on a remote machine, use '/ssh:user@<alias>:/path'."
+                            "To access files on a remote machine, use '/ssh:user@<alias>:/abs/path'."
                         ),
                     }
                 )

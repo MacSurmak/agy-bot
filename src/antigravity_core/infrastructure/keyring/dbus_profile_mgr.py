@@ -129,11 +129,9 @@ class KeyringProfileManager:
 
         onboarding_file = acc_cache / "onboarding.json"
         if not onboarding_file.is_file():
-            mac_onboarding = Path(
-                "/home/macsurmak/.gemini/antigravity-cli/cache/onboarding.json"
-            )
-            if mac_onboarding.is_file():
-                onboarding_file.write_bytes(mac_onboarding.read_bytes())
+            global_onboarding = global_cli / "cache" / "onboarding.json"
+            if global_onboarding.is_file():
+                onboarding_file.write_bytes(global_onboarding.read_bytes())
             else:
                 onboarding_file.write_text(
                     '{"onboardingCompleted":true,"termsAccepted":true,"theme":"default"}\n',
@@ -141,11 +139,9 @@ class KeyringProfileManager:
                 )
 
         default_proj = acc_cache / "default_project_id.txt"
-        mac_proj = Path(
-            "/home/macsurmak/.gemini/antigravity-cli/cache/default_project_id.txt"
-        )
-        if not default_proj.is_file() and mac_proj.is_file():
-            default_proj.write_bytes(mac_proj.read_bytes())
+        global_proj = global_cli / "cache" / "default_project_id.txt"
+        if not default_proj.is_file() and global_proj.is_file():
+            default_proj.write_bytes(global_proj.read_bytes())
 
         return acc_home
 
@@ -238,24 +234,6 @@ class KeyringProfileManager:
                         "Restored antigravity-oauth-token bundle from Fernet backup",
                         account_slug=account.slug,
                     )
-        elif not token_file.is_file() and account.is_default:
-            # First-time bootstrap: if /home/macsurmak has a working token and acc_1 is fresh, seed it
-            mac_token = Path(
-                "/home/macsurmak/.gemini/antigravity-cli/antigravity-oauth-token"
-            )
-            mac_jetski = Path(
-                "/home/macsurmak/.gemini/antigravity-cli/jetski_state.pbtxt"
-            )
-            if mac_token.is_file() and mac_token.stat().st_size > 0:
-                token_file.write_bytes(mac_token.read_bytes())
-                os.chmod(token_file, 0o600)
-                if mac_jetski.is_file():
-                    jetski_file.write_bytes(mac_jetski.read_bytes())
-                    os.chmod(jetski_file, 0o600)
-                logger.info(
-                    "Seeded default account token from /home/macsurmak/.gemini",
-                    account_slug=account.slug,
-                )
 
         self._runtimes[account.id] = _ActiveProfileRuntime(
             account_id=account.id,
@@ -633,6 +611,7 @@ class KeyringProfileManager:
     async def _purge_existing_session_if_signed_in(
         self, account: GoogleAccount, oauth_env: dict[str, str], workspace_cwd: str
     ) -> None:
+        _ = workspace_cwd
         acc_cli = self._account_cli_dir(Path(account.xdg_data_dir))
         for fname in (
             "antigravity-oauth-token",
@@ -643,272 +622,6 @@ class KeyringProfileManager:
             if fpath.is_file():
                 fpath.unlink()
         await self._clear_gemini_secret(oauth_env)
-
-    async def start_remote_oauth_flow(
-        self, account: GoogleAccount
-    ) -> PendingOAuthSession:
-        env = await self.ensure_account_bus(account)
-        oauth_env = {
-            **env,
-            "SSH_CONNECTION": "1",
-            "TERM": "xterm-256color",
-            "COLUMNS": "2000",
-            "LINES": "50",
-            "BROWSER": "/bin/false",
-        }
-        oauth_env.pop("DISPLAY", None)
-        oauth_env.pop("WAYLAND_DISPLAY", None)
-
-        workspace_cwd = str(self._cfg.paths.workspaces_root_dir)
-        Path(workspace_cwd).mkdir(parents=True, exist_ok=True)
-
-        await self._purge_existing_session_if_signed_in(
-            account, oauth_env, workspace_cwd
-        )
-
-        master_fd, slave_fd = self._spawn_agy_pty_process()
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                str(self._cfg.paths.agy_binary_path),
-                stdin=slave_fd,
-                stdout=slave_fd,
-                stderr=slave_fd,
-                cwd=workspace_cwd,
-                env=oauth_env,
-                start_new_session=True,
-            )
-        except Exception:
-            os.close(master_fd)
-            raise
-        finally:
-            os.close(slave_fd)
-
-        accumulated = ""
-        sent_trust_enter = False
-        sent_theme_enter = False
-        sent_method_enter = False
-        chunk_size = self._cfg.runtime.oauth_stdout_chunk_bytes
-        poll_interval = self._cfg.runtime.dbus_socket_poll_interval_sec
-
-        logger.info(
-            "Started agy interactive PTY for Remote SSH OAuth flow",
-            account_slug=account.slug,
-            pid=proc.pid,
-        )
-        try:
-            async with asyncio.timeout(self._cfg.runtime.command_exec_timeout_sec):
-                while True:
-                    try:
-                        chunk = os.read(master_fd, chunk_size)
-                    except BlockingIOError:
-                        if proc.returncode is not None:
-                            break
-                        await asyncio.sleep(poll_interval)
-                        continue
-                    except OSError:
-                        break
-
-                    if not chunk:
-                        break
-
-                    decoded_chunk = chunk.decode("utf-8", errors="replace")
-                    accumulated += decoded_chunk
-                    clean_text = _ANSI_ESCAPE_RE.sub("", accumulated)
-
-                    if not sent_trust_enter and (
-                        "Do you trust the contents" in clean_text
-                        or "Yes, I trust this folder" in clean_text
-                    ):
-                        await asyncio.sleep(poll_interval * 4)
-                        os.write(master_fd, b"\r")
-                        sent_trust_enter = True
-                        accumulated = ""
-                        logger.info(
-                            "Confirmed workspace trust dialog in OAuth startup PTY",
-                            account_slug=account.slug,
-                        )
-                        continue
-
-                    if not sent_theme_enter and (
-                        "press Enter to continue" in clean_text
-                        or "[Next]" in clean_text
-                        or "Choose a theme" in clean_text
-                    ):
-                        await asyncio.sleep(poll_interval * 4)
-                        os.write(master_fd, b"\r")
-                        sent_theme_enter = True
-                        accumulated = ""
-                        logger.info(
-                            "Confirmed theme wizard screen 1 ([Next]) in agy PTY",
-                            account_slug=account.slug,
-                        )
-                        continue
-
-                    if "[Done]" in clean_text or "Terms of Service" in clean_text:
-                        await asyncio.sleep(poll_interval * 4)
-                        os.write(master_fd, b"\r")
-                        accumulated = ""
-                        logger.info(
-                            "Confirmed Terms of Service screen 2 ([Done]) in agy PTY",
-                            account_slug=account.slug,
-                        )
-                        continue
-
-                    if (
-                        not sent_method_enter
-                        and "accept-edits" in clean_text
-                        and "Select login method" not in clean_text
-                    ):
-                        await asyncio.sleep(poll_interval * 4)
-                        os.write(master_fd, b"/logout")
-                        await asyncio.sleep(0.25)
-                        os.write(master_fd, b"\r")
-                        await asyncio.sleep(0.6)
-                        os.write(master_fd, b"/login")
-                        await asyncio.sleep(0.25)
-                        os.write(master_fd, b"\r")
-                        accumulated = ""
-                        logger.info(
-                            "Sent /logout and /login commands at agy TUI prompt",
-                            account_slug=account.slug,
-                        )
-                        continue
-
-                    if not sent_method_enter and (
-                        "Select login method" in clean_text
-                        or "Google OAuth" in clean_text
-                    ):
-                        await asyncio.sleep(poll_interval * 4)
-                        os.write(master_fd, b"\r")
-                        sent_method_enter = True
-                        logger.info(
-                            "Selected '1. Google OAuth' in agy TUI prompt",
-                            account_slug=account.slug,
-                        )
-
-                    match = _OAUTH_URL_PATTERN.search(clean_text)
-                    if match is not None and "response_type=" in match.group(1):
-                        await asyncio.sleep(poll_interval * 4)
-                        with contextlib.suppress(BlockingIOError, OSError):
-                            while True:
-                                extra = os.read(master_fd, chunk_size)
-                                if not extra:
-                                    break
-                                accumulated += extra.decode("utf-8", errors="replace")
-                        clean_text = _ANSI_ESCAPE_RE.sub("", accumulated)
-                        full_match = _OAUTH_URL_PATTERN.search(clean_text)
-                        if full_match is not None:
-                            auth_url = full_match.group(1).strip()
-                            logger.info(
-                                "Captured complete OAuth URL from agy PTY",
-                                account_slug=account.slug,
-                                auth_url=auth_url,
-                            )
-                            return PendingOAuthSession(
-                                account=account,
-                                process=proc,
-                                pty_master_fd=master_fd,
-                                auth_url=auth_url,
-                            )
-        except TimeoutError as exc:
-            self._cleanup_oauth_pty(proc, master_fd)
-            summary = self._sanitize_tui_output(accumulated)
-            logger.error(
-                "Timed out waiting for OAuth URL from agy PTY",
-                account_slug=account.slug,
-                output=summary,
-            )
-            raise AccountAuthFlowError(
-                f"Timed out waiting for OAuth URL from agy PTY. Output: {summary or '<empty>'}"
-            ) from exc
-
-        self._cleanup_oauth_pty(proc, master_fd)
-        summary = self._sanitize_tui_output(accumulated)
-        raise AccountAuthFlowError(
-            f"agy PTY exited (code {proc.returncode}) without OAuth URL. Output: {summary or '<empty>'}"
-        )
-
-    async def complete_remote_oauth_flow(
-        self, pending: PendingOAuthSession, verification_code: str
-    ) -> None:
-        clean_code = verification_code.strip()
-        if not clean_code:
-            self._cleanup_oauth_pty(pending.process, pending.pty_master_fd)
-            raise AccountAuthFlowError("Verification code cannot be empty.")
-
-        env = await self.ensure_account_bus(pending.account)
-        poll_interval = self._cfg.runtime.dbus_socket_poll_interval_sec
-        chunk_size = self._cfg.runtime.oauth_stdout_chunk_bytes
-        accumulated = ""
-        authenticated = False
-        sent_post_trust = False
-        ticks = 0
-
-        try:
-            os.write(pending.pty_master_fd, (clean_code + "\r").encode("utf-8"))
-            async with asyncio.timeout(self._cfg.runtime.command_exec_timeout_sec):
-                while True:
-                    try:
-                        chunk = os.read(pending.pty_master_fd, chunk_size)
-                        if chunk:
-                            accumulated += chunk.decode("utf-8", errors="replace")
-                    except BlockingIOError, OSError:
-                        pass
-
-                    clean_text = _ANSI_ESCAPE_RE.sub("", accumulated)
-                    if not sent_post_trust and (
-                        "Do you trust the contents" in clean_text
-                        or "Yes, I trust this folder" in clean_text
-                    ):
-                        with contextlib.suppress(OSError):
-                            os.write(pending.pty_master_fd, b"\r")
-                        sent_post_trust = True
-                        logger.info(
-                            "Confirmed post-login workspace trust prompt",
-                            account_slug=pending.account.slug,
-                        )
-
-                    ticks += 1
-                    # Every ~1.5s after code submission, verify actual auth status via `agy models`
-                    if ticks % 30 == 0 and await self.is_account_authenticated(env):
-                        await asyncio.sleep(0.5)
-                        authenticated = True
-                        logger.info(
-                            "Verified active OAuth session via agy models",
-                            account_slug=pending.account.slug,
-                        )
-                        break
-
-                    if pending.process.returncode is not None:
-                        authenticated = await self.is_account_authenticated(env)
-                        break
-
-                    await asyncio.sleep(poll_interval)
-        except TimeoutError as exc:
-            authenticated = await self.is_account_authenticated(env)
-            if not authenticated:
-                summary = self._sanitize_tui_output(accumulated)
-                raise AccountAuthFlowError(
-                    f"Timed out waiting for agy OAuth completion. Output tail: {summary}"
-                ) from exc
-        finally:
-            self._cleanup_oauth_pty(pending.process, pending.pty_master_fd)
-
-        backed_up = await self.backup_account_token_to_db(pending.account)
-        if not backed_up and authenticated:
-            encrypted_marker = self._vault.encrypt_text(
-                f"oauth-verified:{pending.account.slug}"
-            )
-            await self._account_repo.update_token_backup(
-                pending.account.id, encrypted_marker
-            )
-            backed_up = True
-
-        if not backed_up:
-            summary = self._sanitize_tui_output(accumulated)
-            raise AccountAuthFlowError(
-                f"agy OAuth login did not complete. Output tail: {summary}"
-            )
 
     @staticmethod
     def _cleanup_oauth_pty(proc: asyncio.subprocess.Process, master_fd: int) -> None:

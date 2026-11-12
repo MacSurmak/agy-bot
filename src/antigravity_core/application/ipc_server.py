@@ -134,11 +134,6 @@ class CoreIpcServer:
     async def _dispatch(
         self, method: str, topic_id: int, params: dict[str, str | int | bool]
     ) -> dict[str, str | int | bool | list[dict[str, str | int | bool | None]]]:
-        if method == "consume_askpass_token":
-            token = str(params["token"]) if "token" in params else ""
-            secret = self._mount_mgr.consume_askpass_token(token)
-            return {"secret": secret}
-
         if method == "ensure_ssh_target_ready":
             ssh_user = str(params["ssh_user"]) if "ssh_user" in params else ""
             host_alias = str(params["host_alias"]) if "host_alias" in params else ""
@@ -257,30 +252,22 @@ class CoreIpcServer:
             if raw_file_path.startswith("/ssh:"):
                 topic = await self._topic_repo.get_topic_strict(topic_id)
                 ws_dir = Path(topic.workspace_path)
-                staged_info = await self._mount_mgr.stage_remote_file(
+                streamed_tmp_path = await self._mount_mgr.download_remote_file_to_temp(
                     topic_id=topic_id,
                     workspace_dir=ws_dir,
                     raw_path=raw_file_path,
-                    for_write=False,
-                )
-                local_path_to_send = (
-                    staged_info["local_path"]
-                    if "local_path" in staged_info
-                    else raw_file_path
                 )
                 try:
                     return await self._media.send_file_to_topic(
                         topic_id=topic_id,
-                        file_path_str=local_path_to_send,
+                        file_path_str=str(streamed_tmp_path),
                         caption=caption_str,
                     )
                 finally:
-                    await self._mount_mgr.commit_remote_file(
-                        topic_id=topic_id,
-                        workspace_dir=ws_dir,
-                        raw_path=raw_file_path,
-                        cleanup_only=True,
-                    )
+                    streamed_tmp_path.unlink(missing_ok=True)
+                    if streamed_tmp_path.parent.exists():
+                        with contextlib.suppress(OSError):
+                            streamed_tmp_path.parent.rmdir()
             return await self._media.send_file_to_topic(
                 topic_id=topic_id,
                 file_path_str=raw_file_path,

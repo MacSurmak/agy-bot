@@ -112,7 +112,6 @@ class WorkspaceTopicUI:
             message=msg_id,
             text=lex.ssh_password_accepted_card.format(target=target_label),
         )
-        self._relocate_trace_topics.add(topic_id)
 
     async def send_sudo_approval_prompt(
         self,

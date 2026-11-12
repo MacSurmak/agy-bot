@@ -64,8 +64,9 @@ class RemoteMountManager:
         ) = None
         self._pending_passwords: dict[int, tuple[str, asyncio.Future[str]]] = {}
         self._pending_sudo: dict[str, tuple[int, asyncio.Future[str]]] = {}
-        self._askpass_tokens: dict[str, str] = {}
         self._staged_baselines: dict[tuple[int, str], _StagedFileBaseline] = {}
+        self._stage_locks: dict[str, asyncio.Lock] = {}
+        self._stage_refcounts: dict[str, int] = {}
         self._onboarding_locks: dict[str, asyncio.Lock] = {}
 
     def bind_security_gateways(
@@ -122,11 +123,6 @@ class RemoteMountManager:
             fut.set_result(decision)
             return topic_id, True
         return topic_id, False
-
-    def consume_askpass_token(self, token: str) -> str:
-        if token not in self._askpass_tokens:
-            raise RemoteMountError("Invalid or expired askpass token.")
-        return self._askpass_tokens.pop(token)
 
     def install_runtime_wrappers(self) -> None:
         bin_dir = self._cfg.paths.runtime_bin_dir
@@ -365,7 +361,7 @@ class RemoteMountManager:
 
     async def _resolve_ssh_target_details(
         self, raw_target: str, explicit_port: int
-    ) -> tuple[str, str, int, str]:
+    ) -> tuple[str, str, int, str, tuple[str, ...]]:
         user_part = ""
         host_part = raw_target.strip().replace("[", "").replace("]", "")
         if "@" in host_part:
@@ -389,7 +385,12 @@ class RemoteMountManager:
                 eff_user = user_part if user_part else reg.ssh_user
                 eff_port = explicit_port if explicit_port != 22 else reg.ssh_port
                 cred_key = f"{eff_user}@{reg.alias}:{eff_port}"
-                return eff_user, reg.alias, eff_port, cred_key
+                candidates = (
+                    (reg.alias, reg.hostname_or_ip)
+                    if reg.alias != reg.hostname_or_ip
+                    else (reg.alias,)
+                )
+                return eff_user, reg.alias, eff_port, cred_key, candidates
 
         proc = await asyncio.create_subprocess_exec(
             "/usr/bin/ssh",
@@ -413,7 +414,7 @@ class RemoteMountManager:
                     parsed_port = int(parts[1])
 
         cred_key = f"{parsed_user}@{host_part}:{parsed_port}"
-        return parsed_user, host_part, parsed_port, cred_key
+        return parsed_user, host_part, parsed_port, cred_key, (host_part,)
 
     async def _test_batch_key_auth(
         self, resolved_target: str, port: int, jump_host: str
@@ -553,8 +554,8 @@ class RemoteMountManager:
                 jump_host="",
             )
 
-        ssh_user, host_part, port, cred_key = await self._resolve_ssh_target_details(
-            raw_target, explicit_port
+        ssh_user, host_part, port, cred_key, candidate_targets = (
+            await self._resolve_ssh_target_details(raw_target, explicit_port)
         )
         resolved_target = f"{ssh_user}@{host_part}"
 
@@ -567,6 +568,22 @@ class RemoteMountManager:
                 if self._cred_repo is not None
                 else None
             )
+            if cred is None and self._cred_repo is not None:
+                matched = await self._cred_repo.find_matching_credential(
+                    ssh_user=ssh_user,
+                    candidate_targets=candidate_targets,
+                    ssh_port=port,
+                )
+                if matched is not None:
+                    cred = await self._cred_repo.upsert_credential(
+                        credential_key=cred_key,
+                        ssh_user=ssh_user,
+                        host_target=host_part,
+                        ssh_port=port,
+                        encrypted_password=matched.encrypted_password,
+                        key_provisioned=matched.key_provisioned,
+                    )
+
             key_ok = await self._test_batch_key_auth(resolved_target, port, clean_jump)
             if key_ok:
                 if (
@@ -575,22 +592,6 @@ class RemoteMountManager:
                     and self._cred_repo is not None
                 ):
                     cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
-                if cred is not None or ssh_user == "root":
-                    return resolved_target, cred
-
-                entered_sudo_pass = await self._request_password_from_owner(
-                    topic_id, f"sudo@{resolved_target}"
-                )
-                if self._vault is not None and self._cred_repo is not None:
-                    enc = self._vault.encrypt_text(entered_sudo_pass)
-                    cred = await self._cred_repo.upsert_credential(
-                        credential_key=cred_key,
-                        ssh_user=ssh_user,
-                        host_target=host_part,
-                        ssh_port=port,
-                        encrypted_password=enc,
-                        key_provisioned=True,
-                    )
                 return resolved_target, cred
 
             if cred is not None and self._vault is not None:
@@ -645,8 +646,8 @@ class RemoteMountManager:
         resolved_target, cred = await self.ensure_target_access(
             topic_id, raw_target, explicit_port
         )
-        ssh_user, host_part, port, cred_key = await self._resolve_ssh_target_details(
-            raw_target, explicit_port
+        ssh_user, host_part, port, cred_key, candidate_targets = (
+            await self._resolve_ssh_target_details(raw_target, explicit_port)
         )
         if ssh_user == "root":
             return resolved_target, "", True
@@ -687,10 +688,16 @@ class RemoteMountManager:
 
         if cred is None and self._cred_repo is not None:
             cred = await self._cred_repo.get_credential(cred_key)
+        if cred is None and self._cred_repo is not None:
+            cred = await self._cred_repo.find_matching_credential(
+                ssh_user=ssh_user,
+                candidate_targets=candidate_targets,
+                ssh_port=port,
+            )
 
         if cred is None:
             entered_pass = await self._request_password_from_owner(
-                topic_id, f"sudo@{resolved_target}"
+                topic_id, resolved_target
             )
             if self._vault is not None and self._cred_repo is not None:
                 enc = self._vault.encrypt_text(entered_pass)
@@ -777,6 +784,75 @@ class RemoteMountManager:
             return f'"$HOME"/{shlex.quote(remote_path[2:])}'
         return shlex.quote(remote_path)
 
+    def _get_stage_lock(self, local_stage_path: Path) -> asyncio.Lock:
+        key = str(local_stage_path)
+        if key not in self._stage_locks:
+            self._stage_locks[key] = asyncio.Lock()
+        return self._stage_locks[key]
+
+    @staticmethod
+    def _prune_empty_stage_parents(file_path: Path, stage_root_dir: Path) -> None:
+        curr = file_path.parent
+        root_resolved = stage_root_dir.resolve()
+        while curr.exists() and curr.is_dir():
+            if any(curr.iterdir()):
+                break
+            curr.rmdir()
+            if curr.resolve() == root_resolved or curr.parent == curr:
+                break
+            curr = curr.parent
+
+    async def download_remote_file_to_temp(
+        self,
+        topic_id: int,
+        workspace_dir: Path,
+        raw_path: str,
+    ) -> Path:
+        spec = self.parse_remote_file_spec(raw_path, workspace_dir)
+        if spec is None:
+            raise RemoteMountError(f"Not a remote TRAMP path: {raw_path}")
+
+        resolved_target, _cred = await self.ensure_target_access_with_jump(
+            topic_id=topic_id,
+            raw_target=spec.raw_target,
+            explicit_port=spec.ssh_port,
+            jump_host=spec.jump_host,
+        )
+        qpath = self._quote_remote_path(spec.remote_path)
+        jump_args = ["-J", spec.jump_host] if spec.jump_host else []
+
+        tmp_dir = (
+            self._cfg.paths.runtime_dir
+            / "tg_transfers"
+            / f"topic_{topic_id}_{uuid4().hex[:8]}"
+        )
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        dest_file = tmp_dir / Path(spec.remote_path).name
+
+        with dest_file.open("wb") as out_fh:
+            proc = await asyncio.create_subprocess_exec(
+                "/usr/bin/ssh",
+                *jump_args,
+                "-o",
+                "BatchMode=yes",
+                resolved_target,
+                f"cat {qpath}",
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=out_fh,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._internal_ssh_env(),
+            )
+            _, stderr_bytes = await proc.communicate()
+
+        if proc.returncode != 0:
+            dest_file.unlink(missing_ok=True)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            err_msg = stderr_bytes.decode("utf-8", errors="replace").strip()
+            raise RemoteMountError(
+                f"Failed to stream remote file '{spec.remote_path}' from '{resolved_target}': {err_msg}"
+            )
+        return dest_file
+
     async def stage_remote_file(
         self,
         topic_id: int,
@@ -787,6 +863,15 @@ class RemoteMountManager:
         spec = self.parse_remote_file_spec(raw_path, workspace_dir)
         if spec is None:
             return {"status": "local"}
+
+        stage_key = str(spec.local_stage_path)
+        lock = self._get_stage_lock(spec.local_stage_path)
+        async with lock:
+            self._stage_refcounts[stage_key] = (
+                self._stage_refcounts[stage_key] + 1
+                if stage_key in self._stage_refcounts
+                else 1
+            )
 
         resolved_target, _cred = await self.ensure_target_access_with_jump(
             topic_id=topic_id,
@@ -1056,11 +1141,29 @@ class RemoteMountManager:
                 )
             return {"status": "committed_sudo", "remote_path": spec.remote_path}
         finally:
-            if (
-                spec.stage_root_dir.exists()
-                and spec.stage_root_dir != workspace_dir.resolve()
-            ):
-                shutil.rmtree(spec.stage_root_dir, ignore_errors=True)
+            stage_key = str(spec.local_stage_path)
+            lock = self._get_stage_lock(spec.local_stage_path)
+            async with lock:
+                remaining = (
+                    self._stage_refcounts[stage_key] - 1
+                    if stage_key in self._stage_refcounts
+                    else 0
+                )
+                if remaining <= 0:
+                    self._stage_refcounts.pop(stage_key, None)
+                    if spec.local_stage_path.is_file():
+                        spec.local_stage_path.unlink(missing_ok=True)
+                    elif spec.local_stage_path.is_dir():
+                        shutil.rmtree(spec.local_stage_path, ignore_errors=True)
+                    if (
+                        spec.stage_root_dir.exists()
+                        and spec.stage_root_dir != workspace_dir.resolve()
+                    ):
+                        self._prune_empty_stage_parents(
+                            spec.local_stage_path, spec.stage_root_dir
+                        )
+                else:
+                    self._stage_refcounts[stage_key] = remaining
 
     def ensure_rule_skeleton(self, host: RemoteHost) -> Path:
         rule_path = Path(host.rule_file_path)
@@ -1078,18 +1181,20 @@ class RemoteMountManager:
     def _render_two_tier_passport(
         host: RemoteHost, auto_telemetry_md: str, ai_notes_md: str
     ) -> str:
+        route_note = f" (via `{host.jump_host}`)" if host.jump_host else ""
+        tramp_prefix = f"/ssh:{host.ssh_user}@{host.alias}:"
         return (
             "---\n"
             "trigger: model_decision\n"
             f'description: "Infrastructure passport for host {host.alias} '
-            f"({host.ssh_user}@{host.hostname_or_ip}, mounted at {host.local_mount_path}). "
+            f"({host.ssh_user}@{host.hostname_or_ip}{route_note}, TRAMP prefix {tramp_prefix}/path). "
             f'Read whenever working on {host.alias}."\n'
             "---\n\n"
             f"# Infrastructure Passport: `{host.alias}`\n\n"
-            f"- **SSH Alias:** `{host.alias}` (`{host.ssh_user}@{host.hostname_or_ip}:{host.ssh_port}`)\n"
+            f"- **SSH Alias:** `{host.alias}` (`{host.ssh_user}@{host.hostname_or_ip}:{host.ssh_port}`{route_note})\n"
             f"- **Remote Root:** `{host.remote_root_path}`\n"
-            f"- **Local VFS Mount (for `read_file`/`write_file`/`edit_file`):** `{host.local_mount_path}`\n"
-            f'- **Command Execution:** `mcp:telegram-core:ssh_exec(host="{host.alias}", command="...")`\n\n'
+            f"- **Native File Tools TRAMP Path (`read_file`/`write_file`/`edit_file`):** `{tramp_prefix}/abs/path`\n"
+            f'- **Shell Command Execution (`run_command`):** `ssh {host.ssh_user}@{host.alias} "command"`\n\n'
             "## 1. Auto-Synced Hardware & System Telemetry (Managed by Bot)\n\n"
             f"{auto_telemetry_md.strip()}\n\n"
             f"{_AI_NOTES_MARKER}\n"

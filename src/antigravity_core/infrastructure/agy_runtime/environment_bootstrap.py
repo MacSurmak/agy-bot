@@ -88,9 +88,9 @@ class AgyEnvironmentBootstrapper:
             "## 2. Two-Stage Workflow for Remote Computers\n\n"
             "1. **STAGE 1 — CHECK & ONBOARD NEW HOSTS FIRST (`register_remote_host`):**\n"
             "   - Before working on a server, check if it is in the **Live Registered Infrastructure Map** above.\n"
-            "   - If the host is NOT in the table yet (e.g. a new server IP or an internal LAN node like `bigcomp` discovered behind a gateway), "
-            "**FIRST call `mcp:telegram-core:register_remote_host(alias, hostname_or_ip, ssh_user, ssh_port, remote_root_path, jump_host)`**!\n"
-            '   - If the node requires a jump host, pass `jump_host="user@gateway"`. This configures `ProxyJump` in `~/.ssh/config.d/<alias>.conf` and installs the SSH key.\n'
+            "   - If the host is NOT in the table yet (e.g. a new server IP or an internal LAN/Slurm node discovered behind a gateway), "
+            "**IMMEDIATELY call `mcp:telegram-core:register_remote_host(alias, hostname_or_ip, ssh_user, ssh_port, remote_root_path, jump_host)`**!\n"
+            '   - If the node is behind a gateway, pass `jump_host="user@gateway"`. Never manually scrape `/root/.ssh/id_*`, never run interactive `srun` jobs to copy keys, and never inspect local `~/.ssh/config`.\n'
             "2. **STAGE 2 — WORK DIRECTLY BY ALIAS (`/ssh:user@<alias>:/path` & `ssh user@<alias>`):**\n"
             "   - Once a host is registered, **ALWAYS address it directly by its `<alias>`** (OpenSSH handles `ProxyJump` automatically; never use manual `-J` or `|ssh:` pipes):\n"
             "   - Native file tools (`view_file`, `read_file`, `write_to_file`, `write_file`, `replace_file_content`, `multi_replace_file_content`, `edit_file`, `list_dir`): "
@@ -222,21 +222,18 @@ class AgyEnvironmentBootstrapper:
 
     def _write_onboarding_skill(self, skill_path: Path) -> None:
         rules_dir = self._cfg.paths.agy_home_dir / "config" / "rules"
-        remotes_dir = self._cfg.paths.remotes_mount_dir
         content = (
             "---\n"
             "name: host-onboarding\n"
-            'description: "Onboard a new remote SSH host, mount it under /mnt/remotes/<alias>, '
-            'inspect its system profile, and create ~/.gemini/config/rules/infra-<alias>.md."\n'
+            'description: "Onboard a new remote SSH host via register_remote_host, '
+            'inspect its system profile, and update ~/.gemini/config/rules/infra-<alias>.md."\n'
             "---\n\n"
             "# Host Onboarding Procedure\n\n"
             "1. Call `mcp:telegram-core:register_remote_host` with `alias`, `hostname_or_ip`, "
-            "`ssh_user`, `ssh_port`, and `remote_root_path`.\n"
+            "`ssh_user`, `ssh_port`, `remote_root_path`, and `jump_host` (if behind a gateway).\n"
             "2. Probe the server via `run_command`: "
             '`ssh <alias> "uname -a && free -h && df -hT && docker ps 2>/dev/null"`.\n'
-            f"3. Use `write_to_file` to write `{rules_dir}/infra-<alias>.md` with YAML frontmatter "
-            "`trigger: model_decision` and a comprehensive summary of hardware, OS, services, and "
-            f"key paths under `{remotes_dir}/<alias>/...`.\n"
+            f"3. Call `mcp:telegram-core:update_host_knowledge` to save architectural notes into `{rules_dir}/infra-<alias>.md`.\n"
         )
         skill_path.write_text(content, encoding="utf-8")
 

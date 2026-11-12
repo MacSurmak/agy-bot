@@ -7,9 +7,10 @@ import pty
 import select
 import socket
 import sys
-from pathlib import Path
+import termios
+from typing import Final
 
-_SUDO_PROMPT_MARKERS: tuple[bytes, ...] = (
+_SUDO_PROMPT_MARKERS: Final[tuple[bytes, ...]] = (
     b"[sudo] password for ",
     b"Password:",
     b"password for ",
@@ -133,8 +134,12 @@ def _resolve_target_via_openssh(
     return ssh_user, clean_host, port, proxy_jump
 
 
-def _contains_sudo_prompt(buffer_tail: bytes) -> bool:
-    return any(marker in buffer_tail for marker in _SUDO_PROMPT_MARKERS)
+def _contains_sudo_prompt(buffer_tail: bytes, master_fd: int) -> bool:
+    if not any(marker in buffer_tail for marker in _SUDO_PROMPT_MARKERS):
+        return False
+    tty_attrs = termios.tcgetattr(master_fd)
+    lflag = int(tty_attrs[3])
+    return (lflag & termios.ECHO) == 0
 
 
 def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
@@ -208,7 +213,7 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
                 break
 
             rolling_tail = (rolling_tail + chunk)[-256:]
-            if _contains_sudo_prompt(rolling_tail):
+            if _contains_sudo_prompt(rolling_tail, master_fd):
                 rolling_tail = b""
                 if cached_sudo_secret is None:
                     ok, auth_res, err_msg = _ipc_call(

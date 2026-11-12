@@ -32,8 +32,9 @@ Never invent text tags like `[SEND_FILE: ...]`, never use the built-in `schedule
 - `list_sensors()` / `cancel_sensor(sensor_id)` — list or stop active event sensors.
 - `schedule_task(schedule_kind, trigger_spec, instruction_prompt, notify_policy, keep_conversation_context)` — schedules a time-based `ONE_SHOT` (`+5m`, `+2h`, or ISO-8601) or `CRON` (5-field cron) wake-up task.
 - `list_scheduled_tasks()` / `cancel_scheduled_task(task_id)` — list or cancel time-based tasks.
-- `register_remote_host(alias, hostname_or_ip, ssh_user, ssh_port, remote_root_path)` — registers a new SSH host, mounts it at `/mnt/remotes/<alias>`, and initializes its infrastructure rule file.
-- `create_workspace_topic(title, workspace_path, execution_mode)` — creates a new Forum Topic in Telegram bound to `workspace_path`.
+- `register_remote_host(alias, hostname_or_ip, ssh_user, ssh_port, remote_root_path, jump_host)` — registers a new SSH host (with optional `jump_host="user@gateway"`), provisions the SSH key, and initializes its infrastructure rule file `~/.gemini/config/rules/infra-<alias>.md`.
+- `update_host_knowledge(host, notes_markdown, append)` — updates architectural notes in `~/.gemini/config/rules/infra-<host>.md`.
+- `create_workspace_topic(title, execution_mode)` — creates a new Forum Topic in Telegram with an isolated scratch workspace.
 
 ## 3. Self-Updating Infrastructure Memory (`~/.gemini/config/rules/infra-*.md`)
 
