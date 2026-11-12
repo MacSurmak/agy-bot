@@ -120,7 +120,7 @@ class AgyEnvironmentBootstrapper:
 
     def _write_settings_json(self, settings_path: Path) -> None:
         workspaces_dir = str(self._cfg.paths.workspaces_root_dir)
-        remotes_dir = str(self._cfg.paths.remotes_mount_dir)
+        inbox_dir = str(self._cfg.paths.inbox_dir)
 
         existing_settings: dict[
             str, str | int | bool | list[str] | dict[str, list[str]]
@@ -147,7 +147,7 @@ class AgyEnvironmentBootstrapper:
             "showFeedbackSurvey": False,
             "notifications": False,
             "historySize": -1,
-            "trustedWorkspaces": [workspaces_dir, remotes_dir],
+            "trustedWorkspaces": [workspaces_dir, inbox_dir],
             "permissions": {
                 "allow": [
                     "read_file(*)",
@@ -178,7 +178,7 @@ class AgyEnvironmentBootstrapper:
                 "enabled": True,
                 "PreToolUse": [
                     {
-                        "matcher": "run_command|view_file|read_file|list_dir|write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content|schedule",
+                        "matcher": "run_command|read_file|write_file|edit_file|schedule",
                         "hooks": [
                             {
                                 "type": "command",
@@ -190,7 +190,7 @@ class AgyEnvironmentBootstrapper:
                 ],
                 "PostToolUse": [
                     {
-                        "matcher": "view_file|read_file|list_dir|write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content",
+                        "matcher": "read_file|write_file|edit_file",
                         "hooks": [
                             {
                                 "type": "command",
@@ -242,15 +242,15 @@ class AgyEnvironmentBootstrapper:
         content = (
             "---\n"
             "name: host-onboarding\n"
-            'description: "Onboard a new remote SSH host via register_remote_host, '
+            'description: "Onboard a new remote SSH host via mcp_telegram-core_register_remote_host, '
             'inspect its system profile, and update ~/.gemini/config/rules/infra-<alias>.md."\n'
             "---\n\n"
             "# Host Onboarding Procedure\n\n"
-            "1. Call `mcp:telegram-core:register_remote_host` with `alias`, `hostname_or_ip`, "
+            "1. Call `mcp_telegram-core_register_remote_host` with `alias`, `hostname_or_ip`, "
             "`ssh_user`, `ssh_port`, `remote_root_path`, and `jump_host` (if behind a gateway).\n"
             "2. Probe the server via `run_command`: "
             '`ssh <alias> "uname -a && free -h && df -hT && docker ps 2>/dev/null"`.\n'
-            f"3. Call `mcp:telegram-core:update_host_knowledge` to save architectural notes into `{rules_dir}/infra-<alias>.md`.\n"
+            f"3. Call `mcp_telegram-core_update_host_knowledge` to save architectural notes into `{rules_dir}/infra-<alias>.md`.\n"
         )
         skill_path.write_text(content, encoding="utf-8")
 

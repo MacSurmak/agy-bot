@@ -10,18 +10,11 @@ _WRITE_TOOLS: Final[frozenset[str]] = frozenset(
     {
         "write_file",
         "edit_file",
-        "write_to_file",
-        "replace_file_content",
-        "multi_replace_file_content",
     }
 )
-_ALL_FILE_TOOLS: frozenset[str] = frozenset(
+_ALL_FILE_TOOLS: Final[frozenset[str]] = frozenset(
     {
-        "view_file",
         "read_file",
-        "list_dir",
-        "find_by_name",
-        "grep_search",
         *_WRITE_TOOLS,
     }
 )
@@ -194,7 +187,7 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
             json.dumps(
                 {
                     "decision": "deny",
-                    "reason": "Use MCP tool 'schedule_task' or 'create_sensor' from server 'telegram-core'.",
+                    "reason": "Use native eager MCP tool 'mcp_telegram-core_schedule_task' or 'mcp_telegram-core_create_sensor'.",
                 }
             )
             + "\n"
@@ -218,7 +211,7 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
                         "decision": "deny",
                         "reason": (
                             "POLICY VIOLATION: In-place file editing via sed -i / awk -i / perl -pi in run_command is forbidden. "
-                            "Use native file tools (read_file, view_file, edit_file, replace_file_content, write_file) "
+                            "Use native file tools (read_file, edit_file, write_file) "
                             "on local scratchpad files or remote TRAMP paths (/ssh:user@<alias>:/abs/path)."
                         ),
                     }

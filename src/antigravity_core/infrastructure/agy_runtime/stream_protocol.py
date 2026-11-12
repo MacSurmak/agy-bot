@@ -201,33 +201,27 @@ def _parse_step_update_event(
                     tool_name = f"mcp:{short_mcp}"
                 elif tool_name == "call_mcp_tool" and "ToolName" in params:
                     mcp_tool = str(params["ToolName"]).strip()
-                    raw_args = params.get("Arguments")
-                    parsed_mcp_args: dict[str, Any] = {}
+                    raw_args = params["Arguments"] if "Arguments" in params else None
+                    parsed_mcp_args: dict[str, str | int | bool] = {}
                     if isinstance(raw_args, dict):
-                        parsed_mcp_args = raw_args
+                        parsed_mcp_args = {
+                            str(k): str(v) for k, v in raw_args.items() if v is not None
+                        }
                     elif isinstance(raw_args, str) and raw_args.strip().startswith("{"):
                         try:
                             loaded = json.loads(raw_args)
                             if isinstance(loaded, dict):
-                                parsed_mcp_args = loaded
+                                parsed_mcp_args = {
+                                    str(k): str(v)
+                                    for k, v in loaded.items()
+                                    if v is not None
+                                }
                         except json.JSONDecodeError as exc:
                             raise AgyProcessError(
                                 f"Malformed JSON in call_mcp_tool Arguments: {exc}"
                             ) from exc
 
-                    if mcp_tool == "ssh_exec":
-                        h_alias = str(parsed_mcp_args.get("host", "?"))
-                        h_cmd = (
-                            str(parsed_mcp_args.get("command", ""))
-                            .replace("\n", " ")
-                            .strip()
-                        )
-                        tool_name = f"ssh_exec [{h_alias}]"
-                        target_hint = h_cmd[:target_hint_max_chars]
-                        parameters_text = (
-                            f"CommandLine: {parsed_mcp_args.get('command', '')}"
-                        )
-                    elif mcp_tool:
+                    if mcp_tool:
                         tool_name = f"mcp:{mcp_tool}"
                         for m_key in (
                             "file_path",

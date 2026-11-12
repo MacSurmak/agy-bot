@@ -11,9 +11,8 @@
   "notifications": false,
   "historySize": -1,
   "trustedWorkspaces": [
-    "/srv/antigravity/workspaces",
-    "/srv/antigravity/inbox",
-    "/mnt/remotes"
+    "/srv/antigravity/app/runtime_data/workspaces",
+    "/srv/antigravity/app/runtime_data/inbox"
   ],
   "permissions": {
     "allow": [
