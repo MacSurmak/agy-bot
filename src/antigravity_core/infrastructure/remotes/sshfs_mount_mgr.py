@@ -146,26 +146,9 @@ class RemoteMountManager:
         os.chmod(ssh_wrapper, 0o755)
 
         bash_wrapper = bin_dir / "bash"
-        bash_script = (
-            "#!/bin/sh\n"
-            'if [ "${AGY_SANDBOX_ACTIVE:-0}" = "1" ]; then\n'
-            '    exec /usr/bin/bash "$@"\n'
-            "fi\n"
-            "export AGY_SANDBOX_ACTIVE=1\n"
-            "exec /usr/bin/unshare -m /bin/sh -c '\n"
-            f'    mount -t tmpfs -o size=1M tmpfs "{app_root}/src" 2>/dev/null || true\n'
-            f'    mount -t tmpfs -o size=1M tmpfs "{app_root}/migrations" 2>/dev/null || true\n'
-            f'    mount -t tmpfs -o size=1M tmpfs "{app_root}/runtime_data/logs" 2>/dev/null || true\n'
-            f'    mount -t tmpfs -o size=1M tmpfs "{app_root}/runtime_data/data" 2>/dev/null || true\n'
-            f'    mount -t tmpfs -o size=1M tmpfs "{app_root}/runtime_data/profiles" 2>/dev/null || true\n'
-            f'    mount -t tmpfs -o size=1M tmpfs "{brain_dir}" 2>/dev/null || true\n'
-            f'    mount --bind /dev/null "{app_root}/config.yaml" 2>/dev/null || true\n'
-            f'    mount --bind /dev/null "{app_root}/.env" 2>/dev/null || true\n'
-            '    exec /usr/bin/bash "$@"\n'
-            '\' /usr/bin/bash "$@"\n'
-        )
-        bash_wrapper.write_text(bash_script, encoding="utf-8")
-        os.chmod(bash_wrapper, 0o755)
+        if bash_wrapper.exists():
+            bash_wrapper.unlink()
+        _ = (app_root, brain_dir)
 
     def _ensure_main_ssh_config_include(self) -> None:
         ssh_dir = self._cfg.paths.ssh_config_dir
