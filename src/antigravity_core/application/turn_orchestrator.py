@@ -66,7 +66,9 @@ class TurnOrchestrator:
                 if alt is not None:
                     switched_from = account.slug
                     switched_to = alt.slug
-                    topic = await self._topic_repo.update_assigned_account(topic.topic_id, alt.id)
+                    topic = await self._topic_repo.update_assigned_account(
+                        topic.topic_id, alt.id
+                    )
                     account = alt
 
         try:
@@ -93,7 +95,9 @@ class TurnOrchestrator:
 
             switched_from = account.slug
             switched_to = alt_account.slug
-            topic = await self._topic_repo.update_assigned_account(topic.topic_id, alt_account.id)
+            topic = await self._topic_repo.update_assigned_account(
+                topic.topic_id, alt_account.id
+            )
             result = await self._run_single_attempt(
                 topic=topic,
                 account=alt_account,
@@ -170,7 +174,9 @@ class TurnOrchestrator:
 
         prev_tokens = 0
         if topic.active_conversation_id is not None:
-            existing_sess = await self._session_repo.get_session(topic.active_conversation_id)
+            existing_sess = await self._session_repo.get_session(
+                topic.active_conversation_id
+            )
             if existing_sess is not None:
                 prev_tokens = existing_sess.cumulative_tokens
 
@@ -209,7 +215,9 @@ class TurnOrchestrator:
                 initial_cumulative_tokens=prev_tokens,
             )
 
-        await self._topic_repo.set_active_conversation(topic.topic_id, result.conversation_id)
+        await self._topic_repo.set_active_conversation(
+            topic.topic_id, result.conversation_id
+        )
         await self._session_repo.ensure_session_initialized(
             conversation_id=result.conversation_id,
             topic_id=topic.topic_id,

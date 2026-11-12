@@ -93,13 +93,19 @@ class EventSensorService:
             try:
                 re.compile(match_pattern)
             except re.error as exc:
-                raise ConfigurationError(f"Invalid regex in match_pattern '{match_pattern}': {exc}") from exc
+                raise ConfigurationError(
+                    f"Invalid regex in match_pattern '{match_pattern}': {exc}"
+                ) from exc
 
         effective_poll = max(2, poll_interval_sec)
         effective_cooldown = max(5, cooldown_sec)
 
         sensor_id = uuid4()
-        clean_action = action_command.strip() if action_command and action_command.strip() else None
+        clean_action = (
+            action_command.strip()
+            if action_command and action_command.strip()
+            else None
+        )
         sensor = await self._sensor_repo.create_sensor(
             sensor_id=sensor_id,
             topic_id=topic_id,
@@ -134,7 +140,9 @@ class EventSensorService:
     async def cancel_sensor(self, sensor_id: UUID) -> EventSensor:
         await self._stop_sensor_runtime(sensor_id)
         canceled = await self._sensor_repo.cancel_sensor(sensor_id)
-        logger.info("Canceled event sensor", sensor_id=str(sensor_id), name=canceled.name)
+        logger.info(
+            "Canceled event sensor", sensor_id=str(sensor_id), name=canceled.name
+        )
         return canceled
 
     def _spawn_sensor_task(self, sensor: EventSensor) -> None:
@@ -211,21 +219,25 @@ class EventSensorService:
                 now_mono = loop.time()
                 if condition_matched:
                     # Fire immediately on rising edge (False -> True), or after cooldown_sec if condition stays continuously True
-                    cooldown_elapsed = (now_mono - last_fire_monotonic) >= float(sensor.cooldown_sec)
+                    cooldown_elapsed = (now_mono - last_fire_monotonic) >= float(
+                        sensor.cooldown_sec
+                    )
                     if (not was_condition_active) or cooldown_elapsed:
                         was_condition_active = True
                         last_fire_monotonic = now_mono
                         if sensor.one_shot:
                             await self._handle_sensor_trigger(
                                 sensor=sensor,
-                                captured_output=output or f"[Command exited with code {returncode}]",
+                                captured_output=output
+                                or f"[Command exited with code {returncode}]",
                             )
                             return
                         # Run wake-up handler in background task so poll loop keeps watching for state resets
                         asyncio.create_task(
                             self._handle_sensor_trigger(
                                 sensor=sensor,
-                                captured_output=output or f"[Command exited with code {returncode}]",
+                                captured_output=output
+                                or f"[Command exited with code {returncode}]",
                             )
                         )
                 else:
@@ -290,7 +302,9 @@ class EventSensorService:
                                         if not extra:
                                             break
                                         captured_lines.append(
-                                            extra.decode("utf-8", errors="replace").rstrip()
+                                            extra.decode(
+                                                "utf-8", errors="replace"
+                                            ).rstrip()
                                         )
 
                             await self._handle_sensor_trigger(

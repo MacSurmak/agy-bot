@@ -147,11 +147,15 @@ class TopicWorker:
             model=self._signature.model_slug,
             mode=self._signature.execution_mode.value,
             account=self._signature.account_slug,
-            conversation_id=str(self._conversation_id) if self._conversation_id else None,
+            conversation_id=(
+                str(self._conversation_id) if self._conversation_id else None
+            ),
         )
 
     def _build_command_args(self, settings: DynamicSettings) -> list[str]:
-        log_file = self._cfg.paths.log_file_path.parent / f"agy_topic_{self._topic_id}.log"
+        log_file = (
+            self._cfg.paths.log_file_path.parent / f"agy_topic_{self._topic_id}.log"
+        )
         cmd: list[str] = [
             str(self._cfg.paths.agy_binary_path),
             "--input-format",
@@ -203,7 +207,9 @@ class TopicWorker:
         except asyncio.CancelledError:
             raise
         except OSError as exc:
-            logger.debug("Worker stderr reader closed", topic_id=self._topic_id, error=str(exc))
+            logger.debug(
+                "Worker stderr reader closed", topic_id=self._topic_id, error=str(exc)
+            )
             return
 
     def get_stderr_summary(self) -> str:
@@ -240,7 +246,9 @@ class TopicWorker:
         tools_by_step: dict[int, ToolCallSummary] = {}
         active_subagents: dict[str, SubagentState] = {}
 
-        watchdog_sec = float(settings.turn_timeout_sec) + self._cfg.runtime.turn_watchdog_grace_sec
+        watchdog_sec = (
+            float(settings.turn_timeout_sec) + self._cfg.runtime.turn_watchdog_grace_sec
+        )
         try:
             async with asyncio.timeout(watchdog_sec):
                 while True:
@@ -283,8 +291,9 @@ class TopicWorker:
                     if isinstance(event, ParsedStepUpdateEvent):
                         self._conversation_id = event.conversation_id
                         if event.thinking_delta is not None:
-                            if accumulated_thinking and not accumulated_thinking.endswith(
-                                ("\n", " ")
+                            if (
+                                accumulated_thinking
+                                and not accumulated_thinking.endswith(("\n", " "))
                             ):
                                 accumulated_thinking += "\n"
                             accumulated_thinking += event.thinking_delta
@@ -298,10 +307,12 @@ class TopicWorker:
                                     or prev_tool.parameters_text
                                 )
                                 merged_output = (
-                                    event.tool_summary.output_text or prev_tool.output_text
+                                    event.tool_summary.output_text
+                                    or prev_tool.output_text
                                 )
                                 merged_hint = (
-                                    event.tool_summary.target_hint or prev_tool.target_hint
+                                    event.tool_summary.target_hint
+                                    or prev_tool.target_hint
                                 )
                                 tools_by_step[event.tool_summary.step_index] = replace(
                                     event.tool_summary,
@@ -310,7 +321,9 @@ class TopicWorker:
                                     output_text=merged_output,
                                 )
                             else:
-                                tools_by_step[event.tool_summary.step_index] = event.tool_summary
+                                tools_by_step[event.tool_summary.step_index] = (
+                                    event.tool_summary
+                                )
                             t_sum = tools_by_step[event.tool_summary.step_index]
                             logger.info(
                                 "Agent tool step",
@@ -353,21 +366,24 @@ class TopicWorker:
                         has_dangling_active_tool = any(
                             t.state == StepState.ACTIVE for t in tools_by_step.values()
                         )
-                        if event.status != TurnStatus.SUCCESS or has_dangling_active_tool:
+                        if (
+                            event.status != TurnStatus.SUCCESS
+                            or has_dangling_active_tool
+                        ):
                             # Recycle worker process if turn was interrupted or cut off mid-tool by timeout
                             await self.terminate_forcefully()
 
                         if event.status == TurnStatus.ERROR:
-                            combined_err = (
-                                f"{event.error_message or ''}\n{self.get_stderr_summary()}".strip()
-                            )
+                            combined_err = f"{event.error_message or ''}\n{self.get_stderr_summary()}".strip()
                             if _contains_quota_exhaustion(combined_err):
                                 raise QuotaExhaustedError(
                                     account_slug=self._signature.account_slug,
                                     model_slug=self._signature.model_slug,
                                     details=combined_err,
                                 )
-                        actual_turn_sec = max(0.01, time.monotonic() - turn_start_monotonic)
+                        actual_turn_sec = max(
+                            0.01, time.monotonic() - turn_start_monotonic
+                        )
                         logger.info(
                             "Completed agy turn",
                             topic_id=self._topic_id,
@@ -432,7 +448,9 @@ class TopicWorker:
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=grace)
                 except TimeoutError:
-                    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+                    with contextlib.suppress(
+                        ProcessLookupError, PermissionError, OSError
+                    ):
                         pgid = os.getpgid(proc.pid)
                         os.killpg(pgid, signal.SIGKILL)
                     with contextlib.suppress(OSError):

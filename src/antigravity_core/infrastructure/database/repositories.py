@@ -58,12 +58,16 @@ def _map_account(row: GoogleAccountRow) -> GoogleAccount:
         dbus_socket_path=row.dbus_socket_path,
         encrypted_keyring_pass=bytes(row.encrypted_keyring_pass),
         encrypted_token_backup=(
-            bytes(row.encrypted_token_backup) if row.encrypted_token_backup is not None else None
+            bytes(row.encrypted_token_backup)
+            if row.encrypted_token_backup is not None
+            else None
         ),
         is_enabled=row.is_enabled,
         is_default=row.is_default,
         priority=row.priority,
-        last_quota_json=dict(row.last_quota_json) if row.last_quota_json is not None else None,
+        last_quota_json=(
+            dict(row.last_quota_json) if row.last_quota_json is not None else None
+        ),
         last_quota_check_at=row.last_quota_check_at,
     )
 
@@ -105,7 +109,9 @@ def _map_topic(row: ForumTopicRow) -> ForumTopic:
         workspace_path=row.workspace_path,
         additional_dirs=tuple(str(item) for item in row.additional_dirs_json),
         model_slug=row.model_slug,
-        effort_level=EffortLevel(row.effort_level) if row.effort_level is not None else None,
+        effort_level=(
+            EffortLevel(row.effort_level) if row.effort_level is not None else None
+        ),
         execution_mode=ExecutionMode(row.execution_mode),
         assigned_account_id=row.assigned_account_id,
         active_conversation_id=row.active_conversation_id,
@@ -190,11 +196,16 @@ class SettingsRepository:
                 await session.flush()
                 raw_map["ui_language"] = "ru"
 
-            allowed_keys = {*MANDATORY_SYSTEM_SETTING_KEYS, DASHBOARD_MSG_ID_SETTING_KEY}
+            allowed_keys = {
+                *MANDATORY_SYSTEM_SETTING_KEYS,
+                DASHBOARD_MSG_ID_SETTING_KEY,
+            }
             obsolete_keys = [k for k in raw_map if k not in allowed_keys]
             if obsolete_keys:
                 await session.execute(
-                    delete(SystemSettingRow).where(SystemSettingRow.key.in_(obsolete_keys))
+                    delete(SystemSettingRow).where(
+                        SystemSettingRow.key.in_(obsolete_keys)
+                    )
                 )
                 await session.flush()
 
@@ -244,7 +255,9 @@ class SettingsRepository:
         async with self._db.session() as session:
             row = await session.get(SystemSettingRow, key)
             if row is None:
-                raise DatabaseIntegrityError(f"System setting key '{key}' does not exist.")
+                raise DatabaseIntegrityError(
+                    f"System setting key '{key}' does not exist."
+                )
             row.value_json = new_value
             row.updated_at = datetime.now(tz=UTC)
             await session.flush()
@@ -281,7 +294,9 @@ class AccountRepository:
         async with self._db.session() as session:
             row = await session.get(GoogleAccountRow, account_id)
             if row is None:
-                raise DatabaseIntegrityError(f"GoogleAccount id={account_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"GoogleAccount id={account_id} does not exist."
+                )
             return _map_account(row)
 
     async def get_by_slug(self, slug: str) -> GoogleAccount | None:
@@ -343,7 +358,9 @@ class AccountRepository:
             stmt = select(GoogleAccountRow).where(GoogleAccountRow.id == account_id)
             target = (await session.scalars(stmt)).first()
             if target is None:
-                raise DatabaseIntegrityError(f"GoogleAccount id={account_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"GoogleAccount id={account_id} does not exist."
+                )
             await session.execute(update(GoogleAccountRow).values(is_default=False))
             target.is_default = True
             target.is_enabled = True
@@ -379,10 +396,14 @@ class AccountRepository:
                     fallback.is_default = True
             else:
                 await session.execute(
-                    delete(TopicSessionRow).where(TopicSessionRow.account_id == account_id)
+                    delete(TopicSessionRow).where(
+                        TopicSessionRow.account_id == account_id
+                    )
                 )
                 await session.execute(
-                    delete(ForumTopicRow).where(ForumTopicRow.assigned_account_id == account_id)
+                    delete(ForumTopicRow).where(
+                        ForumTopicRow.assigned_account_id == account_id
+                    )
                 )
 
             await session.execute(
@@ -390,22 +411,30 @@ class AccountRepository:
             )
             await session.flush()
 
-    async def update_email_label(self, account_id: int, email_label: str) -> GoogleAccount:
+    async def update_email_label(
+        self, account_id: int, email_label: str
+    ) -> GoogleAccount:
         async with self._db.session() as session:
             stmt = select(GoogleAccountRow).where(GoogleAccountRow.id == account_id)
             row = (await session.scalars(stmt)).first()
             if row is None:
-                raise DatabaseIntegrityError(f"GoogleAccount id={account_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"GoogleAccount id={account_id} does not exist."
+                )
             row.email_label = email_label.strip()
             await session.flush()
             return _map_account(row)
 
-    async def update_token_backup(self, account_id: int, encrypted_token: bytes) -> GoogleAccount:
+    async def update_token_backup(
+        self, account_id: int, encrypted_token: bytes
+    ) -> GoogleAccount:
         async with self._db.session() as session:
             stmt = select(GoogleAccountRow).where(GoogleAccountRow.id == account_id)
             row = (await session.scalars(stmt)).first()
             if row is None:
-                raise DatabaseIntegrityError(f"GoogleAccount id={account_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"GoogleAccount id={account_id} does not exist."
+                )
             row.encrypted_token_backup = encrypted_token
             await session.flush()
             return _map_account(row)
@@ -416,7 +445,9 @@ class AccountRepository:
         async with self._db.session() as session:
             row = await session.get(GoogleAccountRow, account_id)
             if row is None:
-                raise DatabaseIntegrityError(f"GoogleAccount id={account_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"GoogleAccount id={account_id} does not exist."
+                )
             row.last_quota_json = quota_json
             row.last_quota_check_at = datetime.now(tz=UTC)
             await session.flush()
@@ -503,7 +534,9 @@ class SshCredentialRepository:
 
     async def list_credentials(self) -> list[SshCredential]:
         async with self._db.session() as session:
-            stmt = select(SshCredentialRow).order_by(SshCredentialRow.credential_key.asc())
+            stmt = select(SshCredentialRow).order_by(
+                SshCredentialRow.credential_key.asc()
+            )
             rows = (await session.scalars(stmt)).all()
             return [_map_ssh_credential(r) for r in rows]
 
@@ -585,7 +618,9 @@ class TopicRepository:
     async def get_topic_strict(self, topic_id: int) -> ForumTopic:
         topic = await self.get_topic(topic_id)
         if topic is None:
-            raise DatabaseIntegrityError(f"ForumTopic topic_id={topic_id} is not registered.")
+            raise DatabaseIntegrityError(
+                f"ForumTopic topic_id={topic_id} is not registered."
+            )
         return topic
 
     async def list_active_topics(self) -> list[ForumTopic]:
@@ -639,7 +674,9 @@ class TopicRepository:
             stmt = select(ForumTopicRow).where(ForumTopicRow.topic_id == topic_id)
             row = (await session.scalars(stmt)).first()
             if row is None:
-                raise DatabaseIntegrityError(f"ForumTopic topic_id={topic_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"ForumTopic topic_id={topic_id} does not exist."
+                )
             row.sudo_carte_blanche = enabled
             row.updated_at = datetime.now(tz=UTC)
             await session.flush()
@@ -651,7 +688,9 @@ class TopicRepository:
         async with self._db.session() as session:
             row = await session.get(ForumTopicRow, topic_id)
             if row is None:
-                raise DatabaseIntegrityError(f"ForumTopic topic_id={topic_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"ForumTopic topic_id={topic_id} does not exist."
+                )
             row.active_conversation_id = conversation_id
             row.updated_at = datetime.now(tz=UTC)
             await session.flush()
@@ -661,17 +700,23 @@ class TopicRepository:
         async with self._db.session() as session:
             row = await session.get(ForumTopicRow, topic_id)
             if row is None:
-                raise DatabaseIntegrityError(f"ForumTopic topic_id={topic_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"ForumTopic topic_id={topic_id} does not exist."
+                )
             row.pinned_card_msg_id = msg_id
             row.updated_at = datetime.now(tz=UTC)
             await session.flush()
             return _map_topic(row)
 
-    async def update_execution_mode(self, topic_id: int, mode: ExecutionMode) -> ForumTopic:
+    async def update_execution_mode(
+        self, topic_id: int, mode: ExecutionMode
+    ) -> ForumTopic:
         async with self._db.session() as session:
             row = await session.get(ForumTopicRow, topic_id)
             if row is None:
-                raise DatabaseIntegrityError(f"ForumTopic topic_id={topic_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"ForumTopic topic_id={topic_id} does not exist."
+                )
             row.execution_mode = mode.value
             row.updated_at = datetime.now(tz=UTC)
             await session.flush()
@@ -683,28 +728,38 @@ class TopicRepository:
         async with self._db.session() as session:
             row = await session.get(ForumTopicRow, topic_id)
             if row is None:
-                raise DatabaseIntegrityError(f"ForumTopic topic_id={topic_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"ForumTopic topic_id={topic_id} does not exist."
+                )
             row.model_slug = model_slug
             row.effort_level = effort_level.value if effort_level is not None else None
             row.updated_at = datetime.now(tz=UTC)
             await session.flush()
             return _map_topic(row)
 
-    async def update_assigned_account(self, topic_id: int, account_id: int) -> ForumTopic:
+    async def update_assigned_account(
+        self, topic_id: int, account_id: int
+    ) -> ForumTopic:
         async with self._db.session() as session:
             row = await session.get(ForumTopicRow, topic_id)
             if row is None:
-                raise DatabaseIntegrityError(f"ForumTopic topic_id={topic_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"ForumTopic topic_id={topic_id} does not exist."
+                )
             row.assigned_account_id = account_id
             row.updated_at = datetime.now(tz=UTC)
             await session.flush()
             return _map_topic(row)
 
-    async def update_workspace_path(self, topic_id: int, workspace_path: str) -> ForumTopic:
+    async def update_workspace_path(
+        self, topic_id: int, workspace_path: str
+    ) -> ForumTopic:
         async with self._db.session() as session:
             row = await session.get(ForumTopicRow, topic_id)
             if row is None:
-                raise DatabaseIntegrityError(f"ForumTopic topic_id={topic_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"ForumTopic topic_id={topic_id} does not exist."
+                )
             row.workspace_path = workspace_path
             row.updated_at = datetime.now(tz=UTC)
             await session.flush()
@@ -714,7 +769,9 @@ class TopicRepository:
         async with self._db.session() as session:
             row = await session.get(ForumTopicRow, topic_id)
             if row is None:
-                raise DatabaseIntegrityError(f"ForumTopic topic_id={topic_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"ForumTopic topic_id={topic_id} does not exist."
+                )
             row.title = new_title
             row.updated_at = datetime.now(tz=UTC)
             await session.flush()
@@ -724,7 +781,9 @@ class TopicRepository:
         async with self._db.session() as session:
             row = await session.get(ForumTopicRow, topic_id)
             if row is None:
-                raise DatabaseIntegrityError(f"ForumTopic topic_id={topic_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"ForumTopic topic_id={topic_id} does not exist."
+                )
             row.status = TopicStatus.ARCHIVED.value
             row.title = archived_title
             row.updated_at = datetime.now(tz=UTC)
@@ -741,7 +800,9 @@ class SessionRepository:
             row = await session.get(TopicSessionRow, conversation_id)
             return _map_session(row) if row is not None else None
 
-    async def list_topic_sessions(self, topic_id: int, limit: int) -> list[TopicSession]:
+    async def list_topic_sessions(
+        self, topic_id: int, limit: int
+    ) -> list[TopicSession]:
         async with self._db.session() as session:
             stmt = (
                 select(TopicSessionRow)
@@ -851,11 +912,15 @@ class ScheduleRepository:
             rows = (await session.scalars(stmt)).all()
             return [_map_scheduled_task(r) for r in rows]
 
-    async def mark_task_executed(self, task_id: UUID, deactivate: bool) -> ScheduledTask:
+    async def mark_task_executed(
+        self, task_id: UUID, deactivate: bool
+    ) -> ScheduledTask:
         async with self._db.session() as session:
             row = await session.get(ScheduledTaskRow, task_id)
             if row is None:
-                raise DatabaseIntegrityError(f"ScheduledTask id={task_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"ScheduledTask id={task_id} does not exist."
+                )
             row.last_run_at = datetime.now(tz=UTC)
             if deactivate:
                 row.is_active = False
@@ -866,7 +931,9 @@ class ScheduleRepository:
         async with self._db.session() as session:
             row = await session.get(ScheduledTaskRow, task_id)
             if row is None:
-                raise DatabaseIntegrityError(f"ScheduledTask id={task_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"ScheduledTask id={task_id} does not exist."
+                )
             row.is_active = False
             await session.flush()
             return _map_scheduled_task(row)
@@ -1051,11 +1118,15 @@ class SensorRepository:
             rows = (await session.scalars(stmt)).all()
             return [_map_event_sensor(r) for r in rows]
 
-    async def mark_sensor_triggered(self, sensor_id: UUID, deactivate: bool) -> EventSensor:
+    async def mark_sensor_triggered(
+        self, sensor_id: UUID, deactivate: bool
+    ) -> EventSensor:
         async with self._db.session() as session:
             row = await session.get(EventSensorRow, sensor_id)
             if row is None:
-                raise DatabaseIntegrityError(f"EventSensor id={sensor_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"EventSensor id={sensor_id} does not exist."
+                )
             row.triggers_count += 1
             row.last_triggered_at = datetime.now(tz=UTC)
             if deactivate:
@@ -1067,7 +1138,9 @@ class SensorRepository:
         async with self._db.session() as session:
             row = await session.get(EventSensorRow, sensor_id)
             if row is None:
-                raise DatabaseIntegrityError(f"EventSensor id={sensor_id} does not exist.")
+                raise DatabaseIntegrityError(
+                    f"EventSensor id={sensor_id} does not exist."
+                )
             row.is_active = False
             await session.flush()
             return _map_event_sensor(row)

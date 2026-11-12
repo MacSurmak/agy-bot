@@ -164,7 +164,9 @@ def _resolve_database_config(
     )
 
     if pg_user and pg_pass and pg_db:
-        dsn = f"postgresql+asyncpg://{pg_user}:{pg_pass}@{pg_host}:{pg_port_raw}/{pg_db}"
+        dsn = (
+            f"postgresql+asyncpg://{pg_user}:{pg_pass}@{pg_host}:{pg_port_raw}/{pg_db}"
+        )
         sync_dsn = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port_raw}/{pg_db}"
         return DatabaseStaticConfig(
             dsn=dsn,
@@ -178,7 +180,9 @@ def _resolve_database_config(
     db_sec = parsed_yaml.get("database")
     if isinstance(db_sec, dict) and db_sec.get("dsn"):
         raw_dsn = str(db_sec["dsn"]).strip()
-        raw_sync = str(db_sec.get("sync_dsn") or raw_dsn.replace("+asyncpg", "")).strip()
+        raw_sync = str(
+            db_sec.get("sync_dsn") or raw_dsn.replace("+asyncpg", "")
+        ).strip()
         return DatabaseStaticConfig(
             dsn=raw_dsn,
             sync_dsn=raw_sync,
@@ -274,7 +278,9 @@ def load_static_config(config_path: Path | None = None) -> StaticConfig:
     project_root = resolved_cfg_path.parent
     paths_cfg = _resolve_paths_config(project_root)
     db_cfg = _resolve_database_config(project_root, parsed_yaml)
-    session_file = (project_root / "runtime_data" / "data" / "telethon_bot.session").resolve()
+    session_file = (
+        project_root / "runtime_data" / "data" / "telethon_bot.session"
+    ).resolve()
 
     tg_cfg = TelegramStaticConfig(
         api_id=minimal.telegram.api_id,

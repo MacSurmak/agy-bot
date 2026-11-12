@@ -71,7 +71,9 @@ class CoreIpcServer:
             path=str(sock_path),
         )
         os.chmod(sock_path, 0o600)
-        logger.info("Started local UNIX IPC server for MCP stdio_proxy", socket=str(sock_path))
+        logger.info(
+            "Started local UNIX IPC server for MCP stdio_proxy", socket=str(sock_path)
+        )
 
     async def stop(self) -> None:
         if self._server is not None:
@@ -110,7 +112,9 @@ class CoreIpcServer:
                 topic_id=topic_id,
                 account_slug=account_slug,
             )
-            result = await self._dispatch(method=method, topic_id=topic_id, params=params)
+            result = await self._dispatch(
+                method=method, topic_id=topic_id, params=params
+            )
             response = {"ok": True, "result": result}
         except Exception as exc:
             logger.error("IPC tool execution failed", error=str(exc))
@@ -326,7 +330,9 @@ class CoreIpcServer:
                         "trigger_spec": t.trigger_spec,
                         "instruction_prompt": t.instruction_prompt,
                         "notify_policy": t.notify_policy.value,
-                        "last_run_at": t.last_run_at.isoformat() if t.last_run_at else None,
+                        "last_run_at": (
+                            t.last_run_at.isoformat() if t.last_run_at else None
+                        ),
                     }
                     for t in tasks
                 ],
@@ -349,12 +355,18 @@ class CoreIpcServer:
                 else SensorKind.POLL_COMMAND
             )
 
-            raw_cond = str(params.get("trigger_condition", "ON_EXIT_ZERO")).strip().upper()
+            raw_cond = (
+                str(params.get("trigger_condition", "ON_EXIT_ZERO")).strip().upper()
+            )
             if "NONZERO" in raw_cond or "FAIL" in raw_cond or "ERROR" in raw_cond:
                 t_cond = SensorTriggerCondition.ON_EXIT_NONZERO
             elif "CHANGE" in raw_cond or "DIFF" in raw_cond:
                 t_cond = SensorTriggerCondition.ON_OUTPUT_CHANGE
-            elif "REGEX" in raw_cond or "MATCH" in raw_cond or s_kind == SensorKind.STREAM_WATCH:
+            elif (
+                "REGEX" in raw_cond
+                or "MATCH" in raw_cond
+                or s_kind == SensorKind.STREAM_WATCH
+            ):
                 t_cond = SensorTriggerCondition.ON_REGEX_MATCH
             else:
                 t_cond = SensorTriggerCondition.ON_EXIT_ZERO
@@ -419,7 +431,9 @@ class CoreIpcServer:
                         "one_shot": s.one_shot,
                         "triggers_count": s.triggers_count,
                         "last_triggered_at": (
-                            s.last_triggered_at.isoformat() if s.last_triggered_at else None
+                            s.last_triggered_at.isoformat()
+                            if s.last_triggered_at
+                            else None
                         ),
                     }
                     for s in sensors
@@ -429,7 +443,11 @@ class CoreIpcServer:
         if method == "cancel_sensor":
             sensor_uuid = UUID(str(params["sensor_id"]))
             canceled_s = await self._sensors.cancel_sensor(sensor_uuid)
-            return {"sensor_id": str(canceled_s.id), "name": canceled_s.name, "status": "canceled"}
+            return {
+                "sensor_id": str(canceled_s.id),
+                "name": canceled_s.name,
+                "status": "canceled",
+            }
 
         if method == "get_bot_ssh_public_key":
             pub_key = await self._mount_mgr.ensure_local_ssh_keypair()
@@ -459,7 +477,10 @@ class CoreIpcServer:
             local_mount = f"{ssh_user}@{alias}:{remote_root_path}"
             rule_file = str(
                 (
-                    self._cfg.paths.agy_home_dir / "config" / "rules" / f"infra-{alias}.md"
+                    self._cfg.paths.agy_home_dir
+                    / "config"
+                    / "rules"
+                    / f"infra-{alias}.md"
                 ).resolve()
             )
             host = await self._host_repo.upsert_host(
@@ -492,7 +513,9 @@ class CoreIpcServer:
 
         if method == "create_workspace_topic":
             title = str(params["title"]).strip()
-            mode = ExecutionMode(str(params.get("execution_mode", "FULL_ACCESS")).upper())
+            mode = ExecutionMode(
+                str(params.get("execution_mode", "FULL_ACCESS")).upper()
+            )
             placeholder_dir = str(self._cfg.paths.workspaces_root_dir / "pending_topic")
             created = await self._topic_lifecycle.create_forum_topic_with_card(
                 title=title,

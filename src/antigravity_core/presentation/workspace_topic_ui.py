@@ -227,7 +227,9 @@ class WorkspaceTopicUI:
                 notify=False,
             )
         except RPCError as exc:
-            logger.warning("Could not pin topic card message", topic_id=topic_id, error=str(exc))
+            logger.warning(
+                "Could not pin topic card message", topic_id=topic_id, error=str(exc)
+            )
 
     async def handle_slash_command(self, topic_id: int, raw_text: str) -> bool:
         settings = await self._settings_repo.load_settings()
@@ -279,7 +281,9 @@ class WorkspaceTopicUI:
                     body = f"{hdr_q}\n" + "\n".join(q_lines)
                 else:
                     min_p = q_info.get("min_remaining_pct", "?")
-                    body = f"{hdr_q}\n" + lex.ws_quota_fallback_body.format(min_pct=min_p)
+                    body = f"{hdr_q}\n" + lex.ws_quota_fallback_body.format(
+                        min_pct=min_p
+                    )
                 await wait_msg.edit(body)
             except Exception as exc:
                 max_err = self._cfg.limits.error_summary_max_chars
@@ -316,7 +320,9 @@ class WorkspaceTopicUI:
                     )
                     return True
 
-                await self._lifecycle.change_model(topic_id, new_slug, topic.effort_level)
+                await self._lifecycle.change_model(
+                    topic_id, new_slug, topic.effort_level
+                )
                 await self.refresh_pinned_card(topic_id)
                 await self._client.send_message(
                     entity=self._cfg.telegram.forum_chat_id,
@@ -506,7 +512,10 @@ class WorkspaceTopicUI:
                 account_slug=account.slug,
             )
             is_new_page_spillover = len(pages) > len(trace_msgs)
-            if not is_new_page_spillover and (now - last_edit_ts) < settings.tg_edit_throttle_sec:
+            if (
+                not is_new_page_spillover
+                and (now - last_edit_ts) < settings.tg_edit_throttle_sec
+            ):
                 return
             last_edit_ts = now
             # Fire-and-forget UI sync so Telegram FloodWaits never block agy stdout reading
@@ -528,11 +537,16 @@ class WorkspaceTopicUI:
                     lex.ws_turn_error_msg.format(error=err_short), buttons=None
                 )
             except RPCError as edit_exc:
-                logger.warning("Failed to update status message with turn error", error=str(edit_exc))
+                logger.warning(
+                    "Failed to update status message with turn error",
+                    error=str(edit_exc),
+                )
             return
 
         updated_topic = await self._topic_repo.get_topic_strict(topic_id)
-        updated_account = await self._account_repo.get_by_id(updated_topic.assigned_account_id)
+        updated_account = await self._account_repo.get_by_id(
+            updated_topic.assigned_account_id
+        )
         upd_acc_display = (
             updated_account.email_label
             if "@" in updated_account.email_label
@@ -589,7 +603,11 @@ class WorkspaceTopicUI:
                     formatting_entities=chunk_entities,
                     reply_to=reply_to_msg_id if is_first else topic_id,
                     silent=not is_first,
-                    buttons=build_turn_response_keyboard(lex, updated_topic) if is_last else None,
+                    buttons=(
+                        build_turn_response_keyboard(lex, updated_topic)
+                        if is_last
+                        else None
+                    ),
                 )
         except Exception as exc:
             logger.error(
@@ -607,7 +625,9 @@ class WorkspaceTopicUI:
                     reply_to=topic_id,
                 )
 
-        await self._auto_sync_topic_title_if_generic(updated_topic, result.conversation_id)
+        await self._auto_sync_topic_title_if_generic(
+            updated_topic, result.conversation_id
+        )
         await self.refresh_pinned_card(topic_id)
 
     async def _auto_sync_topic_title_if_generic(
@@ -619,7 +639,11 @@ class WorkspaceTopicUI:
             summary = self._history_reader.get_conversation_summary(conversation_id)
         except AgyProcessError:
             return
-        if summary is not None and summary.title.strip() and summary.title != "Untitled Session":
+        if (
+            summary is not None
+            and summary.title.strip()
+            and summary.title != "Untitled Session"
+        ):
             new_title = summary.title.strip()
             try:
                 await self._lifecycle.rename_topic(topic.topic_id, new_title)
@@ -629,7 +653,11 @@ class WorkspaceTopicUI:
                     new_title=new_title,
                 )
             except RPCError as exc:
-                logger.debug("Could not auto-rename forum topic", topic_id=topic.topic_id, error=str(exc))
+                logger.debug(
+                    "Could not auto-rename forum topic",
+                    topic_id=topic.topic_id,
+                    error=str(exc),
+                )
 
     async def _run_interactive_wake_turn(
         self,
@@ -736,7 +764,10 @@ class WorkspaceTopicUI:
                 account_slug=account.slug,
             )
             is_new_page_spillover = len(pages) > len(trace_msgs)
-            if not is_new_page_spillover and (now - last_edit_ts) < settings.tg_edit_throttle_sec:
+            if (
+                not is_new_page_spillover
+                and (now - last_edit_ts) < settings.tg_edit_throttle_sec
+            ):
                 return
             last_edit_ts = now
             asyncio.create_task(_bg_sync_pages(pages))
@@ -759,7 +790,9 @@ class WorkspaceTopicUI:
 
         cleaned_resp = result.response_text.strip()
         updated_topic = await self._topic_repo.get_topic_strict(topic_id)
-        updated_account = await self._account_repo.get_by_id(updated_topic.assigned_account_id)
+        updated_account = await self._account_repo.get_by_id(
+            updated_topic.assigned_account_id
+        )
 
         final_pages = build_final_execution_trace_pages(
             lex=lex,
@@ -805,7 +838,11 @@ class WorkspaceTopicUI:
                 message=chunk_text,
                 formatting_entities=chunk_entities,
                 reply_to=topic_id,
-                buttons=build_turn_response_keyboard(lex, updated_topic) if is_last else None,
+                buttons=(
+                    build_turn_response_keyboard(lex, updated_topic)
+                    if is_last
+                    else None
+                ),
             )
         await self.refresh_pinned_card(topic_id)
 
@@ -865,7 +902,9 @@ class WorkspaceTopicUI:
             )
         await self.refresh_pinned_card(topic_id)
 
-    async def handle_callback(self, event: events.CallbackQuery.Event, data_str: str) -> None:
+    async def handle_callback(
+        self, event: events.CallbackQuery.Event, data_str: str
+    ) -> None:
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
 

@@ -6,7 +6,9 @@ import structlog
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import EffortLevel, ExecutionMode, TopicKind
 from antigravity_core.domain.models import ForumTopic, ForumTopicGateway
-from antigravity_core.infrastructure.agy_runtime.worker import is_effort_supported_for_model
+from antigravity_core.infrastructure.agy_runtime.worker import (
+    is_effort_supported_for_model,
+)
 from antigravity_core.infrastructure.agy_runtime.worker_pool import AgyWorkerPool
 from antigravity_core.infrastructure.database.repositories import (
     AccountRepository,
@@ -52,7 +54,11 @@ class TopicLifecycleService:
 
         topic_id = await self._forum_gateway.create_forum_topic(title=title)
 
-        effective_mode = execution_mode if execution_mode is not None else settings.default_execution_mode
+        effective_mode = (
+            execution_mode
+            if execution_mode is not None
+            else settings.default_execution_mode
+        )
         effective_effort = (
             settings.default_effort
             if is_effort_supported_for_model(
@@ -82,7 +88,9 @@ class TopicLifecycleService:
         await self._pool.evict_topic_worker(topic_id)
         return await self._topic_repo.set_active_conversation(topic_id, None)
 
-    async def resume_past_session(self, topic_id: int, conversation_id: UUID) -> ForumTopic:
+    async def resume_past_session(
+        self, topic_id: int, conversation_id: UUID
+    ) -> ForumTopic:
         await self._pool.evict_topic_worker(topic_id)
         return await self._topic_repo.set_active_conversation(topic_id, conversation_id)
 
@@ -135,8 +143,12 @@ class TopicLifecycleService:
         clean_title = new_title.strip()[:max_len]
         if not clean_title:
             return await self._topic_repo.get_topic_strict(topic_id)
-        await self._forum_gateway.rename_forum_topic(topic_id=topic_id, new_title=clean_title)
-        return await self._topic_repo.update_topic_title(topic_id=topic_id, new_title=clean_title)
+        await self._forum_gateway.rename_forum_topic(
+            topic_id=topic_id, new_title=clean_title
+        )
+        return await self._topic_repo.update_topic_title(
+            topic_id=topic_id, new_title=clean_title
+        )
 
     async def archive_topic(self, topic_id: int) -> ForumTopic:
         topic = await self._topic_repo.get_topic_strict(topic_id)

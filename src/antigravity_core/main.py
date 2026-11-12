@@ -35,7 +35,9 @@ from antigravity_core.infrastructure.database.repositories import (
     SshCredentialRepository,
     TopicRepository,
 )
-from antigravity_core.infrastructure.keyring.dbus_profile_mgr import KeyringProfileManager
+from antigravity_core.infrastructure.keyring.dbus_profile_mgr import (
+    KeyringProfileManager,
+)
 from antigravity_core.infrastructure.media.mtproto_media import (
     MediaService,
     TelethonForumGateway,

@@ -205,7 +205,7 @@ EN_LEXICON = UiLexicon(
     cp_settings_menu_item="• **{description}:** `{value_json}`",
     cp_edit_setting_prompt=(
         "✏️ **Update Setting `{key}`**\n"
-        "Reply with the new JSON value (e.g. `\"ru\"`, `\"en\"`, `\"gemini-4-argon-high\"`, `900`, `1.8`)."
+        'Reply with the new JSON value (e.g. `"ru"`, `"en"`, `"gemini-4-argon-high"`, `900`, `1.8`).'
     ),
     cp_invite_generated_msg=(
         "🎟 **Single-Use Member Invite Generated (valid 24h):**\n"

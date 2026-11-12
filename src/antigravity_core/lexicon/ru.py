@@ -212,7 +212,7 @@ RU_LEXICON = UiLexicon(
     cp_settings_menu_item="• **{description}:** `{value_json}`",
     cp_edit_setting_prompt=(
         "✏️ **Изменение параметра `{key}`**\n"
-        "Отправьте новое значение (например: `\"ru\"`, `\"en\"`, `\"gemini-4-argon-high\"`, `900`, `1.8`)."
+        'Отправьте новое значение (например: `"ru"`, `"en"`, `"gemini-4-argon-high"`, `900`, `1.8`).'
     ),
     cp_invite_generated_msg=(
         "🎟 **Одноразовый инвайт-токен создан (действует 24 часа):**\n"

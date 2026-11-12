@@ -156,15 +156,21 @@ _SUBSCRIPT_MAP: dict[str, str] = {
 }
 
 _BB_MAP: dict[str, str] = {
-    "R": "ℝ", "N": "ℕ", "Z": "ℤ", "Q": "ℚ", "C": "ℂ", "P": "ℙ", "E": "𝔼"
+    "R": "ℝ",
+    "N": "ℕ",
+    "Z": "ℤ",
+    "Q": "ℚ",
+    "C": "ℂ",
+    "P": "ℙ",
+    "E": "𝔼",
 }
-_CAL_MAP: dict[str, str] = {
-    "O": "𝒪", "L": "ℒ", "H": "ℋ", "F": "ℱ", "D": "𝒟", "N": "𝒩"
-}
+_CAL_MAP: dict[str, str] = {"O": "𝒪", "L": "ℒ", "H": "ℋ", "F": "ℱ", "D": "𝒟", "N": "𝒩"}
 
 _LATEX_BB_RE = re.compile(r"\\mathbb\{([A-Za-z])\}")
 _LATEX_CAL_RE = re.compile(r"\\mathcal\{([A-Za-z])\}")
-_LATEX_TEXT_MACRO_RE = re.compile(r"\\(?:text|mathrm|mathbf|mathit|mathsf|texttt)\{([^{}]*)\}")
+_LATEX_TEXT_MACRO_RE = re.compile(
+    r"\\(?:text|mathrm|mathbf|mathit|mathsf|texttt)\{([^{}]*)\}"
+)
 _LATEX_FRAC_RE = re.compile(r"\\frac\{([^{}]+)\}\{([^{}]+)\}")
 _LATEX_SUPER_BRACE_RE = re.compile(r"\^\{([0-9+\-=()ni]+)\}")
 _LATEX_SUPER_SINGLE_RE = re.compile(r"\^([0-9ni])")
@@ -226,7 +232,11 @@ def normalize_latex_outside_code(line: str) -> str:
 def make_wide_single_line_bar(text: str) -> str:
     """Formats a single-line status/header bar padded with invisible non-breaking spaces (zero dashes!)."""
     clean = text.replace("**", "").replace("`", "").strip()
-    parts = [ln.strip() for ln in clean.splitlines() if ln.strip() and not ln.strip().startswith("─")]
+    parts = [
+        ln.strip()
+        for ln in clean.splitlines()
+        if ln.strip() and not ln.strip().startswith("─")
+    ]
     single_line = "  │  ".join(parts) if parts else ""
     if len(single_line) >= WIDE_BAR_TARGET_COLS:
         return single_line

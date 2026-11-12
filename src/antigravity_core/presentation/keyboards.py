@@ -13,7 +13,6 @@ from antigravity_core.domain.models import (
 )
 from antigravity_core.lexicon.schema import UiLexicon
 
-
 _ACCOUNTS_PAGE_SIZE: int = 5
 
 
@@ -250,7 +249,9 @@ def build_new_topic_folder_confirm_keyboard(
     ]
 
 
-def build_topic_header_keyboard(lex: UiLexicon, topic: ForumTopic) -> list[list[Button]]:
+def build_topic_header_keyboard(
+    lex: UiLexicon, topic: ForumTopic
+) -> list[list[Button]]:
     tid = topic.topic_id
     mode_label = (
         lex.btn_ws_mode_full_to_plan
@@ -265,7 +266,9 @@ def build_topic_header_keyboard(lex: UiLexicon, topic: ForumTopic) -> list[list[
     return [
         [
             Button.inline(lex.btn_ws_new_session, f"ws:new:{tid}".encode("ascii")),
-            Button.inline(lex.btn_ws_past_sessions, f"ws:history:{tid}".encode("ascii")),
+            Button.inline(
+                lex.btn_ws_past_sessions, f"ws:history:{tid}".encode("ascii")
+            ),
         ],
         [
             Button.inline(mode_label, f"ws:toggle_mode:{tid}".encode("ascii")),
@@ -275,10 +278,14 @@ def build_topic_header_keyboard(lex: UiLexicon, topic: ForumTopic) -> list[list[
         ],
         [
             Button.inline(lex.btn_ws_models, f"ws:models:{tid}".encode("ascii")),
-            Button.inline(lex.btn_ws_switch_account, f"ws:accounts:{tid}".encode("ascii")),
+            Button.inline(
+                lex.btn_ws_switch_account, f"ws:accounts:{tid}".encode("ascii")
+            ),
         ],
         [
-            Button.inline(lex.btn_ws_archive_topic, f"ws:archive:{tid}".encode("ascii")),
+            Button.inline(
+                lex.btn_ws_archive_topic, f"ws:archive:{tid}".encode("ascii")
+            ),
         ],
     ]
 
@@ -312,7 +319,9 @@ def build_live_progress_keyboard(lex: UiLexicon, topic_id: int) -> list[list[But
     ]
 
 
-def build_turn_response_keyboard(lex: UiLexicon, topic: ForumTopic) -> list[list[Button]]:
+def build_turn_response_keyboard(
+    lex: UiLexicon, topic: ForumTopic
+) -> list[list[Button]]:
     tid = topic.topic_id
     toggle_label = (
         lex.btn_ws_resp_to_plan
@@ -345,7 +354,13 @@ def build_model_picker_keyboard(
                 )
             ]
         )
-    rows.append([Button.inline(lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii"))])
+    rows.append(
+        [
+            Button.inline(
+                lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii")
+            )
+        ]
+    )
     return rows
 
 
@@ -374,7 +389,13 @@ def build_session_history_keyboard(
                 )
             ]
         )
-    rows.append([Button.inline(lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii"))])
+    rows.append(
+        [
+            Button.inline(
+                lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii")
+            )
+        ]
+    )
     return rows
 
 
@@ -394,7 +415,13 @@ def build_topic_account_picker_keyboard(
                 )
             ]
         )
-    rows.append([Button.inline(lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii"))])
+    rows.append(
+        [
+            Button.inline(
+                lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii")
+            )
+        ]
+    )
     return rows
 
 
@@ -411,5 +438,11 @@ def build_workspace_dir_picker_keyboard(
                 )
             ]
         )
-    rows.append([Button.inline(lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii"))])
+    rows.append(
+        [
+            Button.inline(
+                lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii")
+            )
+        ]
+    )
     return rows

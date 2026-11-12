@@ -36,8 +36,12 @@ class ParsedStepUpdateEvent:
 
 def serialize_user_prompt(prompt_text: str) -> bytes:
     if not prompt_text.strip():
-        raise AgyProcessError("Cannot send an empty user prompt to agy stream-json stdin.")
-    if prompt_text.lstrip().startswith(("/usage", "/quota", "/model", "/credits", "/changelog")):
+        raise AgyProcessError(
+            "Cannot send an empty user prompt to agy stream-json stdin."
+        )
+    if prompt_text.lstrip().startswith(
+        ("/usage", "/quota", "/model", "/credits", "/changelog")
+    ):
         raise AgyProcessError(
             f"CLI-handled slash command '{prompt_text.split()[0]}' is forbidden in stream-json stdin."
         )
@@ -67,7 +71,9 @@ def parse_stream_json_line(
         raise AgyProcessError(f"Malformed JSON line from agy stdout: {exc}") from exc
 
     if not isinstance(data, dict):
-        raise AgyProcessError(f"Expected JSON object from agy stdout, got {type(data).__name__}.")
+        raise AgyProcessError(
+            f"Expected JSON object from agy stdout, got {type(data).__name__}."
+        )
 
     event_kind = data.get("event")
     if event_kind == "init":
@@ -86,12 +92,16 @@ def parse_stream_json_line(
             fallback_conversation_id=fallback_conversation_id,
         )
 
-    raise AgyProcessError(f"Unknown event type in agy stream-json output: '{event_kind}'.")
+    raise AgyProcessError(
+        f"Unknown event type in agy stream-json output: '{event_kind}'."
+    )
 
 
 def _parse_uuid(raw_val: Any, context_label: str) -> UUID:
     if not isinstance(raw_val, str) or not raw_val.strip():
-        raise AgyProcessError(f"Missing or invalid conversation_id in {context_label}: {raw_val!r}")
+        raise AgyProcessError(
+            f"Missing or invalid conversation_id in {context_label}: {raw_val!r}"
+        )
     try:
         return UUID(raw_val.strip())
     except ValueError as exc:
@@ -201,15 +211,29 @@ def _parse_step_update_event(
 
                     if mcp_tool == "ssh_exec":
                         h_alias = str(parsed_mcp_args.get("host", "?"))
-                        h_cmd = str(parsed_mcp_args.get("command", "")).replace("\n", " ").strip()
+                        h_cmd = (
+                            str(parsed_mcp_args.get("command", ""))
+                            .replace("\n", " ")
+                            .strip()
+                        )
                         tool_name = f"ssh_exec [{h_alias}]"
                         target_hint = h_cmd[:target_hint_max_chars]
-                        parameters_text = f"CommandLine: {parsed_mcp_args.get('command', '')}"
+                        parameters_text = (
+                            f"CommandLine: {parsed_mcp_args.get('command', '')}"
+                        )
                     elif mcp_tool:
                         tool_name = f"mcp:{mcp_tool}"
-                        for m_key in ("file_path", "name", "alias", "trigger_spec", "host"):
+                        for m_key in (
+                            "file_path",
+                            "name",
+                            "alias",
+                            "trigger_spec",
+                            "host",
+                        ):
                             if m_key in parsed_mcp_args and parsed_mcp_args[m_key]:
-                                target_hint = str(parsed_mcp_args[m_key])[:target_hint_max_chars]
+                                target_hint = str(parsed_mcp_args[m_key])[
+                                    :target_hint_max_chars
+                                ]
                                 break
 
             raw_out = tool_info.get("output")
@@ -240,7 +264,11 @@ def _parse_step_update_event(
             for item in raw_subagents:
                 if isinstance(item, dict):
                     raw_uris = item.get("workspace_uris")
-                    uris = tuple(str(u) for u in raw_uris) if isinstance(raw_uris, list) else ()
+                    uris = (
+                        tuple(str(u) for u in raw_uris)
+                        if isinstance(raw_uris, list)
+                        else ()
+                    )
                     subagents_list.append(
                         SubagentState(
                             type_name=str(item.get("type_name", "subagent")),
@@ -301,7 +329,9 @@ def _parse_result_event(
         conv_id = fallback_conversation_id
     else:
         detail = error_message or response_text or "agy returned empty conversation_id"
-        raise AgyProcessError(f"agy turn failed before session initialization: {detail}")
+        raise AgyProcessError(
+            f"agy turn failed before session initialization: {detail}"
+        )
 
     cum_duration = float(body.get("duration_seconds", 0.0))
     cum_turns = int(body.get("num_turns", 1))

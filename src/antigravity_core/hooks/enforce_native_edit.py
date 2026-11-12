@@ -40,9 +40,7 @@ _ALLOWED_LOCAL_PREFIXES: tuple[str, ...] = (
 )
 
 
-def _ipc_call(
-    method: str, params: dict[str, str | int | bool]
-) -> tuple[bool, str]:
+def _ipc_call(method: str, params: dict[str, str | int | bool]) -> tuple[bool, str]:
     if "AGY_CORE_IPC_SOCKET" not in os.environ:
         return True, ""
     socket_path = os.environ["AGY_CORE_IPC_SOCKET"].strip()
@@ -83,7 +81,9 @@ def _ipc_call(
         return False, "Empty response from CoreIpcServer."
 
     parsed = json.loads(raw_resp)
-    if not isinstance(parsed, dict) or not bool(parsed["ok"] if "ok" in parsed else False):
+    if not isinstance(parsed, dict) or not bool(
+        parsed["ok"] if "ok" in parsed else False
+    ):
         err_text = (
             str(parsed["error"])
             if isinstance(parsed, dict) and "error" in parsed

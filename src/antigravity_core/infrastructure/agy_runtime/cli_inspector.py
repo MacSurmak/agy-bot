@@ -9,7 +9,9 @@ import structlog
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import AgyProcessError
 from antigravity_core.domain.models import GoogleAccount
-from antigravity_core.infrastructure.keyring.dbus_profile_mgr import KeyringProfileManager
+from antigravity_core.infrastructure.keyring.dbus_profile_mgr import (
+    KeyringProfileManager,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -18,9 +20,21 @@ _EMAIL_DETECT_RE: re.Pattern[str] = re.compile(
     r"\b([a-zA-Z0-9_.+-]+@(?:gmail\.com|googlemail\.com|[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+))\b"
 )
 # Universal model slug pattern: lowercase alphanumeric with hyphens/dots, requiring at least one hyphen and at least one digit
-_GENERIC_MODEL_SLUG_RE: re.Pattern[str] = re.compile(r"^(?=.*\d)[a-z0-9]+(?:-[a-z0-9.]+)+$")
+_GENERIC_MODEL_SLUG_RE: re.Pattern[str] = re.compile(
+    r"^(?=.*\d)[a-z0-9]+(?:-[a-z0-9.]+)+$"
+)
 _IGNORED_HEADER_WORDS: frozenset[str] = frozenset(
-    {"model", "models", "available", "name", "slug", "id", "default", "provider", "status"}
+    {
+        "model",
+        "models",
+        "available",
+        "name",
+        "slug",
+        "id",
+        "default",
+        "provider",
+        "status",
+    }
 )
 
 
@@ -94,13 +108,17 @@ class AgyCliInspector:
                 items = (
                     parsed_json
                     if isinstance(parsed_json, list)
-                    else parsed_json.get("models", [])
-                    if isinstance(parsed_json, dict)
-                    else []
+                    else (
+                        parsed_json.get("models", [])
+                        if isinstance(parsed_json, dict)
+                        else []
+                    )
                 )
                 for item in items:
                     slug = (
-                        str(item.get("slug") or item.get("id") or item.get("name") or "").strip()
+                        str(
+                            item.get("slug") or item.get("id") or item.get("name") or ""
+                        ).strip()
                         if isinstance(item, dict)
                         else str(item).strip()
                     )
@@ -134,7 +152,9 @@ class AgyCliInspector:
                     break
 
         if not models:
-            raise AgyProcessError(f"Could not parse any model slugs from agy models output:\n{raw_output}")
+            raise AgyProcessError(
+                f"Could not parse any model slugs from agy models output:\n{raw_output}"
+            )
         return models
 
     async def fetch_account_quota(self, account: GoogleAccount) -> dict[str, Any]:
@@ -200,7 +220,11 @@ class AgyCliInspector:
         all_pcts: list[int] = []
 
         for b in buckets_list:
-            b_id = str(b.get("id") or b.get("name") or b.get("label") or "").strip().lower()
+            b_id = (
+                str(b.get("id") or b.get("name") or b.get("label") or "")
+                .strip()
+                .lower()
+            )
             window = str(b.get("window") or "").strip().lower()
             frac = b.get("remaining_fraction")
             if isinstance(frac, int | float):
@@ -229,9 +253,7 @@ class AgyCliInspector:
             all_pcts = [int(m.group(1)) for m in _PERCENT_PATTERN.finditer(raw_output)]
 
         min_remaining_pct = (
-            min(gemini_pcts)
-            if gemini_pcts
-            else (min(all_pcts) if all_pcts else 100)
+            min(gemini_pcts) if gemini_pcts else (min(all_pcts) if all_pcts else 100)
         )
 
         email_match = _EMAIL_DETECT_RE.search(raw_output)
@@ -254,7 +276,10 @@ class AgyCliInspector:
     ) -> None:
         if isinstance(node, dict):
             current_group = str(
-                node.get("title") or node.get("name") or node.get("label") or group_title
+                node.get("title")
+                or node.get("name")
+                or node.get("label")
+                or group_title
             )
             raw_buckets = node.get("buckets")
             if isinstance(raw_buckets, list):

@@ -133,7 +133,9 @@ class RemoteMountManager:
         bin_dir.mkdir(parents=True, exist_ok=True)
         python_bin = str(self._cfg.paths.venv_python_path)
         app_root = str(self._cfg.paths.workspaces_root_dir.parent.parent.resolve())
-        brain_dir = str((self._cfg.paths.agy_home_dir / "antigravity-cli" / "brain").resolve())
+        brain_dir = str(
+            (self._cfg.paths.agy_home_dir / "antigravity-cli" / "brain").resolve()
+        )
 
         wrapper_src = Path(__file__).with_name("ssh_cli_wrapper.py")
         standalone_wrapper = bin_dir / "ssh_cli_wrapper.py"
@@ -143,10 +145,7 @@ class RemoteMountManager:
         os.chmod(standalone_wrapper, 0o755)
 
         ssh_wrapper = bin_dir / "ssh"
-        ssh_script = (
-            "#!/bin/sh\n"
-            f'exec "{python_bin}" "{standalone_wrapper}" "$@"\n'
-        )
+        ssh_script = "#!/bin/sh\n" f'exec "{python_bin}" "{standalone_wrapper}" "$@"\n'
         ssh_wrapper.write_text(ssh_script, encoding="utf-8")
         os.chmod(ssh_wrapper, 0o755)
 
@@ -219,7 +218,9 @@ class RemoteMountManager:
             for ln in existing_text.splitlines()
             if not (ln.strip().startswith("Include ") and "config.d/" in ln.strip())
         ]
-        updated_text = f"{include_line}\n\n" + "\n".join(cleaned_lines).lstrip("\n") + "\n"
+        updated_text = (
+            f"{include_line}\n\n" + "\n".join(cleaned_lines).lstrip("\n") + "\n"
+        )
         main_ssh_config.write_text(updated_text, encoding="utf-8")
         os.chmod(main_ssh_config, 0o600)
 
@@ -251,11 +252,16 @@ class RemoteMountManager:
             await proc.communicate()
             if priv_key.is_file():
                 os.chmod(priv_key, 0o600)
-            logger.info("Generated new Ed25519 SSH keypair for Antigravity Core", path=str(pub_key))
+            logger.info(
+                "Generated new Ed25519 SSH keypair for Antigravity Core",
+                path=str(pub_key),
+            )
 
         if pub_key.is_file():
             return pub_key.read_text(encoding="utf-8").strip()
-        raise RemoteMountError(f"Failed to read or generate SSH public key at {pub_key}")
+        raise RemoteMountError(
+            f"Failed to read or generate SSH public key at {pub_key}"
+        )
 
     def write_ssh_config_entry(self, host: RemoteHost) -> Path:
         ssh_dir = self._cfg.paths.ssh_config_dir
@@ -312,7 +318,8 @@ class RemoteMountManager:
             stderr=asyncio.subprocess.PIPE,
         )
         ssh_timeout = float(
-            self._cfg.remotes.ssh_connect_timeout_sec + self._cfg.remotes.ssh_check_grace_sec
+            self._cfg.remotes.ssh_connect_timeout_sec
+            + self._cfg.remotes.ssh_check_grace_sec
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -321,7 +328,9 @@ class RemoteMountManager:
             )
         except TimeoutError as exc:
             proc.kill()
-            raise RemoteMountError(f"SSH connectivity check timed out for host '{host.alias}'.") from exc
+            raise RemoteMountError(
+                f"SSH connectivity check timed out for host '{host.alias}'."
+            ) from exc
 
         stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
         if proc.returncode != 0 or "AGY_SSH_OK" not in stdout_text:
@@ -493,7 +502,9 @@ class RemoteMountManager:
             if askpass_script.exists():
                 askpass_script.unlink()
 
-    async def _request_password_from_owner(self, topic_id: int, target_label: str) -> str:
+    async def _request_password_from_owner(
+        self, topic_id: int, target_label: str
+    ) -> str:
         if self._on_password_prompt is None:
             raise RemoteMountError(
                 f"SSH key is not provisioned for '{target_label}' and interactive prompt callback is not bound."
@@ -558,7 +569,11 @@ class RemoteMountManager:
             )
             key_ok = await self._test_batch_key_auth(resolved_target, port, clean_jump)
             if key_ok:
-                if cred is not None and not cred.key_provisioned and self._cred_repo is not None:
+                if (
+                    cred is not None
+                    and not cred.key_provisioned
+                    and self._cred_repo is not None
+                ):
                     cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
                 if cred is not None or ssh_user == "root":
                     return resolved_target, cred
@@ -584,13 +599,17 @@ class RemoteMountManager:
                     resolved_target, port, saved_pass, clean_jump
                 ):
                     if self._cred_repo is not None:
-                        cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
+                        cred = await self._cred_repo.mark_key_provisioned(
+                            cred_key, True
+                        )
                     return resolved_target, cred
                 if self._cred_repo is not None:
                     await self._cred_repo.delete_credential(cred_key)
                 cred = None
 
-            entered_pass = await self._request_password_from_owner(topic_id, resolved_target)
+            entered_pass = await self._request_password_from_owner(
+                topic_id, resolved_target
+            )
             if self._vault is not None and self._cred_repo is not None:
                 enc = self._vault.encrypt_text(entered_pass)
                 cred = await self._cred_repo.upsert_credential(
@@ -787,7 +806,7 @@ class RemoteMountManager:
             f"  else echo AGY_NEED_SUDO_READ; fi; "
             f"else "
             f"  parent_dir=$(dirname {qpath}); "
-            f"  if [ -w \"$parent_dir\" ]; then echo AGY_MISSING_RW; else echo AGY_MISSING_SUDO; fi; "
+            f'  if [ -w "$parent_dir" ]; then echo AGY_MISSING_RW; else echo AGY_MISSING_SUDO; fi; '
             f"fi"
         )
         proc = await asyncio.create_subprocess_exec(
@@ -843,7 +862,9 @@ class RemoteMountManager:
                 diff_or_cmd_preview=f"sudo cat {spec.remote_path}",
             )
             requires_sudo_write = not is_root
-            sudo_cmd = f"sudo -k -S -p '' cat {qpath}" if not is_root else f"cat {qpath}"
+            sudo_cmd = (
+                f"sudo -k -S -p '' cat {qpath}" if not is_root else f"cat {qpath}"
+            )
             s_proc = await asyncio.create_subprocess_exec(
                 "/usr/bin/ssh",
                 "-o",
@@ -882,10 +903,12 @@ class RemoteMountManager:
         if existed or for_write:
             spec.local_stage_path.write_bytes(body_bytes)
 
-        self._staged_baselines[(topic_id, str(spec.local_stage_path))] = _StagedFileBaseline(
-            existed_on_remote=existed,
-            original_bytes=body_bytes,
-            requires_sudo_write=requires_sudo_write,
+        self._staged_baselines[(topic_id, str(spec.local_stage_path))] = (
+            _StagedFileBaseline(
+                existed_on_remote=existed,
+                original_bytes=body_bytes,
+                requires_sudo_write=requires_sudo_write,
+            )
         )
         return {"status": "staged", "local_path": str(spec.local_stage_path)}
 
@@ -932,9 +955,9 @@ class RemoteMountManager:
             if not needs_sudo:
                 write_cmd = (
                     f"parent_dir=$(dirname {qpath}); "
-                    f"mkdir -p \"$parent_dir\" 2>/dev/null && "
-                    f"tmp_f=\"{qpath}.agy_tmp_$$\" && "
-                    f"cat > \"$tmp_f\" && mv -f \"$tmp_f\" {qpath}"
+                    f'mkdir -p "$parent_dir" 2>/dev/null && '
+                    f'tmp_f="{qpath}.agy_tmp_$$" && '
+                    f'cat > "$tmp_f" && mv -f "$tmp_f" {qpath}'
                 )
                 w_proc = await asyncio.create_subprocess_exec(
                     "/usr/bin/ssh",
@@ -984,7 +1007,7 @@ class RemoteMountManager:
 
             stage_upload_cmd = (
                 "tmp_stage=$(mktemp /tmp/.agy_stage_XXXXXXXXXX) && "
-                "cat > \"$tmp_stage\" && printf '%s' \"$tmp_stage\""
+                'cat > "$tmp_stage" && printf \'%s\' "$tmp_stage"'
             )
             up_proc = await asyncio.create_subprocess_exec(
                 "/usr/bin/ssh",
@@ -1008,7 +1031,7 @@ class RemoteMountManager:
             sudo_prefix = "sudo -k -S -p ''" if not is_root else ""
             apply_cmd = (
                 f"{sudo_prefix} sh -c "
-                f"'parent_dir=$(dirname {qpath}); mkdir -p \"$parent_dir\" && "
+                f'\'parent_dir=$(dirname {qpath}); mkdir -p "$parent_dir" && '
                 f"if [ -f {qpath} ]; then cp -p {qpath} {qtmp}.perm && cat {qtmp} > {qtmp}.perm && mv -f {qtmp}.perm {qpath}; "
                 f"else install -m 0644 {qtmp} {qpath}; fi; "
                 f"rc=$?; rm -f {qtmp} {qtmp}.perm; exit $rc'"
@@ -1033,7 +1056,10 @@ class RemoteMountManager:
                 )
             return {"status": "committed_sudo", "remote_path": spec.remote_path}
         finally:
-            if spec.stage_root_dir.exists() and spec.stage_root_dir != workspace_dir.resolve():
+            if (
+                spec.stage_root_dir.exists()
+                and spec.stage_root_dir != workspace_dir.resolve()
+            ):
                 shutil.rmtree(spec.stage_root_dir, ignore_errors=True)
 
     def ensure_rule_skeleton(self, host: RemoteHost) -> Path:
@@ -1063,7 +1089,7 @@ class RemoteMountManager:
             f"- **SSH Alias:** `{host.alias}` (`{host.ssh_user}@{host.hostname_or_ip}:{host.ssh_port}`)\n"
             f"- **Remote Root:** `{host.remote_root_path}`\n"
             f"- **Local VFS Mount (for `read_file`/`write_file`/`edit_file`):** `{host.local_mount_path}`\n"
-            f"- **Command Execution:** `mcp:telegram-core:ssh_exec(host=\"{host.alias}\", command=\"...\")`\n\n"
+            f'- **Command Execution:** `mcp:telegram-core:ssh_exec(host="{host.alias}", command="...")`\n\n'
             "## 1. Auto-Synced Hardware & System Telemetry (Managed by Bot)\n\n"
             f"{auto_telemetry_md.strip()}\n\n"
             f"{_AI_NOTES_MARKER}\n"
@@ -1080,7 +1106,9 @@ class RemoteMountManager:
             lines = [
                 ln
                 for ln in after.splitlines()
-                if not ln.strip().startswith("## 2. Architecture & AI Operational Notes")
+                if not ln.strip().startswith(
+                    "## 2. Architecture & AI Operational Notes"
+                )
             ]
             cleaned = "\n".join(lines).strip()
             if cleaned:
@@ -1143,7 +1171,9 @@ class RemoteMountManager:
 
         if _AI_NOTES_MARKER in raw:
             top_part = raw.split(_AI_NOTES_MARKER, 1)[0]
-            auto_marker = "## 1. Auto-Synced Hardware & System Telemetry (Managed by Bot)"
+            auto_marker = (
+                "## 1. Auto-Synced Hardware & System Telemetry (Managed by Bot)"
+            )
             if auto_marker in top_part:
                 auto_telemetry = top_part.split(auto_marker, 1)[1].strip()
             else:
@@ -1222,7 +1252,16 @@ class RemoteMountManager:
             # Refresh auto-telemetry in background if command potentially modified services/containers
             if any(
                 kw in clean_cmd
-                for kw in ("systemctl", "docker", "apt", "pacman", "mount", "mkdir", "pct", "qm")
+                for kw in (
+                    "systemctl",
+                    "docker",
+                    "apt",
+                    "pacman",
+                    "mount",
+                    "mkdir",
+                    "pct",
+                    "qm",
+                )
             ):
                 asyncio.create_task(self.sync_host_telemetry_and_rules(host))
 

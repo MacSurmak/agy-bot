@@ -18,7 +18,9 @@ from antigravity_core.infrastructure.agy_runtime.worker import (
     ProgressCallback,
     TopicWorker,
 )
-from antigravity_core.infrastructure.keyring.dbus_profile_mgr import KeyringProfileManager
+from antigravity_core.infrastructure.keyring.dbus_profile_mgr import (
+    KeyringProfileManager,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -76,11 +78,12 @@ class AgyWorkerPool:
         )
 
     @staticmethod
-    def _signatures_compatible(current: WorkerSignature, desired: WorkerSignature) -> bool:
+    def _signatures_compatible(
+        current: WorkerSignature, desired: WorkerSignature
+    ) -> bool:
         # Conversation ID may transition from None -> UUID on the first turn without requiring a restart
-        conv_ok = (
-            current.conversation_id == desired.conversation_id
-            or (current.conversation_id is None and desired.conversation_id is not None)
+        conv_ok = current.conversation_id == desired.conversation_id or (
+            current.conversation_id is None and desired.conversation_id is not None
         )
         return (
             conv_ok
@@ -112,7 +115,9 @@ class AgyWorkerPool:
                 if (
                     slot.worker is not None
                     and slot.worker.is_alive()
-                    and not self._signatures_compatible(slot.worker.signature, desired_sig)
+                    and not self._signatures_compatible(
+                        slot.worker.signature, desired_sig
+                    )
                 ):
                     logger.info(
                         "Topic configuration changed; cycling warm agy worker",
@@ -150,7 +155,9 @@ class AgyWorkerPool:
                 slot.is_running_turn = False
                 if slot.worker is not None and slot.worker.is_alive():
                     slot.idle_timer_task = asyncio.create_task(
-                        self._run_idle_ttl_timer(topic.topic_id, settings.worker_idle_ttl_sec)
+                        self._run_idle_ttl_timer(
+                            topic.topic_id, settings.worker_idle_ttl_sec
+                        )
                     )
 
     def _cancel_idle_timer(self, slot: WorkerPoolSlot) -> None:
@@ -265,8 +272,14 @@ class AgyWorkerPool:
                         topic_id=topic_id,
                         is_warm=is_warm,
                         is_running_turn=slot.is_running_turn,
-                        model_slug=worker.signature.model_slug if is_warm and worker else None,
-                        account_slug=worker.signature.account_slug if is_warm and worker else None,
+                        model_slug=(
+                            worker.signature.model_slug if is_warm and worker else None
+                        ),
+                        account_slug=(
+                            worker.signature.account_slug
+                            if is_warm and worker
+                            else None
+                        ),
                     )
                 )
             return snapshots

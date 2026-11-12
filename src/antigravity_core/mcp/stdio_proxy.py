@@ -25,7 +25,9 @@ def _get_inherited_topic_id() -> int:
     try:
         topic_id = int(raw_topic_id)
     except ValueError as exc:
-        raise IpcError(f"Invalid integer in AGY_CURRENT_TOPIC_ID: {raw_topic_id!r}") from exc
+        raise IpcError(
+            f"Invalid integer in AGY_CURRENT_TOPIC_ID: {raw_topic_id!r}"
+        ) from exc
     if topic_id <= 0:
         raise IpcError(f"AGY_CURRENT_TOPIC_ID must be positive, got {topic_id}")
     return topic_id
@@ -51,13 +53,17 @@ async def _call_bot_ipc(method: str, params: dict[str, Any]) -> dict[str, Any]:
         ) from exc
 
     try:
-        payload_bytes = (json.dumps(request_envelope, ensure_ascii=False) + "\n").encode("utf-8")
+        payload_bytes = (
+            json.dumps(request_envelope, ensure_ascii=False) + "\n"
+        ).encode("utf-8")
         writer.write(payload_bytes)
         await writer.drain()
 
         raw_response = await reader.readline()
         if not raw_response:
-            raise IpcError("Bot IPC server closed connection without returning a response.")
+            raise IpcError(
+                "Bot IPC server closed connection without returning a response."
+            )
 
         decoded: Any = json.loads(raw_response.decode("utf-8", errors="replace"))
         if not isinstance(decoded, dict):

@@ -25,7 +25,9 @@ def upgrade() -> None:
     if "event_sensors" not in existing_tables:
         op.create_table(
             "event_sensors",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
+            sa.Column(
+                "id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False
+            ),
             sa.Column(
                 "topic_id",
                 sa.BigInteger(),
@@ -59,7 +61,9 @@ def upgrade() -> None:
     else:
         sensor_cols = {col["name"] for col in inspector.get_columns("event_sensors")}
         if "action_command" not in sensor_cols:
-            op.add_column("event_sensors", sa.Column("action_command", sa.Text(), nullable=True))
+            op.add_column(
+                "event_sensors", sa.Column("action_command", sa.Text(), nullable=True)
+            )
         if "wake_mode" not in sensor_cols:
             op.add_column(
                 "event_sensors",
@@ -109,12 +113,16 @@ def downgrade() -> None:
     existing_tables = set(inspector.get_table_names())
 
     if "forum_topics" in existing_tables:
-        forum_topic_cols = {col["name"] for col in inspector.get_columns("forum_topics")}
+        forum_topic_cols = {
+            col["name"] for col in inspector.get_columns("forum_topics")
+        }
         if "sudo_carte_blanche" in forum_topic_cols:
             op.drop_column("forum_topics", "sudo_carte_blanche")
 
     if "remote_hosts" in existing_tables:
-        remote_host_cols = {col["name"] for col in inspector.get_columns("remote_hosts")}
+        remote_host_cols = {
+            col["name"] for col in inspector.get_columns("remote_hosts")
+        }
         if "jump_host" in remote_host_cols:
             op.drop_column("remote_hosts", "jump_host")
 

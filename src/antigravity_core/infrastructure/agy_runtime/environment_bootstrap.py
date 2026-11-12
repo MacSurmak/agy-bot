@@ -76,9 +76,7 @@ class AgyEnvironmentBootstrapper:
                 )
             hosts_table_md = "\n".join(table_lines)
         else:
-            hosts_table_md = (
-                "*(No hosts registered yet. Call `mcp:telegram-core:register_remote_host` first when connecting to a new server!)*"
-            )
+            hosts_table_md = "*(No hosts registered yet. Call `mcp:telegram-core:register_remote_host` first when connecting to a new server!)*"
 
         content = (
             "# Antigravity Telegram Core — LXC Brain Constitution & Live Infrastructure Map\n\n"
@@ -92,21 +90,21 @@ class AgyEnvironmentBootstrapper:
             "   - Before working on a server, check if it is in the **Live Registered Infrastructure Map** above.\n"
             "   - If the host is NOT in the table yet (e.g. a new server IP or an internal LAN node like `bigcomp` discovered behind a gateway), "
             "**FIRST call `mcp:telegram-core:register_remote_host(alias, hostname_or_ip, ssh_user, ssh_port, remote_root_path, jump_host)`**!\n"
-            "   - If the node requires a jump host, pass `jump_host=\"user@gateway\"`. This configures `ProxyJump` in `~/.ssh/config.d/<alias>.conf` and installs the SSH key.\n"
+            '   - If the node requires a jump host, pass `jump_host="user@gateway"`. This configures `ProxyJump` in `~/.ssh/config.d/<alias>.conf` and installs the SSH key.\n'
             "2. **STAGE 2 — WORK DIRECTLY BY ALIAS (`/ssh:user@<alias>:/path` & `ssh user@<alias>`):**\n"
             "   - Once a host is registered, **ALWAYS address it directly by its `<alias>`** (OpenSSH handles `ProxyJump` automatically; never use manual `-J` or `|ssh:` pipes):\n"
             "   - Native file tools (`view_file`, `read_file`, `write_to_file`, `write_file`, `replace_file_content`, `multi_replace_file_content`, `edit_file`, `list_dir`): "
             "`/ssh:user@<alias>:/abs/path` (always use full absolute paths like `/home/user/...`, never use `~`).\n"
             "   - If `read_file` / `view_file` returns `REMOTE FILE DOES NOT EXIST`, it simply means the file does not exist on the remote host yet — call `write_file` / `write_to_file` on `/ssh:user@<alias>:/path` to create it. Never debug the LXC container or look for `/mnt/remotes` or FUSE.\n"
             "   - Never edit files via `sed -i`, `awk`, `python3 -c`, or `cat << EOF >` in shell commands.\n"
-            "   - Shell commands (`run_command`): `ssh user@<alias> \"command\"` (write plain `sudo` inside the command when root privileges are needed).\n"
+            '   - Shell commands (`run_command`): `ssh user@<alias> "command"` (write plain `sudo` inside the command when root privileges are needed).\n'
             "   - Local container access is restricted strictly to your topic scratchpad and `/tmp`. Never inspect `/srv/antigravity` or `/root`.\n"
             "3. **DIRECT REMOTE FILE SENDING TO TELEGRAM:**\n"
             "   - Pass TRAMP paths (`/ssh:user@<alias>:/path/to/file.png`) directly into `mcp:telegram-core:send_file_to_telegram(file_path, caption)` — never run manual `scp`.\n"
             "4. **SELF-UPDATING INFRASTRUCTURE MEMORY:**\n"
             f"   - Each known host has a passport in `{rules_dir}/infra-<alias>.md`.\n"
             "   - Whenever you discover project paths, databases, or services on a host, record insights using "
-            "`mcp:telegram-core:update_host_knowledge(host=\"<alias>\", notes_markdown=\"...\")`.\n\n"
+            '`mcp:telegram-core:update_host_knowledge(host="<alias>", notes_markdown="...")`.\n\n'
             "## 3. MCP Toolset (`telegram-core`)\n\n"
             "- `send_file_to_telegram(file_path, caption)` — send any local file or remote TRAMP file (`/ssh:user@host:/path`) directly to the current Telegram topic.\n"
             "- `create_sensor(name, command, instruction_prompt, sensor_kind, trigger_condition, poll_interval_sec, match_pattern, action_command, wake_mode, one_shot, cooldown_sec, notify_policy, keep_conversation_context)` — zero-token background event/stream watcher.\n"
@@ -124,9 +122,13 @@ class AgyEnvironmentBootstrapper:
         workspaces_dir = str(self._cfg.paths.workspaces_root_dir)
         remotes_dir = str(self._cfg.paths.remotes_mount_dir)
 
-        existing_settings: dict[str, str | int | bool | list[str] | dict[str, list[str]]] = {}
+        existing_settings: dict[
+            str, str | int | bool | list[str] | dict[str, list[str]]
+        ] = {}
         if settings_path.is_file():
-            raw_existing = settings_path.read_text(encoding="utf-8", errors="replace").strip()
+            raw_existing = settings_path.read_text(
+                encoding="utf-8", errors="replace"
+            ).strip()
             if raw_existing.startswith("{"):
                 loaded = json.loads(raw_existing)
                 if isinstance(loaded, dict):
@@ -214,7 +216,9 @@ class AgyEnvironmentBootstrapper:
                 }
             }
         }
-        mcp_config_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        mcp_config_path.write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+        )
 
     def _write_onboarding_skill(self, skill_path: Path) -> None:
         rules_dir = self._cfg.paths.agy_home_dir / "config" / "rules"
@@ -248,4 +252,7 @@ class AgyEnvironmentBootstrapper:
             raise StartupValidationError(
                 f"Failed to configure WAL mode on agy internal SQLite file {db_path}: {exc}"
             ) from exc
-        logger.info("Configured WAL mode for agy internal conversation_summaries.db", path=str(db_path))
+        logger.info(
+            "Configured WAL mode for agy internal conversation_summaries.db",
+            path=str(db_path),
+        )

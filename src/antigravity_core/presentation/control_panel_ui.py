@@ -136,7 +136,10 @@ class ControlPanelUI:
             except MessageNotModifiedError:
                 return
             except RPCError as exc:
-                logger.debug("Stored dashboard message no longer editable; recreating", error=str(exc))
+                logger.debug(
+                    "Stored dashboard message no longer editable; recreating",
+                    error=str(exc),
+                )
 
         if stored_msg_id is not None:
             try:
@@ -265,7 +268,9 @@ class ControlPanelUI:
             if self._state is not None and self._state.pending_oauth is not None:
                 self._keyring_mgr.cancel_pending_oauth(self._state.pending_oauth)
                 if self._state.is_new_staged_account:
-                    await self._discard_staged_account(self._state.pending_oauth.account)
+                    await self._discard_staged_account(
+                        self._state.pending_oauth.account
+                    )
             self._state = None
             await self.render_and_pin_dashboard(recreate_at_bottom=True)
             return
@@ -281,7 +286,9 @@ class ControlPanelUI:
 
         await self.render_and_pin_dashboard(recreate_at_bottom=True)
 
-    async def handle_callback(self, event: events.CallbackQuery.Event, data_str: str) -> None:
+    async def handle_callback(
+        self, event: events.CallbackQuery.Event, data_str: str
+    ) -> None:
         lex = await self._load_lexicon()
 
         if data_str == "cp:refresh":
@@ -315,7 +322,9 @@ class ControlPanelUI:
             if self._state is not None and self._state.pending_oauth is not None:
                 self._keyring_mgr.cancel_pending_oauth(self._state.pending_oauth)
                 if self._state.is_new_staged_account:
-                    await self._discard_staged_account(self._state.pending_oauth.account)
+                    await self._discard_staged_account(
+                        self._state.pending_oauth.account
+                    )
             self._state = None
             await event.answer("Авторизация отменена.")
             await self._render_accounts_hub(event, lex, 0, False)
@@ -388,7 +397,9 @@ class ControlPanelUI:
             if host_entry is not None:
                 await self._host_repo.delete_host(alias)
                 self._mount_mgr.remove_host_config(alias)
-                cred_key_alias = f"{host_entry.ssh_user}@{host_entry.alias}:{host_entry.ssh_port}"
+                cred_key_alias = (
+                    f"{host_entry.ssh_user}@{host_entry.alias}:{host_entry.ssh_port}"
+                )
                 cred_key_ip = f"{host_entry.ssh_user}@{host_entry.hostname_or_ip}:{host_entry.ssh_port}"
                 await self._cred_repo.delete_credential(cred_key_alias)
                 await self._cred_repo.delete_credential(cred_key_ip)
@@ -514,7 +525,9 @@ class ControlPanelUI:
 
         xdg_dir = str((self._cfg.paths.profiles_data_dir / slug).resolve())
         dbus_sock = str((self._cfg.paths.runtime_dir / f"bus_{slug}.sock").resolve())
-        keyring_password = secrets.token_urlsafe(self._cfg.runtime.keyring_password_bytes)
+        keyring_password = secrets.token_urlsafe(
+            self._cfg.runtime.keyring_password_bytes
+        )
         encrypted_pass = self._vault.encrypt_text(keyring_password)
 
         account = await self._account_repo.create_account(
@@ -555,7 +568,9 @@ class ControlPanelUI:
         email_label = f"Google Account #{next_idx}"
         xdg_dir = str((self._cfg.paths.profiles_data_dir / slug).resolve())
         dbus_sock = str((self._cfg.paths.runtime_dir / f"bus_{slug}.sock").resolve())
-        keyring_password = secrets.token_urlsafe(self._cfg.runtime.keyring_password_bytes)
+        keyring_password = secrets.token_urlsafe(
+            self._cfg.runtime.keyring_password_bytes
+        )
         encrypted_pass = self._vault.encrypt_text(keyring_password)
 
         staged_acc = await self._account_repo.create_account(
@@ -661,18 +676,24 @@ class ControlPanelUI:
             )
             # Assign clean topic_<id> path without creating the directory on disk yet
             assigned_dir = str(
-                (self._cfg.paths.workspaces_root_dir / f"topic_{topic.topic_id}").resolve()
+                (
+                    self._cfg.paths.workspaces_root_dir / f"topic_{topic.topic_id}"
+                ).resolve()
             )
             final_title = lex.ws_auto_topic_title.format(topic_id=topic.topic_id)
             await self._topic_lifecycle.rename_topic(topic.topic_id, final_title)
             await self._workspace_ui_init_new_topic(topic.topic_id, assigned_dir)
             await event.answer(
-                lex.cp_new_topic_created.format(title=final_title, topic_id=topic.topic_id)
+                lex.cp_new_topic_created.format(
+                    title=final_title, topic_id=topic.topic_id
+                )
             )
         except Exception as exc:
             max_err = self._cfg.limits.error_summary_max_chars
             err_detail = f"{type(exc).__name__}: {exc}"[:max_err]
-            logger.error("Failed to create forum topic", error=err_detail, exc_info=True)
+            logger.error(
+                "Failed to create forum topic", error=err_detail, exc_info=True
+            )
             await event.respond(lex.cp_new_topic_failed.format(error=err_detail))
 
     async def _workspace_ui_init_new_topic(
@@ -689,7 +710,9 @@ class ControlPanelUI:
             "Выберите аккаунт для управления или добавьте новый:",
         ]
         if not accounts:
-            lines.append("\n⚠️ Нет подключенных аккаунтов. Нажмите **➕ Добавить аккаунт**.")
+            lines.append(
+                "\n⚠️ Нет подключенных аккаунтов. Нажмите **➕ Добавить аккаунт**."
+            )
         return "\n".join(lines), build_paginated_accounts_keyboard(lex, accounts, page)
 
     async def _render_accounts_hub(
@@ -709,8 +732,14 @@ class ControlPanelUI:
         self, event: events.CallbackQuery.Event, lex: UiLexicon, acc_id: int
     ) -> None:
         acc = await self._account_repo.get_by_id(acc_id)
-        star = "⭐ **Основной аккаунт**" if acc.is_default else "👤 Дополнительный аккаунт"
-        tok_status = "🟢 Авторизован (Fernet Backup OK)" if acc.encrypted_token_backup else "⚠️ Требуется вход"
+        star = (
+            "⭐ **Основной аккаунт**" if acc.is_default else "👤 Дополнительный аккаунт"
+        )
+        tok_status = (
+            "🟢 Авторизован (Fernet Backup OK)"
+            if acc.encrypted_token_backup
+            else "⚠️ Требуется вход"
+        )
         min_q = (
             f"\n📊 **Остаток квоты:** `{acc.last_quota_json['min_remaining_pct']}%`"
             if acc.last_quota_json and "min_remaining_pct" in acc.last_quota_json
@@ -742,18 +771,28 @@ class ControlPanelUI:
         rows: list[list[Button]] = []
 
         if not hosts and not creds:
-            lines.append("• Серверов пока нет. Зарегистрируйте хост или обратитесь к `user@host`.")
+            lines.append(
+                "• Серверов пока нет. Зарегистрируйте хост или обратитесь к `user@host`."
+            )
 
         for h in hosts:
             k_alias = f"{h.ssh_user}@{h.alias}:{h.ssh_port}"
             k_ip = f"{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}"
-            matched_c = cred_map.get(k_alias) if k_alias in cred_map else cred_map.get(k_ip)
+            matched_c = (
+                cred_map.get(k_alias) if k_alias in cred_map else cred_map.get(k_ip)
+            )
             if matched_c is not None:
                 processed_creds.add(matched_c.credential_key)
 
             route_info = f" (via `{h.jump_host}`)" if h.jump_host else ""
-            key_badge = "🟢 Ключ OK" if (matched_c and matched_c.key_provisioned) else "🔑 Авторизован"
-            sudo_badge = "🔒 Sudo-пароль сохранён" if matched_c else "⚠️ Sudo-пароль не задан"
+            key_badge = (
+                "🟢 Ключ OK"
+                if (matched_c and matched_c.key_provisioned)
+                else "🔑 Авторизован"
+            )
+            sudo_badge = (
+                "🔒 Sudo-пароль сохранён" if matched_c else "⚠️ Sudo-пароль не задан"
+            )
 
             lines.append(
                 f"▸ **`{h.alias}`** (`{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}`{route_info})\n"
@@ -815,7 +854,9 @@ class ControlPanelUI:
         lines = [format_wide_header_block(lex.cp_settings_menu_header.strip())]
         for label, val in items:
             lines.append(
-                lex.cp_settings_menu_item.format(key="", value_json=val, description=label)
+                lex.cp_settings_menu_item.format(
+                    key="", value_json=val, description=label
+                )
             )
 
         btn_labels = [
@@ -857,11 +898,15 @@ class ControlPanelUI:
                 err_short = str(exc)[:max_err]
                 await event.answer(err_short, alert=True)
                 return
-            options = [(m, m) for m in models[: self._cfg.limits.models_menu_display_limit]]
+            options = [
+                (m, m) for m in models[: self._cfg.limits.models_menu_display_limit]
+            ]
             await self._safe_edit_event(
                 event,
                 format_wide_header_block(lex.ws_select_model_prompt),
-                build_setting_options_keyboard(lex, key, options, settings.default_model),
+                build_setting_options_keyboard(
+                    lex, key, options, settings.default_model
+                ),
             )
             return
 

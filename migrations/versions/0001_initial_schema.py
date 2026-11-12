@@ -22,7 +22,9 @@ def upgrade() -> None:
     system_settings = op.create_table(
         "system_settings",
         sa.Column("key", sa.String(length=128), primary_key=True),
-        sa.Column("value_json", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column(
+            "value_json", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+        ),
         sa.Column("description", sa.Text(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
@@ -39,7 +41,9 @@ def upgrade() -> None:
         sa.Column("is_enabled", sa.Boolean(), nullable=False),
         sa.Column("is_default", sa.Boolean(), nullable=False),
         sa.Column("priority", sa.Integer(), nullable=False),
-        sa.Column("last_quota_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column(
+            "last_quota_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True
+        ),
         sa.Column("last_quota_check_at", sa.DateTime(timezone=True), nullable=True),
     )
 
@@ -64,7 +68,9 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=32), nullable=False),
         sa.Column("workspace_path", sa.Text(), nullable=False),
         sa.Column(
-            "additional_dirs_json", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+            "additional_dirs_json",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
         ),
         sa.Column("model_slug", sa.String(length=128), nullable=False),
         sa.Column("effort_level", sa.String(length=32), nullable=True),
@@ -75,7 +81,9 @@ def upgrade() -> None:
             sa.ForeignKey("google_accounts.id", ondelete="RESTRICT"),
             nullable=False,
         ),
-        sa.Column("active_conversation_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column(
+            "active_conversation_id", postgresql.UUID(as_uuid=True), nullable=True
+        ),
         sa.Column("pinned_card_msg_id", sa.BigInteger(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
@@ -84,7 +92,10 @@ def upgrade() -> None:
     op.create_table(
         "topic_sessions",
         sa.Column(
-            "conversation_id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False
+            "conversation_id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            nullable=False,
         ),
         sa.Column(
             "topic_id",
@@ -109,7 +120,9 @@ def upgrade() -> None:
 
     op.create_table(
         "scheduled_tasks",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
+        sa.Column(
+            "id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False
+        ),
         sa.Column(
             "topic_id",
             sa.BigInteger(),
@@ -129,11 +142,15 @@ def upgrade() -> None:
 
     op.create_table(
         "authorized_users",
-        sa.Column("telegram_user_id", sa.BigInteger(), primary_key=True, autoincrement=False),
+        sa.Column(
+            "telegram_user_id", sa.BigInteger(), primary_key=True, autoincrement=False
+        ),
         sa.Column("username_label", sa.String(length=255), nullable=False),
         sa.Column("role", sa.String(length=32), nullable=False),
         sa.Column(
-            "allowed_topic_ids_json", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+            "allowed_topic_ids_json",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
         ),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -144,7 +161,9 @@ def upgrade() -> None:
         sa.Column("token", sa.String(length=128), primary_key=True),
         sa.Column("role", sa.String(length=32), nullable=False),
         sa.Column(
-            "allowed_topic_ids_json", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+            "allowed_topic_ids_json",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
         ),
         sa.Column("created_by_user_id", sa.BigInteger(), nullable=False),
         sa.Column("redeemed_by_user_id", sa.BigInteger(), nullable=True),

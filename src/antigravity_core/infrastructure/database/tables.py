@@ -2,7 +2,17 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Double, ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Double,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -18,7 +28,9 @@ class SystemSettingRow(Base):
     key: Mapped[str] = mapped_column(String(128), primary_key=True)
     value_json: Mapped[Any] = mapped_column(JSONB, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class GoogleAccountRow(Base):
@@ -30,7 +42,9 @@ class GoogleAccountRow(Base):
     xdg_data_dir: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     dbus_socket_path: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     encrypted_keyring_pass: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    encrypted_token_backup: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    encrypted_token_backup: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True
+    )
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -65,13 +79,17 @@ class SshCredentialRow(Base):
     encrypted_password: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     is_root: Mapped[bool] = mapped_column(Boolean, nullable=False)
     key_provisioned: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class ForumTopicRow(Base):
     __tablename__ = "forum_topics"
 
-    topic_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    topic_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=False
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -88,8 +106,12 @@ class ForumTopicRow(Base):
     )
     pinned_card_msg_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     sudo_carte_blanche: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class TopicSessionRow(Base):
@@ -99,7 +121,9 @@ class TopicSessionRow(Base):
         PG_UUID(as_uuid=True), primary_key=True, nullable=False
     )
     topic_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("forum_topics.topic_id", ondelete="CASCADE"), nullable=False
+        BigInteger,
+        ForeignKey("forum_topics.topic_id", ondelete="CASCADE"),
+        nullable=False,
     )
     account_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("google_accounts.id", ondelete="RESTRICT"), nullable=False
@@ -108,25 +132,39 @@ class TopicSessionRow(Base):
     turns_count: Mapped[int] = mapped_column(Integer, nullable=False)
     cumulative_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
     cumulative_duration_sec: Mapped[float] = mapped_column(Double, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    last_turn_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    last_turn_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class ScheduledTaskRow(Base):
     __tablename__ = "scheduled_tasks"
 
-    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, nullable=False)
-    topic_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("forum_topics.topic_id", ondelete="CASCADE"), nullable=False
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, nullable=False
     )
-    conversation_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    topic_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("forum_topics.topic_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    conversation_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=True
+    )
     schedule_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     trigger_spec: Mapped[str] = mapped_column(String(255), nullable=False)
     instruction_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     notify_policy: Mapped[str] = mapped_column(String(32), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class AuthorizedUserRow(Base):
@@ -139,7 +177,9 @@ class AuthorizedUserRow(Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     allowed_topic_ids_json: Mapped[list[int]] = mapped_column(JSONB, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class InviteTokenRow(Base):
@@ -150,18 +190,28 @@ class InviteTokenRow(Base):
     allowed_topic_ids_json: Mapped[list[int]] = mapped_column(JSONB, nullable=False)
     created_by_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     redeemed_by_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class EventSensorRow(Base):
     __tablename__ = "event_sensors"
 
-    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, nullable=False)
-    topic_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("forum_topics.topic_id", ondelete="CASCADE"), nullable=False
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, nullable=False
     )
-    conversation_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    topic_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("forum_topics.topic_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    conversation_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     sensor_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     command: Mapped[str] = mapped_column(Text, nullable=False)
@@ -179,4 +229,6 @@ class EventSensorRow(Base):
     last_triggered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )

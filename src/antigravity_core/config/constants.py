@@ -72,7 +72,9 @@ MODELS_MENU_DISPLAY_LIMIT: int = 12
 SESSIONS_HISTORY_DISPLAY_LIMIT: int = 8
 WORKSPACE_DIRS_DISPLAY_LIMIT: int = 12
 
-DEFAULT_SYSTEM_PATH: str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+DEFAULT_SYSTEM_PATH: str = (
+    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+)
 
 
 @dataclass(frozen=True, slots=True)

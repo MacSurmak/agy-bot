@@ -28,7 +28,9 @@ logger = structlog.get_logger(__name__)
 
 _ANSI_ESCAPE_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\].*?\x07")
 _TUI_NOISE_RE: re.Pattern[str] = re.compile(r"[─━═│┃┌┐└┘├┤┬┴┼\ufffd]+")
-_OAUTH_URL_PATTERN: re.Pattern[str] = re.compile(r"(https://accounts\.google\.com/[^\s\"'<>]+)")
+_OAUTH_URL_PATTERN: re.Pattern[str] = re.compile(
+    r"(https://accounts\.google\.com/[^\s\"'<>]+)"
+)
 _EMAIL_EXTRACT_RE: re.Pattern[str] = re.compile(
     r"\b([a-zA-Z0-9_.+-]+@(?:gmail\.com|googlemail\.com|[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+))\b"
 )
@@ -103,7 +105,10 @@ class KeyringProfileManager:
             (acc_gemini / "AGENTS.md", global_gemini / "AGENTS.md"),
             (acc_gemini / "config", global_gemini / "config"),
             (acc_cli / "settings.json", global_cli / "settings.json"),
-            (acc_cli / "conversation_summaries.db", global_cli / "conversation_summaries.db"),
+            (
+                acc_cli / "conversation_summaries.db",
+                global_cli / "conversation_summaries.db",
+            ),
             (acc_cli / "brain", global_cli / "brain"),
             (acc_cli / "conversations", global_cli / "conversations"),
         ]
@@ -124,7 +129,9 @@ class KeyringProfileManager:
 
         onboarding_file = acc_cache / "onboarding.json"
         if not onboarding_file.is_file():
-            mac_onboarding = Path("/home/macsurmak/.gemini/antigravity-cli/cache/onboarding.json")
+            mac_onboarding = Path(
+                "/home/macsurmak/.gemini/antigravity-cli/cache/onboarding.json"
+            )
             if mac_onboarding.is_file():
                 onboarding_file.write_bytes(mac_onboarding.read_bytes())
             else:
@@ -134,7 +141,9 @@ class KeyringProfileManager:
                 )
 
         default_proj = acc_cache / "default_project_id.txt"
-        mac_proj = Path("/home/macsurmak/.gemini/antigravity-cli/cache/default_project_id.txt")
+        mac_proj = Path(
+            "/home/macsurmak/.gemini/antigravity-cli/cache/default_project_id.txt"
+        )
         if not default_proj.is_file() and mac_proj.is_file():
             default_proj.write_bytes(mac_proj.read_bytes())
 
@@ -144,7 +153,9 @@ class KeyringProfileManager:
     def _account_cli_dir(xdg_dir: Path) -> Path:
         return xdg_dir / "home" / ".gemini" / "antigravity-cli"
 
-    async def _initialize_account_bus_locked(self, account: GoogleAccount) -> dict[str, str]:
+    async def _initialize_account_bus_locked(
+        self, account: GoogleAccount
+    ) -> dict[str, str]:
         xdg_dir = Path(account.xdg_data_dir)
         keyrings_dir = xdg_dir / "keyrings"
         acc_runtime_dir = xdg_dir / "run"
@@ -176,7 +187,9 @@ class KeyringProfileManager:
         inherited_env = {
             k: v
             for k, v in os.environ.items()
-            if not k.startswith(("DBUS_", "GNOME_KEYRING_", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"))
+            if not k.startswith(
+                ("DBUS_", "GNOME_KEYRING_", "XDG_DATA_HOME", "XDG_RUNTIME_DIR")
+            )
         }
         base_env: dict[str, str] = {
             **inherited_env,
@@ -211,7 +224,9 @@ class KeyringProfileManager:
                 if isinstance(bundle, dict):
                     if "oauth_token_b64" in bundle and bundle["oauth_token_b64"]:
                         token_file.write_bytes(
-                            base64.b64decode(str(bundle["oauth_token_b64"]).encode("ascii"))
+                            base64.b64decode(
+                                str(bundle["oauth_token_b64"]).encode("ascii")
+                            )
                         )
                         os.chmod(token_file, 0o600)
                     if "jetski_b64" in bundle and bundle["jetski_b64"]:
@@ -225,8 +240,12 @@ class KeyringProfileManager:
                     )
         elif not token_file.is_file() and account.is_default:
             # First-time bootstrap: if /home/macsurmak has a working token and acc_1 is fresh, seed it
-            mac_token = Path("/home/macsurmak/.gemini/antigravity-cli/antigravity-oauth-token")
-            mac_jetski = Path("/home/macsurmak/.gemini/antigravity-cli/jetski_state.pbtxt")
+            mac_token = Path(
+                "/home/macsurmak/.gemini/antigravity-cli/antigravity-oauth-token"
+            )
+            mac_jetski = Path(
+                "/home/macsurmak/.gemini/antigravity-cli/jetski_state.pbtxt"
+            )
             if mac_token.is_file() and mac_token.stat().st_size > 0:
                 token_file.write_bytes(mac_token.read_bytes())
                 os.chmod(token_file, 0o600)
@@ -291,7 +310,9 @@ class KeyringProfileManager:
             start_new_session=True,
         )
         if proc.stdin is None or proc.stdout is None or proc.stderr is None:
-            raise KeyringInitializationError("Failed to open standard pipes for gnome-keyring-daemon --login.")
+            raise KeyringInitializationError(
+                "Failed to open standard pipes for gnome-keyring-daemon --login."
+            )
 
         # Errata Patch #5: Write password bytes strictly WITHOUT trailing '\n' and close stdin (EOF)
         proc.stdin.write(raw_password.encode("utf-8"))
@@ -315,7 +336,9 @@ class KeyringProfileManager:
                 f"{stderr_bytes.decode('utf-8', errors='replace')}"
             )
 
-        return self._parse_keyring_env_output(stdout_bytes.decode("utf-8", errors="replace"))
+        return self._parse_keyring_env_output(
+            stdout_bytes.decode("utf-8", errors="replace")
+        )
 
     async def _run_keyring_start_phase(self, env: dict[str, str]) -> dict[str, str]:
         proc = await asyncio.create_subprocess_exec(
@@ -345,7 +368,9 @@ class KeyringProfileManager:
                 f"{stderr_bytes.decode('utf-8', errors='replace')}"
             )
 
-        return self._parse_keyring_env_output(stdout_bytes.decode("utf-8", errors="replace"))
+        return self._parse_keyring_env_output(
+            stdout_bytes.decode("utf-8", errors="replace")
+        )
 
     @staticmethod
     def _parse_keyring_env_output(output: str) -> dict[str, str]:
@@ -421,7 +446,9 @@ class KeyringProfileManager:
         secret = stdout_bytes.decode("utf-8", errors="replace")
         return secret if secret else None
 
-    async def _store_gemini_secret(self, env: dict[str, str], secret_value: str) -> None:
+    async def _store_gemini_secret(
+        self, env: dict[str, str], secret_value: str
+    ) -> None:
         proc = await asyncio.create_subprocess_exec(
             "secret-tool",
             "store",
@@ -436,7 +463,9 @@ class KeyringProfileManager:
             env=env,
         )
         if proc.stdin is None:
-            raise KeyringInitializationError("Failed to open stdin for secret-tool store.")
+            raise KeyringInitializationError(
+                "Failed to open stdin for secret-tool store."
+            )
         proc.stdin.write(secret_value.encode("utf-8"))
         await proc.stdin.drain()
         proc.stdin.close()
@@ -494,7 +523,9 @@ class KeyringProfileManager:
                         "utf-8", errors="ignore"
                     )
                 except ValueError as exc:
-                    raise AccountAuthFlowError(f"Invalid JWT base64 segment: {exc}") from exc
+                    raise AccountAuthFlowError(
+                        f"Invalid JWT base64 segment: {exc}"
+                    ) from exc
                 jwt_match = _EMAIL_EXTRACT_RE.search(decoded)
                 if jwt_match is not None:
                     await self._account_repo.update_email_label(
@@ -544,7 +575,12 @@ class KeyringProfileManager:
         """Verifies if the account's isolated .gemini directory holds an antigravity-oauth-token."""
         home_str = env["HOME"] if "HOME" in env else ""
         if home_str:
-            token_file = Path(home_str) / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+            token_file = (
+                Path(home_str)
+                / ".gemini"
+                / "antigravity-cli"
+                / "antigravity-oauth-token"
+            )
             if token_file.is_file() and token_file.stat().st_size > 0:
                 return True
         return await self._has_gemini_secret(env)
@@ -553,7 +589,11 @@ class KeyringProfileManager:
         """Purges the account's antigravity-oauth-token, state files, keyring secret, and stops its D-Bus daemon."""
         env = await self.ensure_account_bus(account)
         acc_cli = self._account_cli_dir(Path(account.xdg_data_dir))
-        for fname in ("antigravity-oauth-token", "jetski_state.pbtxt", "jetbox_summaries_proto.pb"):
+        for fname in (
+            "antigravity-oauth-token",
+            "jetski_state.pbtxt",
+            "jetbox_summaries_proto.pb",
+        ):
             fpath = acc_cli / fname
             if fpath.is_file():
                 fpath.unlink()
@@ -594,13 +634,19 @@ class KeyringProfileManager:
         self, account: GoogleAccount, oauth_env: dict[str, str], workspace_cwd: str
     ) -> None:
         acc_cli = self._account_cli_dir(Path(account.xdg_data_dir))
-        for fname in ("antigravity-oauth-token", "jetski_state.pbtxt", "jetbox_summaries_proto.pb"):
+        for fname in (
+            "antigravity-oauth-token",
+            "jetski_state.pbtxt",
+            "jetbox_summaries_proto.pb",
+        ):
             fpath = acc_cli / fname
             if fpath.is_file():
                 fpath.unlink()
         await self._clear_gemini_secret(oauth_env)
 
-    async def start_remote_oauth_flow(self, account: GoogleAccount) -> PendingOAuthSession:
+    async def start_remote_oauth_flow(
+        self, account: GoogleAccount
+    ) -> PendingOAuthSession:
         env = await self.ensure_account_bus(account)
         oauth_env = {
             **env,
@@ -616,7 +662,9 @@ class KeyringProfileManager:
         workspace_cwd = str(self._cfg.paths.workspaces_root_dir)
         Path(workspace_cwd).mkdir(parents=True, exist_ok=True)
 
-        await self._purge_existing_session_if_signed_in(account, oauth_env, workspace_cwd)
+        await self._purge_existing_session_if_signed_in(
+            account, oauth_env, workspace_cwd
+        )
 
         master_fd, slave_fd = self._spawn_agy_pty_process()
         try:
@@ -804,7 +852,7 @@ class KeyringProfileManager:
                         chunk = os.read(pending.pty_master_fd, chunk_size)
                         if chunk:
                             accumulated += chunk.decode("utf-8", errors="replace")
-                    except (BlockingIOError, OSError):
+                    except BlockingIOError, OSError:
                         pass
 
                     clean_text = _ANSI_ESCAPE_RE.sub("", accumulated)
@@ -899,7 +947,9 @@ class KeyringProfileManager:
         workspace_cwd = str(self._cfg.paths.workspaces_root_dir)
         Path(workspace_cwd).mkdir(parents=True, exist_ok=True)
 
-        await self._purge_existing_session_if_signed_in(account, oauth_env, workspace_cwd)
+        await self._purge_existing_session_if_signed_in(
+            account, oauth_env, workspace_cwd
+        )
 
         master_fd, slave_fd = self._spawn_agy_pty_process()
         proc = await asyncio.create_subprocess_exec(
@@ -921,7 +971,9 @@ class KeyringProfileManager:
         sent_tui_logout = False
         chunk_size = self._cfg.runtime.oauth_stdout_chunk_bytes
         poll_interval = self._cfg.runtime.dbus_socket_poll_interval_sec
-        max_ticks = max(100, int(self._cfg.runtime.command_exec_timeout_sec / poll_interval))
+        max_ticks = max(
+            100, int(self._cfg.runtime.command_exec_timeout_sec / poll_interval)
+        )
 
         for _ in range(max_ticks):
             chunk = b""
@@ -985,8 +1037,7 @@ class KeyringProfileManager:
 
             # Step 16..17 in recording: Select login method: > 1. Google OAuth -> Enter (\r)
             if not sent_method_enter and (
-                "Select login method" in clean_text
-                or "1. Google OAuth" in clean_text
+                "Select login method" in clean_text or "1. Google OAuth" in clean_text
             ):
                 await asyncio.sleep(0.25)
                 os.write(master_fd, b"\r")
@@ -1020,7 +1071,10 @@ class KeyringProfileManager:
 
         self._cleanup_oauth_pty(proc, master_fd)
         summary = self._sanitize_tui_output(accumulated)
-        return None, f"Не удалось получить ссылку OAuth из agy PTY. Вывод: {summary or '<пусто>'}"
+        return (
+            None,
+            f"Не удалось получить ссылку OAuth из agy PTY. Вывод: {summary or '<пусто>'}",
+        )
 
     async def try_complete_remote_oauth_flow(
         self, pending: PendingOAuthSession, verification_code: str
@@ -1033,7 +1087,9 @@ class KeyringProfileManager:
         env = await self.ensure_account_bus(pending.account)
         poll_interval = self._cfg.runtime.dbus_socket_poll_interval_sec
         chunk_size = self._cfg.runtime.oauth_stdout_chunk_bytes
-        max_ticks = max(100, int(self._cfg.runtime.command_exec_timeout_sec / poll_interval))
+        max_ticks = max(
+            100, int(self._cfg.runtime.command_exec_timeout_sec / poll_interval)
+        )
         accumulated = ""
         authenticated = False
         sent_post_theme = False

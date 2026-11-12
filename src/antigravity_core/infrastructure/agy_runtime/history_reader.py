@@ -31,9 +31,15 @@ class AgyHistoryReader:
 
     @property
     def _db_path(self) -> Path:
-        return self._cfg.paths.agy_home_dir / "antigravity-cli" / "conversation_summaries.db"
+        return (
+            self._cfg.paths.agy_home_dir
+            / "antigravity-cli"
+            / "conversation_summaries.db"
+        )
 
-    def get_conversation_summary(self, conversation_id: UUID) -> AgyConversationSummary | None:
+    def get_conversation_summary(
+        self, conversation_id: UUID
+    ) -> AgyConversationSummary | None:
         if not self._db_path.is_file():
             return None
 
@@ -64,7 +70,9 @@ class AgyHistoryReader:
             return None
         return self._map_row(row)
 
-    def list_recent_root_conversations(self, limit: int) -> list[AgyConversationSummary]:
+    def list_recent_root_conversations(
+        self, limit: int
+    ) -> list[AgyConversationSummary]:
         if not self._db_path.is_file():
             return []
 
@@ -106,9 +114,16 @@ class AgyHistoryReader:
         raw_uris = str(row[6]) if row[6] is not None else "[]"
         try:
             parsed_uris = json.loads(raw_uris)
-            uris = tuple(str(u) for u in parsed_uris) if isinstance(parsed_uris, list) else ()
+            uris = (
+                tuple(str(u) for u in parsed_uris)
+                if isinstance(parsed_uris, list)
+                else ()
+            )
         except json.JSONDecodeError as exc:
-            logger.warning("Malformed workspace_uris JSON in conversation_summaries.db", error=str(exc))
+            logger.warning(
+                "Malformed workspace_uris JSON in conversation_summaries.db",
+                error=str(exc),
+            )
             uris = ()
 
         return AgyConversationSummary(
@@ -121,7 +136,9 @@ class AgyHistoryReader:
             workspace_uris=uris,
         )
 
-    def read_transcript_tail(self, conversation_id: UUID, max_lines: int) -> list[dict[str, object]]:
+    def read_transcript_tail(
+        self, conversation_id: UUID, max_lines: int
+    ) -> list[dict[str, object]]:
         transcript_path = (
             self._cfg.paths.agy_home_dir
             / "antigravity-cli"
@@ -135,7 +152,9 @@ class AgyHistoryReader:
             return []
 
         try:
-            lines = transcript_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            lines = transcript_path.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
         except OSError as exc:
             raise AgyProcessError(
                 f"Failed to read transcript file {transcript_path}: {exc}"

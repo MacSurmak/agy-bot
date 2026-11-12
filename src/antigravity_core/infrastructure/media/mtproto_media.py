@@ -7,7 +7,10 @@ import structlog
 from telethon import TelegramClient
 from telethon.errors import RPCError
 from telethon.tl.custom import Message
-from telethon.tl.functions.messages import CreateForumTopicRequest, EditForumTopicRequest
+from telethon.tl.functions.messages import (
+    CreateForumTopicRequest,
+    EditForumTopicRequest,
+)
 from telethon.tl.types import Updates
 
 from antigravity_core.config.static_config import StaticConfig
@@ -82,7 +85,9 @@ class MediaService:
                         )
                     )
                 except RPCError as exc:
-                    logger.debug("Progress edit skipped by Telegram RPC", error=str(exc))
+                    logger.debug(
+                        "Progress edit skipped by Telegram RPC", error=str(exc)
+                    )
 
         try:
             downloaded = await self._client.download_media(
@@ -96,7 +101,10 @@ class MediaService:
                     lex.media_download_failed.format(file_name=safe_name, error=exc)
                 )
             except RPCError as edit_exc:
-                logger.warning("Failed to update download error status message", error=str(edit_exc))
+                logger.warning(
+                    "Failed to update download error status message",
+                    error=str(edit_exc),
+                )
             raise MediaTransferError(
                 f"Failed to download media from message {message.id}: {exc}"
             ) from exc
@@ -107,7 +115,9 @@ class MediaService:
             logger.debug("Could not delete download status message", error=str(exc))
 
         if downloaded is None:
-            raise MediaTransferError(f"Telethon download_media returned None for message {message.id}.")
+            raise MediaTransferError(
+                f"Telethon download_media returned None for message {message.id}."
+            )
 
         resolved_path = Path(str(downloaded)).resolve()
         logger.info(
@@ -126,7 +136,9 @@ class MediaService:
     ) -> dict[str, Any]:
         resolved = Path(file_path_str).expanduser().resolve()
         if not resolved.is_file():
-            raise MediaTransferError(f"File does not exist or is not a regular file: {resolved}")
+            raise MediaTransferError(
+                f"File does not exist or is not a regular file: {resolved}"
+            )
 
         size_bytes = resolved.stat().st_size
         settings = await self._settings_repo.load_settings()
@@ -161,7 +173,9 @@ class MediaService:
                         )
                     )
                 except RPCError as exc:
-                    logger.debug("Upload progress edit skipped by Telegram RPC", error=str(exc))
+                    logger.debug(
+                        "Upload progress edit skipped by Telegram RPC", error=str(exc)
+                    )
 
         try:
             await self._client.send_file(
@@ -178,7 +192,9 @@ class MediaService:
                     lex.media_upload_failed.format(file_name=resolved.name, error=exc)
                 )
             except RPCError as edit_exc:
-                logger.warning("Failed to update upload error status message", error=str(edit_exc))
+                logger.warning(
+                    "Failed to update upload error status message", error=str(edit_exc)
+                )
             raise MediaTransferError(
                 f"Failed to send file '{resolved}' to topic {topic_id}: {exc}"
             ) from exc

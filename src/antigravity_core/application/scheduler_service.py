@@ -45,12 +45,17 @@ class TemporalSchedulerService:
             if task.schedule_kind == ScheduleKind.ONE_SHOT:
                 run_dt = self._parse_iso_datetime(task.trigger_spec)
                 if run_dt <= now:
-                    await self._schedule_repo.mark_task_executed(task.id, deactivate=True)
+                    await self._schedule_repo.mark_task_executed(
+                        task.id, deactivate=True
+                    )
                     continue
             self._register_apscheduler_job(task)
             hydrated += 1
 
-        logger.info("Started TemporalScheduler and hydrated tasks from PostgreSQL 18", count=hydrated)
+        logger.info(
+            "Started TemporalScheduler and hydrated tasks from PostgreSQL 18",
+            count=hydrated,
+        )
 
     async def stop(self) -> None:
         if self._scheduler.running:
@@ -116,7 +121,9 @@ class TemporalSchedulerService:
             try:
                 return CronTrigger.from_crontab(spec.strip(), timezone=UTC)
             except ValueError as exc:
-                raise ConfigurationError(f"Invalid 5-field cron expression '{spec}': {exc}") from exc
+                raise ConfigurationError(
+                    f"Invalid 5-field cron expression '{spec}': {exc}"
+                ) from exc
         raise ConfigurationError(f"Unsupported schedule_kind: {kind}")
 
     @staticmethod

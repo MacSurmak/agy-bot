@@ -53,9 +53,7 @@ _AGY_CMD_EXIT_NONZERO_RE = re.compile(
 _BRAIN_PATH_RE = re.compile(
     r"/home/[^/\s'\"]+/\.\w+/antigravity-cli/brain/[0-9a-fA-F\-]{36}/"
 )
-_REMOTES_PATH_RE = re.compile(
-    r"/home/[^/\s'\"]+/[^/\s'\"]+/runtime_data/remotes/"
-)
+_REMOTES_PATH_RE = re.compile(r"/home/[^/\s'\"]+/[^/\s'\"]+/runtime_data/remotes/")
 _HOME_PATH_RE = re.compile(r"/home/[^/\s'\"]+/")
 _SINGLE_PARAM_PREFIX_RE = re.compile(
     r"^(?:CommandLine|Path|TargetFile|AbsolutePath|DirectoryPath|SearchPath|file_path):\s*"
@@ -75,7 +73,9 @@ _QUOTE_LINE_RE = re.compile(r"^\s*>\s?(.*)$")
 _TABLE_ROW_RE = re.compile(r"^\s*\|.+\|\s*$")
 _TABLE_SEP_CELL_RE = re.compile(r"^:?-{2,}:?$")
 _CELL_MD_STRIP_RE = re.compile(r"(\*\*|__|~~|`|\*(?=\S)|(?<=\S)\*)")
-_SNAKE_CASE_UNDERSCORE_RE = re.compile(r"(?<=[a-zA-Z0-9а-яА-ЯёЁ])_(?=[a-zA-Z0-9а-яА-ЯёЁ])")
+_SNAKE_CASE_UNDERSCORE_RE = re.compile(
+    r"(?<=[a-zA-Z0-9а-яА-ЯёЁ])_(?=[a-zA-Z0-9а-яА-ЯёЁ])"
+)
 _MAX_BOX_TABLE_WIDTH: int = 98
 
 _MD_QUOTE_START: str = "\x02"
@@ -219,7 +219,9 @@ def _compact_tool_output_head_tail(raw_output: str, lex: UiLexicon) -> str:
     if len(lines) > max_lines:
         head = "\n".join(lines[:_MAX_TOOL_OUTPUT_HEAD_LINES])
         tail = "\n".join(lines[-_MAX_TOOL_OUTPUT_TAIL_LINES:])
-        hidden_count = len(lines) - _MAX_TOOL_OUTPUT_HEAD_LINES - _MAX_TOOL_OUTPUT_TAIL_LINES
+        hidden_count = (
+            len(lines) - _MAX_TOOL_OUTPUT_HEAD_LINES - _MAX_TOOL_OUTPUT_TAIL_LINES
+        )
         marker = lex.trace_hidden_lines_marker.format(count=hidden_count)
         cleaned = f"{head}\n{marker}\n{tail}"
     else:
@@ -281,7 +283,9 @@ def _format_tool_blocks_untruncated(
     body_sections: list[str] = []
 
     if tool.parameters_text:
-        p_clean = _shorten_verbose_paths(_clean_binary_noise(tool.parameters_text))[:600]
+        p_clean = _shorten_verbose_paths(_clean_binary_noise(tool.parameters_text))[
+            :600
+        ]
         p_stripped = _SINGLE_PARAM_PREFIX_RE.sub("", p_clean).strip()
         # Omit parameters section if it is a single-line command/path already shown in the header
         is_redundant_param = (
@@ -603,8 +607,7 @@ def _format_markdown_table_block(table_lines: list[str]) -> list[str]:
         box_lines: list[str] = ["```", top_border]
         for row_idx, row in enumerate(normalized_rows):
             padded_cells = [
-                _pad_display_width(row[c_i], col_widths[c_i])
-                for c_i in range(num_cols)
+                _pad_display_width(row[c_i], col_widths[c_i]) for c_i in range(num_cols)
             ]
             box_lines.append("│ " + " │ ".join(padded_cells) + " │")
             if row_idx == 0 and len(normalized_rows) > 1:
@@ -623,7 +626,9 @@ def _format_markdown_table_block(table_lines: list[str]) -> list[str]:
         card_lines.append(f"▸ **{title_cell}{second_hdr}**")
         start_col = 2 if num_cols > 1 and row[1] else 1
         for c_i in range(start_col, num_cols):
-            col_name = headers[c_i] if c_i < len(headers) and headers[c_i] else f"#{c_i + 1}"
+            col_name = (
+                headers[c_i] if c_i < len(headers) and headers[c_i] else f"#{c_i + 1}"
+            )
             val = row[c_i] if row[c_i] else "—"
             card_lines.append(f"  • {col_name}: {val}")
     return card_lines
@@ -857,7 +862,11 @@ def render_Formatted_response_chunks(
             entities = entities[:94]
 
         if idx < total_chunks:
-            chunk_tpl = lex.response_chunk_bar if lex is not None else "📄 Часть {idx} из {total}"
+            chunk_tpl = (
+                lex.response_chunk_bar
+                if lex is not None
+                else "📄 Часть {idx} из {total}"
+            )
             bar_text = make_wide_single_line_bar(
                 chunk_tpl.format(idx=idx, total=total_chunks)
             )
@@ -951,7 +960,11 @@ def render_control_panel_dashboard(
                 )
             )
         else:
-            min_pct = acc.last_quota_json.get("min_remaining_pct", "?") if acc.last_quota_json else "?"
+            min_pct = (
+                acc.last_quota_json.get("min_remaining_pct", "?")
+                if acc.last_quota_json
+                else "?"
+            )
             short_q = lex.dashboard_account_quota_probed.format(min_pct=min_pct)
             lines.append(
                 lex.dashboard_account_item.format(
