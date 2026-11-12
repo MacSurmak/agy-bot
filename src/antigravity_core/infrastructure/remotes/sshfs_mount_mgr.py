@@ -401,7 +401,7 @@ class RemoteMountManager:
 
     async def _test_batch_key_auth(
         self, resolved_target: str, port: int, jump_host: str
-    ) -> bool:
+    ) -> tuple[bool, str]:
         jump_args = ["-J", jump_host] if jump_host else []
         proc = await asyncio.create_subprocess_exec(
             "/usr/bin/ssh",
@@ -421,8 +421,9 @@ class RemoteMountManager:
             stderr=asyncio.subprocess.PIPE,
             env=self._internal_ssh_env(),
         )
-        await proc.communicate()
-        return proc.returncode == 0
+        _, stderr_bytes = await proc.communicate()
+        stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+        return proc.returncode == 0, stderr_text
 
     async def _provision_key_with_password(
         self, resolved_target: str, port: int, password: str, jump_host: str
@@ -567,7 +568,9 @@ class RemoteMountManager:
                         key_provisioned=matched.key_provisioned,
                     )
 
-            key_ok = await self._test_batch_key_auth(resolved_target, port, clean_jump)
+            key_ok, ssh_err = await self._test_batch_key_auth(
+                resolved_target, port, clean_jump
+            )
             if key_ok:
                 if (
                     cred is not None
@@ -576,6 +579,21 @@ class RemoteMountManager:
                 ):
                     cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
                 return resolved_target, cred
+
+            lower_err = ssh_err.lower()
+            if (
+                "could not resolve hostname" in lower_err
+                or "name or service not known" in lower_err
+                or "no route to host" in lower_err
+                or "connection timed out" in lower_err
+                or "network is unreachable" in lower_err
+            ):
+                raise RemoteMountError(
+                    f"Host '{resolved_target}' is unreachable directly ({ssh_err}). "
+                    f"If '{host_part}' is an internal LAN/cluster node behind a gateway, "
+                    f"you MUST call mcp:telegram-core:register_remote_host(alias='{host_part}', "
+                    f"hostname_or_ip='<ip>', ssh_user='{ssh_user}', jump_host='user@<gateway>') first!"
+                )
 
             if cred is not None and self._vault is not None:
                 saved_pass = self._vault.decrypt_text(cred.encrypted_password)

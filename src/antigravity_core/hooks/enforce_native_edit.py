@@ -48,6 +48,7 @@ _ALLOWED_LOCAL_WRITE_PREFIXES: Final[tuple[str, ...]] = (
 
 _ALLOWED_LOCAL_READ_ONLY_SEGMENTS: Final[tuple[str, ...]] = (
     "/.gemini/antigravity-cli/mcp/",
+    "/.system_generated/tasks/",
     "/.gemini/config/rules/",
     "/.gemini/config/skills/",
     "/.gemini/AGENTS.md",
@@ -84,7 +85,7 @@ def _ipc_call(method: str, params: dict[str, str | int | bool]) -> tuple[bool, s
     raw_req = (json.dumps(envelope, ensure_ascii=False) + "\n").encode("utf-8")
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        sock.settimeout(305.0)
+        sock.settimeout(960.0)
         sock.connect(socket_path)
         sock.sendall(raw_req)
 

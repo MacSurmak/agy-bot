@@ -3,7 +3,7 @@
     "telegram-core": {
       "command": "/srv/antigravity/venv/bin/python",
       "args": ["-m", "antigravity_core.mcp.stdio_proxy"],
-      "timeoutSeconds": 600
+      "timeoutSeconds": 960
     }
   }
 }

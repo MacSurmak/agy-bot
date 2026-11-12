@@ -8,7 +8,7 @@
           {
             "type": "command",
             "command": "/srv/antigravity/venv/bin/python -m antigravity_core.hooks.enforce_native_edit",
-            "timeout": 300
+            "timeout": 960
           }
         ]
       }
@@ -20,7 +20,7 @@
           {
             "type": "command",
             "command": "/srv/antigravity/venv/bin/python -m antigravity_core.hooks.enforce_native_edit --post",
-            "timeout": 300
+            "timeout": 960
           }
         ]
       }

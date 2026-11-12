@@ -43,7 +43,7 @@ def _ipc_call(
     raw_req = (json.dumps(envelope, ensure_ascii=False) + "\n").encode("utf-8")
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        sock.settimeout(305.0)
+        sock.settimeout(960.0)
         sock.connect(socket_path)
         sock.sendall(raw_req)
 
