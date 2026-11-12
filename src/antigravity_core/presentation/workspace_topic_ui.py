@@ -348,6 +348,14 @@ class WorkspaceTopicUI:
             await self._lifecycle.archive_topic(topic_id)
             return True
 
+        if cmd == "/rename":
+            parts = raw_text.split(maxsplit=1)
+            if len(parts) == 2 and parts[1].strip():
+                new_title = parts[1].strip()
+                await self._lifecycle.rename_topic(topic_id, new_title)
+                await self.refresh_pinned_card(topic_id)
+                return True
+
         return False
 
     async def execute_batched_prompt(
@@ -632,29 +640,19 @@ class WorkspaceTopicUI:
     ) -> None:
         if not topic.title.startswith(("💬", "Рабочий топик #", "Workspace #")):
             return
-        try:
-            summary = self._history_reader.get_conversation_summary(conversation_id)
-        except AgyProcessError:
-            return
+        summary = self._history_reader.get_conversation_summary(conversation_id)
         if (
             summary is not None
             and summary.title.strip()
             and summary.title != "Untitled Session"
         ):
-            new_title = summary.title.strip()
-            try:
-                await self._lifecycle.rename_topic(topic.topic_id, new_title)
-                logger.info(
-                    "Auto-renamed topic title from agy conversation summary",
-                    topic_id=topic.topic_id,
-                    new_title=new_title,
-                )
-            except RPCError as exc:
-                logger.debug(
-                    "Could not auto-rename forum topic",
-                    topic_id=topic.topic_id,
-                    error=str(exc),
-                )
+            new_title = summary.title.strip()[: self._cfg.limits.topic_title_max_chars]
+            await self._lifecycle.rename_topic(topic.topic_id, new_title)
+            logger.info(
+                "Auto-renamed topic title from agy conversation summary",
+                topic_id=topic.topic_id,
+                new_title=new_title,
+            )
 
     async def _run_interactive_wake_turn(
         self,
@@ -664,7 +662,15 @@ class WorkspaceTopicUI:
         conversation_id: UUID | None,
     ) -> None:
         """Executes an automated wake-up turn (timer or sensor) with full live tool trace in the topic."""
-        topic = await self.ensure_topic_registered(topic_id)
+        existing_topic = await self._topic_repo.get_topic(topic_id)
+        if existing_topic is None or existing_topic.status.value == "ARCHIVED":
+            logger.warning(
+                "Skipping wake turn for missing or archived topic",
+                topic_id=topic_id,
+            )
+            return
+
+        topic = existing_topic
         account = await self._account_repo.get_by_id(topic.assigned_account_id)
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)

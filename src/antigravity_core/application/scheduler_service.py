@@ -156,6 +156,15 @@ class TemporalSchedulerService:
         if task is None or not task.is_active:
             return
 
+        if task.topic_id <= 1:
+            logger.warning(
+                "Suppressing scheduled task targeted at root General topic",
+                task_id=str(task.id),
+                topic_id=task.topic_id,
+            )
+            await self._schedule_repo.mark_task_executed(task.id, deactivate=True)
+            return
+
         now_iso = datetime.now(tz=UTC).isoformat()
         is_one_shot = task.schedule_kind == ScheduleKind.ONE_SHOT
         wake_prompt = (
