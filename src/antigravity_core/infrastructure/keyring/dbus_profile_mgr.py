@@ -171,6 +171,24 @@ class KeyringProfileManager:
             default_ptr.write_text("login\n", encoding="utf-8")
             os.chmod(default_ptr, 0o600)
 
+        login_keyring_file = keyrings_dir / "login.keyring"
+        keyring_header = (
+            "[keyring]\n"
+            "display-name=login\n"
+            "ctime=0\n"
+            "mtime=0\n"
+            "lock-on-idle=false\n"
+            "lock-after=false\n"
+        )
+        needs_keyring_init = not login_keyring_file.is_file()
+        if not needs_keyring_init:
+            raw_kr = login_keyring_file.read_bytes()
+            if not raw_kr.startswith(b"[keyring]"):
+                needs_keyring_init = True
+        if needs_keyring_init:
+            login_keyring_file.write_text(keyring_header, encoding="utf-8")
+            os.chmod(login_keyring_file, 0o600)
+
         socket_path = Path(account.dbus_socket_path)
         socket_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -198,13 +216,9 @@ class KeyringProfileManager:
             "DBUS_SESSION_BUS_ADDRESS": f"unix:path={socket_path}",
         }
 
-        raw_password = self._vault.decrypt_text(account.encrypted_keyring_pass)
-
-        login_env_vars = await self._run_keyring_login_phase(base_env, raw_password)
-        profile_env = {**base_env, **login_env_vars}
-
-        start_env_vars = await self._run_keyring_start_phase(profile_env)
-        profile_env.update(start_env_vars)
+        _ = self._vault.decrypt_text(account.encrypted_keyring_pass)
+        start_env_vars = await self._run_keyring_start_phase(base_env)
+        profile_env = {**base_env, **start_env_vars}
 
         if not await self._verify_secret_service(profile_env):
             raise KeyringInitializationError(
@@ -321,7 +335,7 @@ class KeyringProfileManager:
     async def _run_keyring_start_phase(self, env: dict[str, str]) -> dict[str, str]:
         proc = await asyncio.create_subprocess_exec(
             "gnome-keyring-daemon",
-            "--start",
+            "--daemonize",
             "--components=secrets",
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
