@@ -168,32 +168,17 @@ class AgyHistoryReader:
             )
             uris = ()
 
-        raw_title = str(row[2] or "").strip()
-        raw_preview = str(row[3] or "").strip()
-
-        # If agy CLI omitted title in SQLite, resolve from native brain task.md or first preview line
-        resolved_title = raw_title
-        if not resolved_title or resolved_title == "Untitled Session":
-            brain_dir = Path(__file__).resolve().parents[4] / ".gemini" / "antigravity-cli" / "brain" / str(conv_uuid)
-            task_file = brain_dir / "task.md"
-            if task_file.is_file():
-                first_task_line = task_file.read_text(encoding="utf-8", errors="replace").splitlines()[0].strip()
-                cleaned_task = first_task_line.lstrip("#").replace("Task:", "").strip()
-                if cleaned_task:
-                    resolved_title = cleaned_task
-            if not resolved_title and raw_preview:
-                resolved_title = raw_preview.splitlines()[0][:60].strip()
-
-        if not resolved_title:
-            resolved_title = "Untitled Session"
+        raw_title = str(row[2] if row[2] is not None else "").strip()
+        raw_preview = str(row[3] if row[3] is not None else "").strip()
+        resolved_title = raw_title if raw_title else "Untitled Session"
 
         return AgyConversationSummary(
             conversation_id=conv_uuid,
-            parent_conversation_id=str(row[1] or ""),
+            parent_conversation_id=str(row[1] if row[1] is not None else ""),
             title=resolved_title,
             preview=raw_preview,
-            step_count=int(str(row[4] or 0)),
-            last_modified_time=str(row[5] or ""),
+            step_count=int(str(row[4] if row[4] is not None else 0)),
+            last_modified_time=str(row[5] if row[5] is not None else ""),
             workspace_uris=uris,
         )
 

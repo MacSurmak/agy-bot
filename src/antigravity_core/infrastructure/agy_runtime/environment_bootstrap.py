@@ -113,6 +113,7 @@ class AgyEnvironmentBootstrapper:
             "- `mcp_telegram-core_schedule_task` / `mcp_telegram-core_list_scheduled_tasks` / `mcp_telegram-core_cancel_scheduled_task`\n"
             "- `mcp_telegram-core_create_sensor` / `mcp_telegram-core_list_sensors` / `mcp_telegram-core_cancel_sensor`\n"
             "- `mcp_telegram-core_create_workspace_topic`\n"
+            "- `mcp_telegram-core_rename_current_topic` (call on the first turn of a new topic to set a concise 3-5 word title summarizing the task in the user's language, or when asked to rename)\n"
             "- `mcp_telegram-core_get_bot_ssh_public_key`\n"
         )
         root_agents.write_text(content, encoding="utf-8")
@@ -220,6 +221,7 @@ class AgyEnvironmentBootstrapper:
                 "list_sensors",
                 "cancel_sensor",
                 "create_workspace_topic",
+                "rename_current_topic",
                 "get_bot_ssh_public_key",
             )
         }

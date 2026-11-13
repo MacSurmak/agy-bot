@@ -13,6 +13,7 @@ type IpcPayload = dict[str, IpcScalar | list[dict[str, IpcScalar]]]
 
 _SERVER_INSTRUCTIONS: Final[str] = (
     "Native control plane for Antigravity Telegram Core. "
+    "On the first turn of a new conversation, call rename_current_topic with a concise 3-5 word title in the user's language. "
     "Use register_remote_host to onboard SSH servers (with jump_host for internal cluster nodes), "
     "update_host_knowledge to record infrastructure notes in ~/.gemini/config/rules/infra-<host>.md, "
     "send_file_to_telegram to deliver local or remote TRAMP (/ssh:user@alias:/abs/path) files to Telegram, "
@@ -366,6 +367,24 @@ async def create_workspace_topic(
         {
             "title": title,
             "execution_mode": execution_mode,
+        },
+    )
+
+
+@mcp.tool()
+async def rename_current_topic(
+    title: Annotated[
+        str,
+        Field(
+            description="Concise 3-5 word topic title in the conversation language summarizing the task (e.g. 'Аудит кластера Slurm' or 'HostVDS Sniper Setup'). Never paste the raw user prompt."
+        ),
+    ],
+) -> IpcPayload:
+    """Set or update the title of the current Telegram Forum Topic. Call this on the first turn of a new conversation or when the user asks to rename the topic."""
+    return await _call_bot_ipc(
+        "rename_current_topic",
+        {
+            "title": title,
         },
     )
 

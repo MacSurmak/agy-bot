@@ -491,4 +491,18 @@ class CoreIpcServer:
                 "execution_mode": updated.execution_mode.value,
             }
 
+        if method == "rename_current_topic":
+            new_title = str(params["title"]).strip()
+            if not new_title:
+                raise ValueError("Topic title cannot be empty.")
+            renamed = await self._topic_lifecycle.rename_topic(
+                topic_id=topic_id,
+                new_title=new_title,
+            )
+            return {
+                "topic_id": renamed.topic_id,
+                "title": renamed.title,
+                "status": "renamed",
+            }
+
         raise ValueError(f"Unsupported IPC method: '{method}'")

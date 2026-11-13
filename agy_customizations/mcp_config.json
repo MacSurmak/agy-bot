@@ -15,6 +15,7 @@
         "list_sensors": { "eager": true },
         "cancel_sensor": { "eager": true },
         "create_workspace_topic": { "eager": true },
+        "rename_current_topic": { "eager": true },
         "get_bot_ssh_public_key": { "eager": true }
       }
     }

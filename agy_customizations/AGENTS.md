@@ -30,6 +30,7 @@ All tools from MCP server `telegram-core` are pre-registered with `"eager": true
 - `mcp_telegram-core_create_sensor` / `mcp_telegram-core_list_sensors` / `mcp_telegram-core_cancel_sensor` — manage zero-token background event watchers and reflexes.
 - `mcp_telegram-core_schedule_task` / `mcp_telegram-core_list_scheduled_tasks` / `mcp_telegram-core_cancel_scheduled_task` — manage persistent PostgreSQL timers (`ONE_SHOT` or `CRON`).
 - `mcp_telegram-core_create_workspace_topic` — create a new Forum Topic in Telegram with an isolated scratch workspace.
+- `mcp_telegram-core_rename_current_topic` — set or update the current Telegram Forum Topic title (call on the first turn of a new conversation with a concise 3–5 word title in the user's language, or whenever asked to rename the topic).
 - `mcp_telegram-core_get_bot_ssh_public_key` — retrieve the bot's Ed25519 public SSH key.
 
 ## 3. Self-Updating Infrastructure Memory (`~/.gemini/config/rules/infra-*.md`)
