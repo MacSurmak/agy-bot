@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import html
 from pathlib import Path
 import re
-from typing import Any
+from typing import Final
 import unicodedata
 from telethon.extensions import markdown
 from telethon.helpers import add_surrogate, del_surrogate
@@ -179,7 +179,7 @@ def render_topic_header_card(
         else lex.topic_card_worker_cold.format(ttl_min=ttl_min)
     )
 
-    return lex.topic_card_template.format(
+    rendered = lex.topic_card_template.format(
         title=topic.title,
         session_str=session_str,
         workspace_path=topic.workspace_path,
@@ -191,6 +191,10 @@ def render_topic_header_card(
         sudo_str=sudo_str,
         worker_str=worker_str,
     )
+    card_lines = rendered.splitlines()
+    if card_lines:
+        card_lines[0] = pad_rich_width(card_lines[0], _UNIFORM_BUBBLE_COLS)
+    return "\n".join(card_lines)
 
 
 def render_new_session_divider(lex: UiLexicon, topic: ForumTopic) -> str:
@@ -498,14 +502,31 @@ def build_final_execution_trace_pages(
     return _paginate_quote_blocks(lex, header, all_blocks)
 
 
+_COMPACT_BAR_WIDTH: Final[int] = 8
+_DEFAULT_SSH_PORT: Final[int] = 22
+_UNIFORM_BUBBLE_COLS: Final[int] = 86
+
+
+def pad_rich_width(line: str, target_cols: int) -> str:
+    """Pads a Markdown or text line with non-breaking spaces so Telegram Desktop expands the bubble uniformly."""
+    visible = len(line.replace("**", "").replace("`", "").replace("#", "").strip())
+    if visible >= target_cols:
+        return line
+    pad_count = target_cols - visible
+    return line + ("\u00a0" * pad_count) + "\u2060"
+
+
 def _format_trace_blocks_as_html(
     header_line: str,
     blocks: list[str],
     max_html_chars: int,
 ) -> str:
     """Renders an Execution Trace header and list of collapsible <details> blocks in Telegram Rich HTML."""
-    clean_header = html.escape(header_line.replace("**", "").replace("`", "").strip())
-    html_parts: list[str] = [f"<h3>{clean_header}</h3>"]
+    raw_clean = header_line.replace("**", "").replace("`", "").strip()
+    pad_count = max(0, _UNIFORM_BUBBLE_COLS - len(raw_clean))
+    pad_suffix = ("\u00a0" * pad_count) + "\u2060" if pad_count > 0 else ""
+    clean_header = html.escape(raw_clean)
+    html_parts: list[str] = [f"<p><b>{clean_header}</b>{pad_suffix}</p>"]
     curr_len = len(html_parts[0])
 
     for block in blocks:
@@ -598,8 +619,9 @@ def render_turn_footer(
         model_slug=model_slug,
         account_slug=account_slug,
     )
+    clean_stats = stats_single_line.replace("**", "").replace("`", "").strip()
     lines = [
-        stats_single_line.replace("**", "").replace("`", "").strip()
+        pad_rich_width(clean_stats, _UNIFORM_BUBBLE_COLS)
         if supports_native_rich_output()
         else make_wide_single_line_bar(stats_single_line)
     ]
@@ -982,24 +1004,60 @@ def render_Formatted_response_chunks(
     return rendered_pages
 
 
-def _group_account_quota_entries(
+def _classify_bucket_window_slot(
+    b_key: str, b_val: dict[str, int | float | str]
+) -> str:
+    raw_win = str(b_val["window"]).lower() if "window" in b_val else ""
+    raw_name = str(b_val["name"]).lower() if "name" in b_val else b_key.lower()
+    if "5h" in b_key or "5h" in raw_win or "five hour" in raw_name or "5-hour" in raw_name:
+        return "5h"
+    if "week" in b_key or "week" in raw_win or "weekly" in raw_name:
+        return "weekly"
+    return "other"
+
+
+def _format_compact_quota_cell(
+    b_val: dict[str, int | float | str], lex: UiLexicon
+) -> str:
+    raw_pct = b_val["remaining_pct"] if "remaining_pct" in b_val else 100
+    pct = int(raw_pct) if isinstance(raw_pct, int | float) else 100
+    raw_rst = str(b_val["reset_time"]) if "reset_time" in b_val else ""
+    rst = (
+        f" (↻ {raw_rst})"
+        if raw_rst and not raw_rst.startswith("20")
+        else _format_reset_countdown(raw_rst, lex)
+    )
+    return f"`{_render_mini_bar(pct, _COMPACT_BAR_WIDTH)} {pct}%`{rst}"
+
+
+def _build_account_quota_table_rows(
     quota_json: dict[str, int | float | str | list[int] | dict[str, dict[str, int | float | str]]] | None,
     lex: UiLexicon,
-) -> dict[str, list[str]]:
+) -> list[tuple[str, str, str]]:
     if not quota_json or "buckets" not in quota_json:
-        return {}
+        return []
     raw_buckets = quota_json["buckets"]
     if not isinstance(raw_buckets, dict) or not raw_buckets:
-        return {}
-    grouped_bars: dict[str, list[str]] = {}
+        return []
+
+    rows_by_group: dict[str, dict[str, str]] = {}
     for b_key, b_val in raw_buckets.items():
         if not isinstance(b_val, dict):
             continue
-        grp, formatted_bar = _format_dynamic_bucket_entry(b_key, b_val, lex)
-        if grp not in grouped_bars:
-            grouped_bars[grp] = []
-        grouped_bars[grp].append(formatted_bar)
-    return grouped_bars
+        grp, _ = _format_dynamic_bucket_entry(b_key, b_val, lex)
+        if grp not in rows_by_group:
+            rows_by_group[grp] = {"5h": "—", "weekly": "—"}
+        slot = _classify_bucket_window_slot(b_key, b_val)
+        cell_txt = _format_compact_quota_cell(b_val, lex)
+        if slot == "5h":
+            rows_by_group[grp]["5h"] = cell_txt
+        else:
+            rows_by_group[grp]["weekly"] = cell_txt
+
+    return [
+        (grp_name, slots["5h"], slots["weekly"])
+        for grp_name, slots in rows_by_group.items()
+    ]
 
 
 def _build_accounts_dashboard_lines(
@@ -1011,9 +1069,8 @@ def _build_accounts_dashboard_lines(
         lines.append(lex.dashboard_accounts_empty)
         return lines
 
-    lines.append(lex.dashboard_accounts_table_header)
     for acc in accounts:
-        default_badge = lex.dashboard_account_default_badge if acc.is_default else ""
+        default_badge = f" {lex.dashboard_account_default_badge}" if acc.is_default else ""
         status_badge = (
             lex.dashboard_account_enabled_icon
             if acc.is_enabled
@@ -1024,18 +1081,16 @@ def _build_accounts_dashboard_lines(
             if acc.encrypted_token_backup
             else lex.dashboard_account_backup_missing
         )
-        acc_cell = f"{status_badge} {default_badge} `{acc.email_label}`".strip()
-        grouped = _group_account_quota_entries(acc.last_quota_json, lex)
-        if not grouped:
-            lines.append(
-                f"| {acc_cell} | {backup_badge} | — | {lex.dashboard_account_quota_unprobed} |"
-            )
+        lines.append(
+            f"\n#### {status_badge}{default_badge} `{acc.email_label}` · {backup_badge}\n"
+        )
+        q_rows = _build_account_quota_table_rows(acc.last_quota_json, lex)
+        if not q_rows:
+            lines.append(f"- {lex.dashboard_account_quota_unprobed}")
             continue
-        for g_idx, (grp_name, bars) in enumerate(grouped.items()):
-            first_col = acc_cell if g_idx == 0 else "↳"
-            second_col = backup_badge if g_idx == 0 else ""
-            bars_cell = " · ".join(bars).replace("**", "")
-            lines.append(f"| {first_col} | {second_col} | {grp_name} | {bars_cell} |")
+        lines.append(lex.dashboard_accounts_table_header)
+        for grp_name, cell_5h, cell_wk in q_rows:
+            lines.append(f"| {grp_name} | {cell_5h} | {cell_wk} |")
     return lines
 
 
@@ -1056,8 +1111,9 @@ def _build_hosts_dashboard_lines(
             if mounted
             else lex.dashboard_host_unmounted_badge
         )
+        port_suffix = f":{h.ssh_port}" if h.ssh_port != _DEFAULT_SSH_PORT else ""
         lines.append(
-            f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}` | {m_badge} |"
+            f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}{port_suffix}` | {m_badge} |"
         )
     return lines
 
@@ -1076,9 +1132,12 @@ def render_control_panel_dashboard(
     warm_count = sum(1 for s in pool_snapshots if s.is_warm)
     running_count = sum(1 for s in pool_snapshots if s.is_running_turn)
 
-    lines: list[str] = [
-        lex.dashboard_header.format(warm_count=warm_count, running_count=running_count)
-    ]
+    hdr_lines = lex.dashboard_header.format(
+        warm_count=warm_count, running_count=running_count
+    ).splitlines()
+    if hdr_lines:
+        hdr_lines[0] = pad_rich_width(hdr_lines[0], _UNIFORM_BUBBLE_COLS)
+    lines: list[str] = hdr_lines
     accounts_by_slug = {a.slug: a.display_email for a in accounts}
     for snap in pool_snapshots:
         if snap.is_warm:

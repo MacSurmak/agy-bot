@@ -94,10 +94,10 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     dashboard_account_backup_ok="🔒 OK",
     dashboard_account_backup_missing="⚠️ No",
     dashboard_account_item="- {status_badge} `{email_label}` {default_badge} — {quota_str} · {backup_badge}",
-    dashboard_hosts_header="\n### 🖥 Remote Servers & SSH Keys\n",
+    dashboard_hosts_header="\n### 💻 Remote Servers & SSH Keys\n",
     dashboard_hosts_empty="- None saved yet (connect to any `user@host` in a workspace topic).",
-    dashboard_host_mounted_badge="🟢 Key + Sudo OK",
-    dashboard_host_unmounted_badge="🔑 Pending Auth",
+    dashboard_host_mounted_badge="🟢 OK",
+    dashboard_host_unmounted_badge="🔑 Auth",
     dashboard_host_item="- `{alias}` (`{ssh_user}@{hostname_or_ip}:{ssh_port}`) [{m_badge}]",
     dashboard_tasks_header="\n### ⏰ Active Scheduled Tasks: `{count}`\n",
     dashboard_task_item="- `{short_id}` [Topic `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
@@ -108,12 +108,12 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
         "- Language: `{ui_language}` · Model: `{default_model}` · Mode: `{default_execution_mode}`"
     ),
     dashboard_accounts_table_header=(
-        "| Account | Backup | Model Group | Quotas & Reset |\n"
-        "| :--- | :---: | :--- | :--- |"
+        "| Group | 5-Hour | Weekly |\n"
+        "| :--- | :--- | :--- |"
     ),
     dashboard_hosts_table_header=(
-        "| Server | SSH Address | Status |\n"
-        "| :--- | :--- | :--- |"
+        "| Server | SSH | Status |\n"
+        "| :--- | :--- | :---: |"
     ),
     quota_5h_label="**5h:** {bar}",
     quota_weekly_label="**Wk:** {bar}",

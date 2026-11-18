@@ -98,12 +98,12 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     dashboard_account_backup_ok="🔒 OK",
     dashboard_account_backup_missing="⚠️ Нет",
     dashboard_account_item="- {status_badge} `{email_label}` {default_badge} — {quota_str} · {backup_badge}",
-    dashboard_hosts_header="\n### 🖥 Удалённые серверы и ключи SSH\n",
+    dashboard_hosts_header="\n### 💻 Удалённые серверы и ключи SSH\n",
     dashboard_hosts_empty=(
         "- Пока нет сохранённых серверов (подключитесь к любому `user@host` в рабочем топике)."
     ),
-    dashboard_host_mounted_badge="🟢 Ключ + Sudo OK",
-    dashboard_host_unmounted_badge="🔑 Ожидает входа",
+    dashboard_host_mounted_badge="🟢 OK",
+    dashboard_host_unmounted_badge="🔑 Вход",
     dashboard_host_item="- `{alias}` (`{ssh_user}@{hostname_or_ip}:{ssh_port}`) [{m_badge}]",
     dashboard_tasks_header="\n### ⏰ Активные задачи планировщика: `{count}`\n",
     dashboard_task_item="- `{short_id}` [Топик `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
@@ -114,12 +114,12 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
         "- Язык: `{ui_language}` · Модель: `{default_model}` · Режим: `{default_execution_mode}`"
     ),
     dashboard_accounts_table_header=(
-        "| Аккаунт | Бэкап | Группа моделей | Лимиты и сброс |\n"
-        "| :--- | :---: | :--- | :--- |"
+        "| Группа | 5-часовой | Недельный |\n"
+        "| :--- | :--- | :--- |"
     ),
     dashboard_hosts_table_header=(
-        "| Сервер | SSH-адрес | Статус |\n"
-        "| :--- | :--- | :--- |"
+        "| Сервер | SSH | Статус |\n"
+        "| :--- | :--- | :---: |"
     ),
     quota_5h_label="**5ч:** {bar}",
     quota_weekly_label="**Нед:** {bar}",
