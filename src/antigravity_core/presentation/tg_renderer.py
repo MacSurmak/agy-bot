@@ -1,9 +1,15 @@
 """Unified Telegram Native RichMessage (MTProto Layer 227+) and Markdown Extraction Engine."""
 
+import random
+import re
 from typing import Final
 
-from telethon.tl.custom import Message
+from telethon import TelegramClient
+from telethon.tl import functions, types
+from telethon.tl.custom import Button, Message
+from telethon.tl.types import TypeMessageEntity
 
+type ButtonLayout = list[list[Button]] | None
 type TlTreeVal = (
     str
     | int
@@ -27,9 +33,69 @@ _TEXT_WRAP_TAGS: Final[tuple[tuple[str, str, str], ...]] = (
 )
 
 
+_MIN_SINGLE_LINE_FENCE_CHARS: Final[int] = 6
+_BRACKET_DISPLAY_MATH_RE: Final[re.Pattern[str]] = re.compile(
+    r"\\\[(.*?)\\\]", re.DOTALL
+)
+_BRACKET_INLINE_MATH_RE: Final[re.Pattern[str]] = re.compile(r"\\\((.*?)\\\)")
+_CURRENCY_DOLLAR_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?<!\\)\$(\d+(?:[.,]\d+)?)\b(?![^$\n]*\$)"
+)
+_BARE_LATEX_CMD_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?<!\\)(\\[A-Za-z]{2,}(?:\{[^{}\n]*\})?(?:\^[0-9A-Za-z]+|_[0-9A-Za-z]+)?)"
+)
+_INTRAWORD_UNDERSCORE_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?<=[0-9A-Za-zА-Яа-яЁё°])_(?=[0-9A-Za-zА-Яа-яЁё])"
+)
+_MATH_SPLIT_RE: Final[re.Pattern[str]] = re.compile(
+    r"(\$\$[^$]+\$\$|\$[^$\n]+\$)"
+)
+
+
+def _normalize_non_math_text(segment: str) -> str:
+    """Normalizes currency dollars, bare LaTeX commands, and snake_case underscores outside $...$."""
+    escaped_currency = _CURRENCY_DOLLAR_RE.sub(r"\\$\1", segment)
+    wrapped_bare_latex = _BARE_LATEX_CMD_RE.sub(r"$\1$", escaped_currency)
+    sub_parts = _MATH_SPLIT_RE.split(wrapped_bare_latex)
+    for idx in range(0, len(sub_parts), 2):
+        sub_parts[idx] = _INTRAWORD_UNDERSCORE_RE.sub(r"\_", sub_parts[idx])
+    return "".join(sub_parts)
+
+
 def normalize_latex_outside_code(line: str) -> str:
-    """Passthrough for native LaTeX / Markdown rendering without hardcoded symbol tables."""
-    return line
+    """Normalizes LaTeX delimiters and bare commands outside inline code spans without symbol dictionaries."""
+    converted = _BRACKET_DISPLAY_MATH_RE.sub(r"$$\1$$", line)
+    converted = _BRACKET_INLINE_MATH_RE.sub(r"$\1$", converted)
+    code_parts = converted.split("`")
+    for idx in range(0, len(code_parts), 2):
+        math_parts = _MATH_SPLIT_RE.split(code_parts[idx])
+        for m_idx in range(0, len(math_parts), 2):
+            math_parts[m_idx] = _normalize_non_math_text(math_parts[m_idx])
+        code_parts[idx] = "".join(math_parts)
+    return "`".join(code_parts)
+
+
+def prepare_rich_markdown(raw_md: str) -> str:
+    """Prepares multi-line GFM and LaTeX Markdown for Telegram Native RichMessage rendering."""
+    out_lines: list[str] = []
+    in_fence = False
+    for line in raw_md.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            is_single_line_fence = (
+                stripped != "```"
+                and stripped.endswith("```")
+                and len(stripped) > _MIN_SINGLE_LINE_FENCE_CHARS
+            )
+            if not is_single_line_fence:
+                in_fence = not in_fence
+            out_lines.append(line)
+            continue
+        if in_fence:
+            out_lines.append(line)
+            continue
+        out_lines.append(normalize_latex_outside_code(line))
+    return "\n".join(out_lines)
 
 
 def make_wide_single_line_bar(text: str) -> str:
@@ -243,3 +309,112 @@ def extract_incoming_message_markdown(message: Message) -> str:
     if standard_text and standard_text not in rich_md:
         return f"{standard_text}\n\n{rich_md}"
     return rich_md
+
+
+def supports_native_rich_output() -> bool:
+    """Returns True if the installed Telethon MTProto schema provides InputRichMessageMarkdown."""
+    return hasattr(types, "InputRichMessageMarkdown")
+
+
+def _extract_sent_message_from_updates(
+    client: TelegramClient,
+    updates_obj: types.TypeUpdates,
+    chat_id: int,
+) -> Message | None:
+    _ = (client, chat_id)
+    raw_updates = (
+        updates_obj.updates if hasattr(updates_obj, "updates") else []
+    )
+    for upd in raw_updates:
+        if hasattr(upd, "message"):
+            raw_m = upd.message
+            if isinstance(raw_m, types.Message):
+                return Message(
+                    id=raw_m.id,
+                    peer_id=raw_m.peer_id,
+                    date=raw_m.date,
+                    message=raw_m.message,
+                    out=True,
+                )
+    return None
+
+
+async def send_rich_or_standard_message(
+    client: TelegramClient,
+    chat_id: int,
+    markdown_text: str,
+    fallback_text: str,
+    fallback_entities: list[TypeMessageEntity] | None,
+    reply_to: int | None,
+    silent: bool,
+    buttons: ButtonLayout,
+) -> Message:
+    """Sends a native Telegram RichMessage when supported by MTProto layer, or standard formatted message."""
+    if supports_native_rich_output():
+        rich_cls = getattr(types, "InputRichMessageMarkdown")
+        prepared_md = prepare_rich_markdown(markdown_text)
+        peer = await client.get_input_entity(chat_id)
+        markup = client.build_reply_markup(buttons) if buttons is not None else None
+        reply_hdr = (
+            types.InputReplyToMessage(reply_to_msg_id=reply_to)
+            if reply_to is not None
+            else None
+        )
+        req = functions.messages.SendMessageRequest(
+            peer=peer,
+            message=fallback_text[:4000],
+            random_id=random.randrange(-2**63, 2**63),
+            reply_to=reply_hdr,
+            silent=silent,
+            reply_markup=markup,
+            entities=fallback_entities,
+            rich_message=rich_cls(text=prepared_md[:32768]),
+        )
+        updates_res = await client(req)
+        extracted = _extract_sent_message_from_updates(client, updates_res, chat_id)
+        if extracted is not None:
+            return extracted
+
+    return await client.send_message(
+        entity=chat_id,
+        message=fallback_text,
+        formatting_entities=fallback_entities,
+        reply_to=reply_to,
+        silent=silent,
+        buttons=buttons,
+    )
+
+
+async def edit_rich_or_standard_message(
+    client: TelegramClient,
+    chat_id: int,
+    message_id: int,
+    markdown_text: str,
+    fallback_text: str,
+    fallback_entities: list[TypeMessageEntity] | None,
+    buttons: ButtonLayout,
+) -> None:
+    """Edits an existing message in-place with native RichMessage when supported by MTProto layer."""
+    if supports_native_rich_output():
+        rich_cls = getattr(types, "InputRichMessageMarkdown")
+        prepared_md = prepare_rich_markdown(markdown_text)
+        peer = await client.get_input_entity(chat_id)
+        markup = client.build_reply_markup(buttons) if buttons is not None else None
+        req = functions.messages.EditMessageRequest(
+            peer=peer,
+            id=message_id,
+            message=fallback_text[:4000],
+            reply_markup=markup,
+            entities=fallback_entities,
+            rich_message=rich_cls(text=prepared_md[:32768]),
+        )
+        await client(req)
+        return
+
+    await client.edit_message(
+        entity=chat_id,
+        message=message_id,
+        text=fallback_text,
+        formatting_entities=fallback_entities,
+        buttons=buttons,
+    )

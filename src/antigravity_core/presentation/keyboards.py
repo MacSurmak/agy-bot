@@ -1,9 +1,10 @@
+from typing import Final
 from uuid import UUID
 
 from telethon.tl.custom import Button
 
 from antigravity_core.config.static_config import LimitsStaticConfig
-from antigravity_core.domain.enums import EffortLevel, ExecutionMode
+from antigravity_core.domain.enums import ExecutionMode
 from antigravity_core.domain.models import (
     EventSensor,
     ForumTopic,
@@ -13,7 +14,7 @@ from antigravity_core.domain.models import (
 )
 from antigravity_core.lexicon.schema import UiLexicon
 
-_ACCOUNTS_PAGE_SIZE: int = 5
+_ACCOUNTS_PAGE_SIZE: Final[int] = 5
 
 
 def build_control_panel_keyboard(lex: UiLexicon) -> list[list[Button]]:
@@ -87,7 +88,7 @@ def build_paginated_accounts_keyboard(
             )
         rows.append(nav_row)
 
-    rows.append([Button.inline("➕ Добавить аккаунт", b"cp:add_acc_oauth")])
+    rows.append([Button.inline(lex.btn_cp_add_account, b"cp:add_acc_oauth")])
     rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
     return rows
 
@@ -100,7 +101,7 @@ def build_single_account_manage_keyboard(
         rows.append(
             [
                 Button.inline(
-                    "⭐ Сделать основным",
+                    lex.btn_cp_make_default_acc,
                     f"cp:set_def_acc:{account.id}".encode("ascii"),
                 )
             ]
@@ -108,7 +109,7 @@ def build_single_account_manage_keyboard(
     rows.append(
         [
             Button.inline(
-                "🔄 Переавторизовать (OAuth)",
+                lex.btn_cp_reauth_oauth,
                 f"cp:oauth_start:{account.id}".encode("ascii"),
             )
         ]
@@ -116,19 +117,19 @@ def build_single_account_manage_keyboard(
     rows.append(
         [
             Button.inline(
-                "🗑 Удалить аккаунт",
+                lex.btn_cp_delete_acc,
                 f"cp:del_acc:{account.id}".encode("ascii"),
             )
         ]
     )
-    rows.append([Button.inline("⬅️ Назад к аккаунтам", b"cp:auth_menu")])
+    rows.append([Button.inline(lex.btn_cp_back_to_accounts, b"cp:auth_menu")])
     return rows
 
 
 def build_oauth_url_keyboard(lex: UiLexicon, auth_url: str) -> list[list[Button]]:
     return [
         [Button.url(lex.btn_cp_open_oauth_url, auth_url)],
-        [Button.inline("❌ Отменить вход", b"cp:cancel_oauth")],
+        [Button.inline(lex.btn_cp_cancel_oauth, b"cp:cancel_oauth")],
     ]
 
 
@@ -173,7 +174,8 @@ def build_tasks_management_keyboard(
                 )
             ]
         )
-    for sensor in (sensors or [])[: limits.tasks_menu_display_limit]:
+    active_sensors = sensors if sensors is not None else []
+    for sensor in active_sensors[: limits.tasks_menu_display_limit]:
         short_sid = str(sensor.id)[: limits.uuid_short_chars]
         rows.append(
             [
@@ -336,6 +338,32 @@ def build_turn_response_keyboard(
     ]
 
 
+_MIN_FAMILY_GROUP_SIZE: Final[int] = 2
+
+
+def group_models_by_family(models: list[str]) -> list[tuple[str, list[str]]]:
+    """Deterministically groups models sharing a base prefix (via .rsplit('-', 1)) without regex."""
+    prefix_buckets: dict[str, list[str]] = {}
+    for slug in models:
+        base = slug.rsplit("-", 1)[0] if "-" in slug else slug
+        if base not in prefix_buckets:
+            prefix_buckets[base] = []
+        prefix_buckets[base].append(slug)
+
+    grouped: list[tuple[str, list[str]]] = []
+    emitted_bases: set[str] = set()
+    for slug in models:
+        base = slug.rsplit("-", 1)[0] if "-" in slug else slug
+        bucket = prefix_buckets[base]
+        if len(bucket) >= _MIN_FAMILY_GROUP_SIZE:
+            if base not in emitted_bases:
+                emitted_bases.add(base)
+                grouped.append((base, bucket))
+        else:
+            grouped.append((slug, [slug]))
+    return grouped
+
+
 def build_model_picker_keyboard(
     lex: UiLexicon,
     limits: LimitsStaticConfig,
@@ -343,25 +371,91 @@ def build_model_picker_keyboard(
     models: list[str],
     current_model: str,
 ) -> list[list[Button]]:
+    """Builds the top-level model family keyboard (1 button per family or standalone model)."""
+    _ = limits
     rows: list[list[Button]] = []
-    for slug in models[: limits.models_menu_display_limit]:
+    groups = group_models_by_family(models)
+    for g_idx, (family_label, variants) in enumerate(groups):
+        is_current = current_model in variants
+        mark = "✅ " if is_current else ""
+        if len(variants) == 1:
+            only_slug = variants[0]
+            rows.append(
+                [
+                    Button.inline(
+                        f"{mark}🧠 {only_slug}",
+                        f"ws:set_model:{topic_id}:{only_slug}".encode("utf-8"),
+                    )
+                ]
+            )
+        else:
+            rows.append(
+                [
+                    Button.inline(
+                        lex.btn_ws_model_group_item.format(
+                            mark=mark,
+                            family=family_label,
+                            count=len(variants),
+                        ),
+                        f"ws:mgrp:{topic_id}:{g_idx}".encode("ascii"),
+                    )
+                ]
+            )
+    rows.append(
+        [
+            Button.inline(
+                lex.btn_ws_back_to_topic_card,
+                f"ws:back_card:{topic_id}".encode("ascii"),
+            )
+        ]
+    )
+    return rows
+
+
+def build_model_variants_keyboard(
+    lex: UiLexicon,
+    topic_id: int,
+    variants: list[str],
+    current_model: str,
+) -> list[list[Button]]:
+    """Builds the second-level variant selector keyboard inside a chosen model family."""
+    rows: list[list[Button]] = []
+    for slug in variants:
         mark = "✅ " if slug == current_model else ""
         rows.append(
             [
                 Button.inline(
                     f"{mark}{slug}",
-                    f"ws:set_model:{topic_id}:{slug}".encode("ascii"),
+                    f"ws:set_model:{topic_id}:{slug}".encode("utf-8"),
                 )
             ]
         )
     rows.append(
         [
             Button.inline(
-                lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii")
+                lex.btn_ws_back_to_model_groups,
+                f"ws:models:{topic_id}".encode("ascii"),
             )
         ]
     )
     return rows
+
+
+def build_staged_media_keyboard(
+    lex: UiLexicon, topic_id: int
+) -> list[list[Button]]:
+    return [
+        [
+            Button.inline(
+                lex.btn_ws_flush_staged_media,
+                f"ws:flush_files:{topic_id}".encode("ascii"),
+            ),
+            Button.inline(
+                lex.btn_ws_clear_staged_media,
+                f"ws:clear_files:{topic_id}".encode("ascii"),
+            ),
+        ]
+    ]
 
 
 def build_session_history_keyboard(
@@ -392,7 +486,8 @@ def build_session_history_keyboard(
     rows.append(
         [
             Button.inline(
-                lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii")
+                lex.btn_ws_back_to_topic_card,
+                f"ws:back_card:{topic_id}".encode("ascii"),
             )
         ]
     )
@@ -418,7 +513,8 @@ def build_topic_account_picker_keyboard(
     rows.append(
         [
             Button.inline(
-                lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii")
+                lex.btn_ws_back_to_topic_card,
+                f"ws:back_card:{topic_id}".encode("ascii"),
             )
         ]
     )
@@ -441,7 +537,8 @@ def build_workspace_dir_picker_keyboard(
     rows.append(
         [
             Button.inline(
-                lex.btn_ws_close_submenu, f"ws:close_sub:{topic_id}".encode("ascii")
+                lex.btn_ws_back_to_topic_card,
+                f"ws:back_card:{topic_id}".encode("ascii"),
             )
         ]
     )

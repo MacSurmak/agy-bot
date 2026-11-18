@@ -50,11 +50,16 @@ _AGY_CMD_EXIT_NONZERO_RE = re.compile(
     r"^Command exited with code (\d+)\.\s*(?:Command output:\s*)?",
     re.IGNORECASE,
 )
-_BRAIN_PATH_RE = re.compile(
-    r"/home/[^/\s'\"]+/\.\w+/antigravity-cli/brain/[0-9a-fA-F\-]{36}/"
+_BRAIN_PATH_RE: re.Pattern[str] = re.compile(
+    r"(?:/srv/antigravity/app/runtime_data/profiles/[^/\s'\"]+/home|/root|/home/[^/\s'\"]+)/\.gemini/antigravity-cli/brain/[0-9a-fA-F\-]{36}/"
 )
-_REMOTES_PATH_RE = re.compile(r"/home/[^/\s'\"]+/[^/\s'\"]+/runtime_data/remotes/")
-_HOME_PATH_RE = re.compile(r"/home/[^/\s'\"]+/")
+_PROFILE_HOME_GEMINI_RE: re.Pattern[str] = re.compile(
+    r"/srv/antigravity/app/runtime_data/profiles/([^/\s'\"]+)/home/\.gemini/"
+)
+_REMOTES_PATH_RE: re.Pattern[str] = re.compile(
+    r"/home/[^/\s'\"]+/[^/\s'\"]+/runtime_data/remotes/"
+)
+_HOME_PATH_RE: re.Pattern[str] = re.compile(r"(?<![A-Za-z0-9_/-])/home/[^/\s'\"]+/")
 _SINGLE_PARAM_PREFIX_RE = re.compile(
     r"^(?:CommandLine|Path|TargetFile|AbsolutePath|DirectoryPath|SearchPath|file_path):\s*"
 )
@@ -89,6 +94,7 @@ def _clean_binary_noise(raw: str) -> str:
 
 def _shorten_verbose_paths(text: str) -> str:
     shortened = _BRAIN_PATH_RE.sub("~brain/", text)
+    shortened = _PROFILE_HOME_GEMINI_RE.sub(r"~\1/.gemini/", shortened)
     shortened = _REMOTES_PATH_RE.sub("~remotes/", shortened)
     return _HOME_PATH_RE.sub("~/", shortened)
 
@@ -1091,53 +1097,70 @@ def _format_reset_countdown(iso_reset_time: str, lex: UiLexicon) -> str:
         return ""
 
 
+def _format_dynamic_bucket_entry(
+    b_key: str,
+    b_val: dict[str, int | float | str],
+    lex: UiLexicon,
+) -> tuple[str, str]:
+    raw_pct = b_val["remaining_pct"] if "remaining_pct" in b_val else 100
+    pct = int(raw_pct) if isinstance(raw_pct, int | float) else 100
+    raw_rst = str(b_val["reset_time"]) if "reset_time" in b_val else ""
+    rst = (
+        f" (↻ {raw_rst})"
+        if raw_rst and not raw_rst.startswith("20")
+        else _format_reset_countdown(raw_rst, lex)
+    )
+    bar_str = f"`{_render_mini_bar(pct, 8)} {pct}%`{rst}"
+
+    raw_win = str(b_val["window"]).lower() if "window" in b_val else ""
+    raw_name = str(b_val["name"]) if "name" in b_val else b_key
+    name_low = raw_name.lower()
+    if "5h" in b_key or "5h" in raw_win or "five hour" in name_low or "5-hour" in name_low:
+        short_lbl = lex.quota_5h_label.format(bar=bar_str)
+    elif "week" in b_key or "week" in raw_win or "weekly" in name_low:
+        short_lbl = lex.quota_weekly_label.format(bar=bar_str)
+    else:
+        short_lbl = f"**{raw_name}:** {bar_str}"
+
+    grp = str(b_val["group_title"]).strip() if "group_title" in b_val else ""
+    if not grp:
+        if "argon" in b_key or "argon" in name_low:
+            grp = "Gemini 4 Argon"
+        elif "gemini" in b_key or "gemini" in name_low:
+            grp = "Gemini"
+        elif "3p" in b_key or "claude" in name_low or "gpt" in name_low:
+            grp = "Claude / 3P"
+        else:
+            grp = raw_name
+    return grp, short_lbl
+
+
 def format_account_quota_lines(
-    quota_json: dict[str, Any] | None, lex: UiLexicon
+    quota_json: dict[str, int | float | str | list[int] | dict[str, dict[str, int | float | str]]] | None,
+    lex: UiLexicon,
 ) -> list[str]:
-    if not quota_json:
+    """Dynamically renders all quota groups and bars returned by `agy /usage` without hardcoded bucket keys."""
+    if not quota_json or "buckets" not in quota_json:
         return []
-    raw_buckets = quota_json.get("buckets")
+    raw_buckets = quota_json["buckets"]
     if not isinstance(raw_buckets, dict) or not raw_buckets:
         return []
 
-    def _fmt_bucket(b_key: str) -> str | None:
-        b = raw_buckets.get(b_key)
-        if not isinstance(b, dict):
-            return None
-        pct = int(b.get("remaining_pct", 100))
-        rst = _format_reset_countdown(str(b.get("reset_time", "")), lex)
-        return f"`{_render_mini_bar(pct)} {pct}%`{rst}"
-
-    gem_5h = _fmt_bucket("gemini-5h")
-    gem_wk = _fmt_bucket("gemini-weekly")
-    c_5h = _fmt_bucket("3p-5h")
-    c_wk = _fmt_bucket("3p-weekly")
+    grouped_bars: dict[str, list[str]] = {}
+    for b_key, b_val in raw_buckets.items():
+        if not isinstance(b_val, dict):
+            continue
+        grp, formatted_bar = _format_dynamic_bucket_entry(b_key, b_val, lex)
+        if grp not in grouped_bars:
+            grouped_bars[grp] = []
+        grouped_bars[grp].append(formatted_bar)
 
     out: list[str] = []
-    if gem_5h or gem_wk:
-        parts_g = []
-        if gem_5h:
-            parts_g.append(lex.quota_5h_label.format(bar=gem_5h))
-        if gem_wk:
-            parts_g.append(lex.quota_weekly_label.format(bar=gem_wk))
-        out.append(lex.quota_gemini_prefix + " │ ".join(parts_g))
-
-    if c_5h or c_wk:
-        parts_c = []
-        if c_5h:
-            parts_c.append(lex.quota_5h_label.format(bar=c_5h))
-        if c_wk:
-            parts_c.append(lex.quota_weekly_label.format(bar=c_wk))
-        out.append(lex.quota_claude_prefix + " │ ".join(parts_c))
-
-    if not out:
-        for b_key, b_val in raw_buckets.items():
-            if isinstance(b_val, dict):
-                pct = int(b_val.get("remaining_pct", 100))
-                rst = _format_reset_countdown(str(b_val.get("reset_time", "")), lex)
-                win = str(b_val.get("window") or b_key)
-                out.append(f"    • `{win}`: `{_render_mini_bar(pct)} {pct}%`{rst}")
-
+    total_groups = len(grouped_bars)
+    for idx, (grp_name, bars) in enumerate(grouped_bars.items(), start=1):
+        branch = "└─" if idx == total_groups else "├─"
+        icon = "🤖" if ("claude" in grp_name.lower() or "3p" in grp_name.lower()) else "🧠"
+        out.append(f"    {branch} {icon} **{grp_name}:** " + " │ ".join(bars))
     return out
 
 
