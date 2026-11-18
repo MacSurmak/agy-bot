@@ -1,11 +1,9 @@
 import asyncio
-import logging
-import os
 import signal
 import sys
-from pathlib import Path
+from typing import Final
 
-import structlog
+from loguru import logger
 from telethon import TelegramClient
 
 from antigravity_core.application.batcher import MessageBatcher
@@ -43,66 +41,46 @@ from antigravity_core.infrastructure.media.mtproto_media import (
     TelethonForumGateway,
 )
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
+from antigravity_core.logging_setup import configure_loguru
 from antigravity_core.presentation.control_panel_ui import ControlPanelUI
 from antigravity_core.presentation.router import TelegramEventRouter
 from antigravity_core.presentation.workspace_topic_ui import WorkspaceTopicUI
 
-logger = structlog.get_logger(__name__)
+_MTPROTO_CONNECTION_RETRIES: Final[int] = 1_000_000
+_MTPROTO_RETRY_DELAY_SEC: Final[int] = 3
+_WATCHDOG_CHECK_INTERVAL_SEC: Final[float] = 15.0
+_MAX_CONSECUTIVE_DISCONNECT_CHECKS: Final[int] = 6
 
 
-def configure_structlog(log_file_path: Path) -> None:
-    log_file_path.parent.mkdir(parents=True, exist_ok=True)
-    shared_processors: list[structlog.types.Processor] = [
-        structlog.contextvars.merge_contextvars,
-        structlog.stdlib.add_log_level,
-        structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S", utc=False),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-    ]
-
-    structlog.configure(
-        processors=[
-            *shared_processors,
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
-        ],
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        wrapper_class=structlog.stdlib.BoundLogger,
-        cache_logger_on_first_use=True,
-    )
-
-    console_formatter = structlog.stdlib.ProcessorFormatter(
-        foreign_pre_chain=shared_processors,
-        processors=[
-            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            structlog.dev.ConsoleRenderer(colors=True),
-        ],
-    )
-    file_formatter = structlog.stdlib.ProcessorFormatter(
-        foreign_pre_chain=shared_processors,
-        processors=[
-            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            structlog.processors.JSONRenderer(),
-        ],
-    )
-
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-    root_logger.handlers.clear()
-
-    # Suppress noisy low-level MTProto chunk/update logs while keeping flood-wait warnings formatted
-    logging.getLogger("telethon.client.updates").setLevel(logging.WARNING)
-    logging.getLogger("telethon.client.uploads").setLevel(logging.WARNING)
-    logging.getLogger("telethon.client.downloads").setLevel(logging.WARNING)
-    logging.getLogger("telethon.network").setLevel(logging.WARNING)
-    logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
-
-    stdout_handler = logging.StreamHandler(sys.stdout)
-    stdout_handler.setFormatter(console_formatter)
-    root_logger.addHandler(stdout_handler)
-
-    file_handler = logging.FileHandler(log_file_path, encoding="utf-8")
-    file_handler.setFormatter(file_formatter)
-    root_logger.addHandler(file_handler)
+async def _wait_with_mtproto_watchdog(
+    client: TelegramClient, stop_event: asyncio.Event
+) -> None:
+    """Monitors MTProto connection health and triggers reconnect or fatal restart if permanently wedged."""
+    disconnected_ticks = 0
+    while not stop_event.is_set():
+        done, _pending = await asyncio.wait(
+            [asyncio.create_task(stop_event.wait())],
+            timeout=_WATCHDOG_CHECK_INTERVAL_SEC,
+        )
+        if done:
+            break
+        if client.is_connected():
+            disconnected_ticks = 0
+            continue
+        disconnected_ticks += 1
+        logger.warning(
+            "MTProto watchdog detected disconnected TelegramClient (tick {}/{}); attempting reconnect",
+            disconnected_ticks,
+            _MAX_CONSECUTIVE_DISCONNECT_CHECKS,
+        )
+        await client.connect()
+        if client.is_connected():
+            logger.info("MTProto watchdog successfully reconnected TelegramClient")
+            disconnected_ticks = 0
+        elif disconnected_ticks >= _MAX_CONSECUTIVE_DISCONNECT_CHECKS:
+            raise AntigravityError(
+                "TelegramClient remained disconnected across 90s watchdog window; exiting for systemd restart."
+            )
 
 
 async def run_service(static_config: StaticConfig) -> None:
@@ -147,12 +125,15 @@ async def run_service(static_config: StaticConfig) -> None:
         mount_mgr.write_ssh_config_entry(host)
         mount_mgr.ensure_rule_skeleton(host)
 
-    # Step 5: Connect Telethon MTProto client
+    # Step 5: Connect Telethon MTProto client with infinite auto-reconnect resilience
     static_config.telegram.session_file_path.parent.mkdir(parents=True, exist_ok=True)
     client = TelegramClient(
         str(static_config.telegram.session_file_path),
         static_config.telegram.api_id,
         static_config.telegram.api_hash,
+        connection_retries=_MTPROTO_CONNECTION_RETRIES,
+        retry_delay=_MTPROTO_RETRY_DELAY_SEC,
+        auto_reconnect=True,
     )
     await client.start(bot_token=static_config.telegram.bot_token)
 
@@ -250,11 +231,16 @@ async def run_service(static_config: StaticConfig) -> None:
     )
 
     batcher = MessageBatcher(
+        inbox_dir=static_config.paths.inbox_dir,
         settings_repo=settings_repo,
         on_flush=workspace_ui.execute_batched_prompt,
+        on_staged_media=workspace_ui.notify_staged_media_held,
     )
-
-    router = TelegramEventRouter(
+    workspace_ui.bind_staged_media_callbacks(
+        flush_cb=batcher.flush_staged_files_now,
+        clear_cb=batcher.clear_staged_files,
+    )
+    TelegramEventRouter(
         client=client,
         static_config=static_config,
         settings_repo=settings_repo,
@@ -264,8 +250,7 @@ async def run_service(static_config: StaticConfig) -> None:
         batcher=batcher,
         control_panel_ui=control_panel_ui,
         workspace_ui=workspace_ui,
-    )
-    router.register_handlers()
+    ).register_handlers()
 
     await ipc_server.start()
     await scheduler_service.start_and_hydrate()
@@ -279,7 +264,7 @@ async def run_service(static_config: StaticConfig) -> None:
 
     logger.info("Antigravity Telegram Core is online and ready.")
     try:
-        await stop_event.wait()
+        await _wait_with_mtproto_watchdog(client, stop_event)
     finally:
         logger.info("Shutting down Antigravity Telegram Core...")
         await sensor_service.stop()
@@ -291,14 +276,18 @@ async def run_service(static_config: StaticConfig) -> None:
         await db_mgr.close()
 
 
-def run() -> None:
+def main() -> None:
     try:
         static_cfg = load_static_config()
-        configure_structlog(static_cfg.paths.log_file_path)
+        configure_loguru(static_cfg.paths.log_file_path)
         asyncio.run(run_service(static_cfg))
     except (StartupValidationError, AntigravityError) as exc:
         sys.stderr.write(f"FATAL STARTUP VALIDATION ERROR: {exc}\n")
-        sys.exit(1)
+        raise
+
+
+def run() -> None:
+    main()
 
 
 if __name__ == "__main__":

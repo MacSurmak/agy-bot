@@ -1,4 +1,4 @@
-import structlog
+from loguru import logger
 from telethon import TelegramClient, events
 from telethon.tl.custom import Message
 
@@ -13,9 +13,8 @@ from antigravity_core.infrastructure.media.mtproto_media import MediaService
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
 from antigravity_core.lexicon import get_lexicon
 from antigravity_core.presentation.control_panel_ui import ControlPanelUI
+from antigravity_core.presentation.tg_renderer import extract_incoming_message_markdown
 from antigravity_core.presentation.workspace_topic_ui import WorkspaceTopicUI
-
-logger = structlog.get_logger(__name__)
 
 
 def extract_topic_id(message: Message) -> int:
@@ -83,9 +82,17 @@ class TelegramEventRouter:
         if message.out or message.action is not None:
             return
 
-        sender_id = int(event.sender_id or 0)
+        sender_id = int(event.sender_id) if event.sender_id is not None else 0
         topic_id = extract_topic_id(message)
-        raw_text = (message.message or "").strip()
+        raw_text = extract_incoming_message_markdown(message)
+        logger.info(
+            "Incoming Telegram message: topic_id={} msg_id={} sender_id={} text_chars={} has_media={}",
+            topic_id,
+            message.id,
+            sender_id,
+            len(raw_text),
+            message.media is not None,
+        )
 
         if raw_text.startswith("/redeem "):
             settings = await self._settings_repo.load_settings()
@@ -119,13 +126,9 @@ class TelegramEventRouter:
                 return
 
         downloaded_files: list[str] = []
-        if message.media is not None:
-            try:
-                saved_path = await self._media.download_message_media(message, topic_id)
-                downloaded_files.append(str(saved_path))
-            except Exception as exc:
-                logger.error("Failed to download incoming media", error=str(exc))
-                return
+        if message.media is not None and message.file is not None:
+            saved_path = await self._media.download_message_media(message, topic_id)
+            downloaded_files.append(str(saved_path))
 
         is_multi = (
             message.fwd_from is not None

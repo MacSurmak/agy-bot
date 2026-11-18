@@ -4,7 +4,10 @@ from pathlib import Path
 import time
 from uuid import UUID
 
-import structlog
+from collections.abc import Awaitable, Callable
+from typing import Final
+
+from loguru import logger
 from telethon import TelegramClient, events
 from telethon.errors import MessageNotModifiedError, RPCError
 from telethon.tl.types import TypeMessageEntity
@@ -44,15 +47,18 @@ from antigravity_core.presentation.formatters import (
 from antigravity_core.presentation.keyboards import (
     build_live_progress_keyboard,
     build_model_picker_keyboard,
+    build_model_variants_keyboard,
     build_session_history_keyboard,
+    build_staged_media_keyboard,
     build_sudo_approval_keyboard,
     build_topic_account_picker_keyboard,
     build_topic_header_keyboard,
     build_turn_response_keyboard,
     build_workspace_dir_picker_keyboard,
+    group_models_by_family,
 )
 
-logger = structlog.get_logger(__name__)
+_CMD_WITH_ARG_PARTS: Final[int] = 2
 
 
 class WorkspaceTopicUI:
@@ -90,6 +96,48 @@ class WorkspaceTopicUI:
         self._sudo_prompt_meta: dict[str, tuple[str, str]] = {}
         self._relocate_trace_topics: set[int] = set()
         self._last_trace_edit_ts: dict[int, float] = {}
+        self._staged_media_msg_ids: dict[int, int] = {}
+        self._flush_staged_cb: Callable[[int, str], Awaitable[bool]] | None = None
+        self._clear_staged_cb: Callable[[int], Awaitable[int]] | None = None
+
+    def bind_staged_media_callbacks(
+        self,
+        flush_cb: Callable[[int, str], Awaitable[bool]],
+        clear_cb: Callable[[int], Awaitable[int]],
+    ) -> None:
+        self._flush_staged_cb = flush_cb
+        self._clear_staged_cb = clear_cb
+
+    async def _clear_staged_media_card(self, topic_id: int) -> None:
+        if topic_id in self._staged_media_msg_ids:
+            stale_mid = self._staged_media_msg_ids.pop(topic_id)
+            with contextlib.suppress(RPCError):
+                await self._client.delete_messages(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message_ids=[stale_mid],
+                )
+
+    async def notify_staged_media_held(
+        self, topic_id: int, message_id: int, staged_files: tuple[str, ...]
+    ) -> None:
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
+        files_list = "\n".join(f"• `{Path(p).name}`" for p in staged_files)
+        card_text = lex.ws_staged_media_card.format(
+            count=len(staged_files),
+            files_list=files_list,
+        )
+        kb = build_staged_media_keyboard(lex, topic_id)
+        await self._clear_staged_media_card(topic_id)
+
+        sent = await self._client.send_message(
+            entity=self._cfg.telegram.forum_chat_id,
+            message=card_text,
+            reply_to=message_id,
+            silent=True,
+            buttons=kb,
+        )
+        self._staged_media_msg_ids[topic_id] = sent.id
 
     async def send_ssh_password_prompt(self, topic_id: int, target_label: str) -> None:
         settings = await self._settings_repo.load_settings()
@@ -305,14 +353,18 @@ class WorkspaceTopicUI:
                 )
                 return True
 
-            if len(parts) == 2 and parts[1].strip():
-                new_slug = parts[1].strip().lower()
-                if not is_valid_model_slug_syntax(new_slug) or new_slug not in models:
+            if len(parts) == _CMD_WITH_ARG_PARTS and parts[1].strip():
+                requested = parts[1].strip()
+                matched_slug = next(
+                    (m for m in models if m.lower() == requested.lower()),
+                    None,
+                )
+                if matched_slug is None or not is_valid_model_slug_syntax(matched_slug):
                     formatted_list = ", ".join(f"`{m}`" for m in models)
                     await self._client.send_message(
                         entity=self._cfg.telegram.forum_chat_id,
                         message=lex.ws_model_unknown_msg.format(
-                            model_slug=new_slug,
+                            model_slug=requested,
                             available_models=formatted_list,
                         ),
                         reply_to=topic_id,
@@ -320,19 +372,21 @@ class WorkspaceTopicUI:
                     return True
 
                 await self._lifecycle.change_model(
-                    topic_id, new_slug, topic.effort_level
+                    topic_id, matched_slug, topic.effort_level
                 )
                 await self.refresh_pinned_card(topic_id)
                 await self._client.send_message(
                     entity=self._cfg.telegram.forum_chat_id,
-                    message=lex.ws_model_updated_msg.format(model_slug=new_slug),
+                    message=lex.ws_model_updated_msg.format(model_slug=matched_slug),
                     reply_to=topic_id,
                 )
                 return True
 
             await self._client.send_message(
                 entity=self._cfg.telegram.forum_chat_id,
-                message=lex.ws_select_model_prompt,
+                message=lex.ws_select_model_group_prompt.format(
+                    current_model=topic.model_slug
+                ),
                 reply_to=topic_id,
                 buttons=build_model_picker_keyboard(
                     lex,
@@ -391,7 +445,7 @@ class WorkspaceTopicUI:
             workspace=topic.workspace_path,
             prompt_preview=prompt[:100].replace("\n", " "),
         )
-
+        await self._clear_staged_media_card(topic_id)
         start_ts = time.monotonic()
         self._last_trace_edit_ts[topic_id] = start_ts
 
@@ -491,22 +545,25 @@ class WorkspaceTopicUI:
 
         sync_lock = asyncio.Lock()
 
-        async def _bg_sync_pages(pages: list[tuple[str, list[object]]]) -> None:
-            if sync_lock.locked():
+        async def _bg_sync_pages(pages: list[tuple[str, list[TypeMessageEntity]]]) -> None:
+            if sync_lock.locked() or not self._client.is_connected():
                 return
-            try:
-                async with sync_lock:
+            async with sync_lock:
+                if self._client.is_connected():
                     await _sync_trace_pages(pages, is_final=False)
-            except Exception as exc:
-                logger.error(
-                    "Background trace page sync failed",
-                    topic_id=topic_id,
-                    error=str(exc),
-                    exc_info=True,
-                )
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
             now = time.monotonic()
+            prev_ts = (
+                self._last_trace_edit_ts[topic_id]
+                if topic_id in self._last_trace_edit_ts
+                else 0.0
+            )
+            if (now - prev_ts) < settings.tg_edit_throttle_sec:
+                return
+            self._last_trace_edit_ts[topic_id] = now
+            if not self._client.is_connected():
+                return
             pages = build_live_progress_pages(
                 lex=lex,
                 limits=self._cfg.limits,
@@ -515,19 +572,6 @@ class WorkspaceTopicUI:
                 model_slug=topic.model_slug,
                 account_slug=acc_display,
             )
-            is_new_page_spillover = len(pages) > len(trace_msgs)
-            prev_ts = (
-                self._last_trace_edit_ts[topic_id]
-                if topic_id in self._last_trace_edit_ts
-                else 0.0
-            )
-            if (
-                not is_new_page_spillover
-                and (now - prev_ts) < settings.tg_edit_throttle_sec
-            ):
-                return
-            self._last_trace_edit_ts[topic_id] = now
-            # Fire-and-forget UI sync so Telegram FloodWaits never block agy stdout reading
             asyncio.create_task(_bg_sync_pages(pages))
 
         self._mount_mgr.cancel_topic_prompts(topic_id)
@@ -768,6 +812,16 @@ class WorkspaceTopicUI:
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
             now = time.monotonic()
+            prev_ts = (
+                self._last_trace_edit_ts[topic_id]
+                if topic_id in self._last_trace_edit_ts
+                else 0.0
+            )
+            if (now - prev_ts) < settings.tg_edit_throttle_sec:
+                return
+            self._last_trace_edit_ts[topic_id] = now
+            if not self._client.is_connected():
+                return
             pages = build_live_progress_pages(
                 lex=lex,
                 limits=self._cfg.limits,
@@ -776,18 +830,6 @@ class WorkspaceTopicUI:
                 model_slug=topic.model_slug,
                 account_slug=f"{badge_prefix} │ {acc_display}",
             )
-            is_new_page_spillover = len(pages) > len(trace_msgs)
-            prev_ts = (
-                self._last_trace_edit_ts[topic_id]
-                if topic_id in self._last_trace_edit_ts
-                else 0.0
-            )
-            if (
-                not is_new_page_spillover
-                and (now - prev_ts) < settings.tg_edit_throttle_sec
-            ):
-                return
-            self._last_trace_edit_ts[topic_id] = now
             asyncio.create_task(_bg_sync_pages(pages))
 
         try:
@@ -927,11 +969,32 @@ class WorkspaceTopicUI:
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
 
-        parts = data_str.split(":")
+        parts = data_str.split(":", 3)
         action = parts[1]
         topic_id = int(parts[2])
 
         if action == "close_sub":
+            await event.delete()
+            return
+
+        if action == "back_card":
+            await self._edit_event_to_topic_passport(event, topic_id)
+            return
+
+        if action == "flush_files":
+            self._staged_media_msg_ids.pop(topic_id, None)
+            await event.delete()
+            if self._flush_staged_cb is not None:
+                await self._flush_staged_cb(
+                    topic_id, lex.ws_staged_media_default_prompt
+                )
+            return
+
+        if action == "clear_files":
+            self._staged_media_msg_ids.pop(topic_id, None)
+            if self._clear_staged_cb is not None:
+                await self._clear_staged_cb(topic_id)
+            await event.answer(lex.ws_toast_staged_media_cleared)
             await event.delete()
             return
 
@@ -1028,9 +1091,8 @@ class WorkspaceTopicUI:
                 topic_id,
                 limit=self._cfg.limits.sessions_history_display_limit,
             )
-            await event.respond(
-                lex.ws_select_past_session_prompt,
-                reply_to=topic_id,
+            await event.edit(
+                format_wide_header_block(lex.ws_select_past_session_prompt),
                 buttons=build_session_history_keyboard(
                     lex,
                     self._cfg.limits,
@@ -1039,34 +1101,27 @@ class WorkspaceTopicUI:
                     topic.active_conversation_id,
                 ),
             )
-            await event.answer()
             return
 
         if action == "resume":
             conv_uuid = UUID(parts[3])
             await self._lifecycle.resume_past_session(topic_id, conv_uuid)
-            await self.refresh_pinned_card(topic_id)
-            await event.edit(
-                lex.ws_session_resumed_msg.format(conversation_id=conv_uuid),
-                buttons=None,
+            await event.answer(
+                lex.ws_session_resumed_msg.format(conversation_id=conv_uuid)
             )
+            await self._edit_event_to_topic_passport(event, topic_id)
             return
 
         if action == "models":
             topic = await self._topic_repo.get_topic_strict(topic_id)
             account = await self._account_repo.get_by_id(topic.assigned_account_id)
-            try:
-                models = await self._inspector.list_available_models(account)
-            except AgyProcessError as exc:
-                await event.respond(
-                    lex.ws_turn_error_msg.format(error=exc),
-                    reply_to=topic_id,
-                )
-                await event.answer()
-                return
-            await event.respond(
-                lex.ws_select_model_prompt,
-                reply_to=topic_id,
+            models = await self._inspector.list_available_models(account)
+            await event.edit(
+                format_wide_header_block(
+                    lex.ws_select_model_group_prompt.format(
+                        current_model=topic.model_slug
+                    )
+                ),
                 buttons=build_model_picker_keyboard(
                     lex,
                     self._cfg.limits,
@@ -1075,49 +1130,65 @@ class WorkspaceTopicUI:
                     topic.model_slug,
                 ),
             )
-            await event.answer()
+            return
+
+        if action == "mgrp":
+            grp_idx = int(parts[3])
+            topic = await self._topic_repo.get_topic_strict(topic_id)
+            account = await self._account_repo.get_by_id(topic.assigned_account_id)
+            models = await self._inspector.list_available_models(account)
+            groups = group_models_by_family(models)
+            if 0 <= grp_idx < len(groups):
+                family_label, variants = groups[grp_idx]
+                await event.edit(
+                    format_wide_header_block(
+                        lex.ws_select_model_variant_prompt.format(family=family_label)
+                    ),
+                    buttons=build_model_variants_keyboard(
+                        lex,
+                        topic_id,
+                        variants,
+                        topic.model_slug,
+                    ),
+                )
             return
 
         if action == "set_model":
             model_slug = parts[3]
             topic = await self._topic_repo.get_topic_strict(topic_id)
             await self._lifecycle.change_model(topic_id, model_slug, topic.effort_level)
-            await self.refresh_pinned_card(topic_id)
-            await event.edit(
-                lex.ws_model_updated_msg.format(model_slug=model_slug),
-                buttons=None,
+            await event.answer(
+                lex.ws_model_updated_msg.format(model_slug=model_slug)
             )
+            await self._edit_event_to_topic_passport(event, topic_id)
             return
 
         if action == "set_effort":
             effort = EffortLevel(parts[3])
             topic = await self._topic_repo.get_topic_strict(topic_id)
             await self._lifecycle.change_model(topic_id, topic.model_slug, effort)
-            await self.refresh_pinned_card(topic_id)
-            await event.edit(
-                lex.ws_effort_updated_msg.format(effort=effort.value),
-                buttons=None,
+            await event.answer(
+                lex.ws_effort_updated_msg.format(effort=effort.value)
             )
+            await self._edit_event_to_topic_passport(event, topic_id)
             return
 
         if action == "accounts":
             topic = await self._topic_repo.get_topic_strict(topic_id)
             accounts = await self._account_repo.list_enabled_accounts()
-            await event.respond(
-                lex.ws_select_account_prompt,
-                reply_to=topic_id,
+            await event.edit(
+                format_wide_header_block(lex.ws_select_account_prompt),
                 buttons=build_topic_account_picker_keyboard(
                     lex, topic_id, accounts, topic.assigned_account_id
                 ),
             )
-            await event.answer()
             return
 
         if action == "set_acc":
             acc_id = int(parts[3])
             await self._lifecycle.switch_topic_account(topic_id, acc_id)
-            await self.refresh_pinned_card(topic_id)
-            await event.edit(lex.ws_account_switched_msg, buttons=None)
+            await event.answer(lex.ws_account_switched_msg)
+            await self._edit_event_to_topic_passport(event, topic_id)
             return
 
         if action == "dirs":
@@ -1127,12 +1198,10 @@ class WorkspaceTopicUI:
                 self._cfg.paths.workspaces_root_dir,
                 self._cfg.paths.remotes_mount_dir,
             )
-            await event.respond(
-                lex.ws_select_workspace_prompt,
-                reply_to=topic_id,
+            await event.edit(
+                format_wide_header_block(lex.ws_select_workspace_prompt),
                 buttons=build_workspace_dir_picker_keyboard(lex, topic_id, choices),
             )
-            await event.answer()
             return
 
         if action == "set_dir":
@@ -1147,8 +1216,37 @@ class WorkspaceTopicUI:
                 _label, target_path = choices[idx]
                 await self._topic_repo.update_workspace_path(topic_id, target_path)
                 await self._pool.evict_topic_worker(topic_id)
-                await self.refresh_pinned_card(topic_id)
-                await event.edit(
-                    lex.ws_workspace_updated_msg.format(workspace_path=target_path),
-                    buttons=None,
+                await event.answer(
+                    lex.ws_workspace_updated_msg.format(workspace_path=target_path)
                 )
+                await self._edit_event_to_topic_passport(event, topic_id)
+
+    async def _edit_event_to_topic_passport(
+        self, event: events.CallbackQuery.Event, topic_id: int
+    ) -> None:
+        topic = await self._topic_repo.get_topic_strict(topic_id)
+        account = await self._account_repo.get_by_id(topic.assigned_account_id)
+        settings = await self._settings_repo.load_settings()
+        active_session = (
+            await self._session_repo.get_session(topic.active_conversation_id)
+            if topic.active_conversation_id is not None
+            else None
+        )
+        snapshots = await self._pool.get_pool_snapshots()
+        is_warm = any(s.topic_id == topic_id and s.is_warm for s in snapshots)
+        lex = get_lexicon(settings.ui_language)
+        card_text = render_topic_header_card(
+            lex=lex,
+            limits=self._cfg.limits,
+            topic=topic,
+            account=account,
+            active_session=active_session,
+            is_worker_warm=is_warm,
+            worker_ttl_sec=settings.worker_idle_ttl_sec,
+        )
+        buttons = build_topic_header_keyboard(lex, topic)
+        with contextlib.suppress(MessageNotModifiedError):
+            await event.edit(card_text, buttons=buttons)
+        await event.answer()
+        if topic.pinned_card_msg_id is not None and topic.pinned_card_msg_id != event.message_id:
+            await self.refresh_pinned_card(topic_id)
