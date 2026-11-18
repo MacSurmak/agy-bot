@@ -17,20 +17,17 @@ class _LoguruRecord(TypedDict):
 
 
 def _format_console_record(record: _LoguruRecord) -> str:
-    """Formats concise console/journald log lines without redundant timestamps or empty extra dicts."""
+    """Formats concise colored log lines with full timestamps and compact extra context."""
     extra_map = record["extra"]
     pairs = [f"{k}={v}" for k, v in extra_map.items() if k != "_ctx"]
     extra_map["_ctx"] = f"  [{', '.join(pairs)}]" if pairs else ""
-    time_prefix = (
-        ""
-        if "INVOCATION_ID" in os.environ
-        else "<green>{time:HH:mm:ss.SSS}</green> | "
-    )
     return (
-        f"{time_prefix}<level>{{level: <7}}</level> | "
+        "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+        "<level>{level: <7}</level> | "
         "<cyan>{module}</cyan>:<cyan>{line}</cyan> - "
         "<level>{message}</level><dim>{extra[_ctx]}</dim>\n{exception}"
     )
+
 
 _STDLIB_TO_LOGURU_LEVEL: Final[tuple[tuple[int, str], ...]] = (
     (logging.DEBUG, "DEBUG"),
@@ -67,8 +64,10 @@ class _StdlibInterceptHandler(logging.Handler):
 
 
 def configure_loguru(log_file_path: Path) -> None:
-    """Initializes Loguru console and rotating JSONL sinks and intercepts stdlib loggers."""
+    """Initializes Loguru console, rotating colored text log, and JSONL sinks."""
+    _ = os.environ
     log_file_path.parent.mkdir(parents=True, exist_ok=True)
+    pretty_log_path = log_file_path.with_suffix(".log")
     logger.remove()
 
     logger.add(
@@ -76,6 +75,18 @@ def configure_loguru(log_file_path: Path) -> None:
         level="INFO",
         format=_format_console_record,
         colorize=True,
+        backtrace=True,
+        diagnose=False,
+    )
+
+    logger.add(
+        str(pretty_log_path),
+        level="INFO",
+        format=_format_console_record,
+        colorize=True,
+        rotation=_LOG_ROTATION_SIZE,
+        retention=_LOG_RETENTION_COUNT,
+        encoding="utf-8",
         backtrace=True,
         diagnose=False,
     )

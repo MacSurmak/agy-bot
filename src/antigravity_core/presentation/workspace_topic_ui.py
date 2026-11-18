@@ -35,7 +35,9 @@ from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountM
 from antigravity_core.lexicon import get_lexicon
 from antigravity_core.presentation.formatters import (
     build_final_execution_trace_pages,
+    build_final_trace_rich_html,
     build_live_progress_pages,
+    build_live_progress_rich_html,
     format_account_quota_lines,
     format_wide_header_block,
     list_workspace_directories,
@@ -45,8 +47,12 @@ from antigravity_core.presentation.formatters import (
     render_turn_footer,
 )
 from antigravity_core.presentation.tg_renderer import (
+    edit_rich_html_or_standard_message,
     edit_rich_or_standard_message,
+    send_rich_html_or_standard_message,
     send_rich_or_standard_message,
+    supports_native_rich_html,
+    supports_native_rich_output,
 )
 from antigravity_core.presentation.keyboards import (
     build_live_progress_keyboard,
@@ -65,6 +71,7 @@ from antigravity_core.presentation.keyboards import (
 _CMD_WITH_ARG_PARTS: Final[int] = 2
 _SUDO_CB_MIN_PARTS: Final[int] = 4
 _TITLE_SYNC_ATTEMPTS: Final[int] = 4
+_MAX_RICH_OUTPUT_CHARS: Final[int] = 30000
 
 
 class WorkspaceTopicUI:
@@ -424,6 +431,7 @@ class WorkspaceTopicUI:
         trace_msgs: list[Message],
         rendered_page_state: dict[int, tuple[str, bool]],
         pages: list[tuple[str, list[TypeMessageEntity]]],
+        rich_html: str,
         is_final: bool,
     ) -> None:
         settings = await self._settings_repo.load_settings()
@@ -440,6 +448,40 @@ class WorkspaceTopicUI:
                     )
             trace_msgs.clear()
             rendered_page_state.clear()
+
+        if supports_native_rich_html() and rich_html and pages:
+            fb_text, fb_ents = pages[0]
+            kb = None if is_final else build_live_progress_keyboard(lex, topic_id)
+            desired_html = (rich_html, not is_final)
+            if trace_msgs:
+                if 0 in rendered_page_state and rendered_page_state[0] == desired_html:
+                    return
+                with contextlib.suppress(MessageNotModifiedError, RPCError):
+                    await edit_rich_html_or_standard_message(
+                        client=self._client,
+                        chat_id=self._cfg.telegram.forum_chat_id,
+                        message_id=trace_msgs[0].id,
+                        html_text=rich_html,
+                        fallback_text=fb_text,
+                        fallback_entities=fb_ents,
+                        buttons=kb,
+                    )
+                    rendered_page_state[0] = desired_html
+            else:
+                with contextlib.suppress(RPCError):
+                    sent_html = await send_rich_html_or_standard_message(
+                        client=self._client,
+                        chat_id=self._cfg.telegram.forum_chat_id,
+                        html_text=rich_html,
+                        fallback_text=fb_text,
+                        fallback_entities=fb_ents,
+                        reply_to=topic_id,
+                        silent=True,
+                        buttons=kb,
+                    )
+                    trace_msgs.append(sent_html)
+                    rendered_page_state[0] = desired_html
+            return
 
         total_pages = len(pages)
         for idx, (page_text, ents) in enumerate(pages):
@@ -460,13 +502,6 @@ class WorkspaceTopicUI:
                         buttons=kb,
                     )
                     rendered_page_state[idx] = desired_state
-                if is_final and idx not in rendered_page_state:
-                    with contextlib.suppress(RPCError):
-                        await self._client.edit_message(
-                            entity=self._cfg.telegram.forum_chat_id,
-                            message=msg_id,
-                            buttons=None,
-                        )
             else:
                 with contextlib.suppress(RPCError):
                     new_msg: Message = await self._client.send_message(
@@ -490,6 +525,21 @@ class WorkspaceTopicUI:
     ) -> None:
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
+        if supports_native_rich_output():
+            rich_md = f"{body_text}\n\n---\n*{footer_bar.strip()}*"
+            if len(rich_md) <= _MAX_RICH_OUTPUT_CHARS:
+                await send_rich_or_standard_message(
+                    client=self._client,
+                    chat_id=self._cfg.telegram.forum_chat_id,
+                    markdown_text=rich_md,
+                    fallback_text=body_text[:4000],
+                    fallback_entities=None,
+                    reply_to=reply_to_msg_id,
+                    silent=False,
+                    buttons=build_turn_response_keyboard(lex, updated_topic),
+                )
+                return
+
         formatted_chunks = render_Formatted_response_chunks(
             body_markdown=body_text,
             footer_bar_text=footer_bar,
@@ -500,15 +550,10 @@ class WorkspaceTopicUI:
         for idx, (chunk_text, chunk_entities) in enumerate(formatted_chunks):
             is_first = idx == 0
             is_last = idx == total_chunks - 1
-            rich_md = (
-                f"{body_text}\n\n`{footer_bar.strip()}`"
-                if total_chunks == 1
-                else chunk_text
-            )
             await send_rich_or_standard_message(
                 client=self._client,
                 chat_id=self._cfg.telegram.forum_chat_id,
-                markdown_text=rich_md,
+                markdown_text=chunk_text,
                 fallback_text=chunk_text,
                 fallback_entities=chunk_entities,
                 reply_to=reply_to_msg_id if is_first else topic_id,
@@ -527,11 +572,17 @@ class WorkspaceTopicUI:
         rendered_page_state: dict[int, tuple[str, bool]],
         sync_lock: asyncio.Lock,
         final_pages: list[tuple[str, list[TypeMessageEntity]]],
+        final_rich_html: str,
     ) -> None:
         if final_pages:
             async with sync_lock:
                 await self._sync_single_trace_page_list(
-                    topic_id, trace_msgs, rendered_page_state, final_pages, True
+                    topic_id,
+                    trace_msgs,
+                    rendered_page_state,
+                    final_pages,
+                    final_rich_html,
+                    True,
                 )
             if len(trace_msgs) > len(final_pages):
                 extra_ids = [m.id for m in trace_msgs[len(final_pages) :]]
@@ -608,13 +659,14 @@ class WorkspaceTopicUI:
 
         async def _bg_sync_pages(
             pages: list[tuple[str, list[TypeMessageEntity]]],
+            rich_html: str,
         ) -> None:
             if sync_lock.locked() or not self._client.is_connected():
                 return
             async with sync_lock:
                 if self._client.is_connected():
                     await self._sync_single_trace_page_list(
-                        topic_id, trace_msgs, rendered_page_state, pages, False
+                        topic_id, trace_msgs, rendered_page_state, pages, rich_html, False
                     )
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
@@ -629,15 +681,24 @@ class WorkspaceTopicUI:
             self._last_trace_edit_ts[topic_id] = now
             if not self._client.is_connected():
                 return
+            elapsed = now - start_ts
             pages = build_live_progress_pages(
                 lex=lex,
                 limits=self._cfg.limits,
                 event=progress,
-                elapsed_sec=now - start_ts,
+                elapsed_sec=elapsed,
                 model_slug=topic.model_slug,
                 account_slug=acc_display,
             )
-            asyncio.create_task(_bg_sync_pages(pages))
+            rich_html = build_live_progress_rich_html(
+                lex=lex,
+                limits=self._cfg.limits,
+                event=progress,
+                elapsed_sec=elapsed,
+                model_slug=topic.model_slug,
+                account_slug=acc_display,
+            )
+            asyncio.create_task(_bg_sync_pages(pages, rich_html))
 
         self._mount_mgr.cancel_topic_prompts(topic_id)
         try:
@@ -675,8 +736,15 @@ class WorkspaceTopicUI:
             model_slug=updated_topic.model_slug,
             account_slug=upd_acc_display,
         )
+        final_html = build_final_trace_rich_html(
+            lex=lex,
+            limits=self._cfg.limits,
+            result=result,
+            model_slug=updated_topic.model_slug,
+            account_slug=upd_acc_display,
+        )
         await self._finalize_trace_messages(
-            topic_id, trace_msgs, rendered_page_state, sync_lock, final_pages
+            topic_id, trace_msgs, rendered_page_state, sync_lock, final_pages, final_html
         )
 
         footer_bar = render_turn_footer(
@@ -769,13 +837,14 @@ class WorkspaceTopicUI:
 
         async def _bg_sync_pages(
             pages: list[tuple[str, list[TypeMessageEntity]]],
+            rich_html: str,
         ) -> None:
             if sync_lock.locked() or not self._client.is_connected():
                 return
             async with sync_lock:
                 if self._client.is_connected():
                     await self._sync_single_trace_page_list(
-                        topic_id, trace_msgs, rendered_page_state, pages, False
+                        topic_id, trace_msgs, rendered_page_state, pages, rich_html, False
                     )
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
@@ -790,15 +859,24 @@ class WorkspaceTopicUI:
             self._last_trace_edit_ts[topic_id] = now
             if not self._client.is_connected():
                 return
+            elapsed = now - start_ts
             pages = build_live_progress_pages(
                 lex=lex,
                 limits=self._cfg.limits,
                 event=progress,
-                elapsed_sec=now - start_ts,
+                elapsed_sec=elapsed,
                 model_slug=topic.model_slug,
                 account_slug=f"{badge_prefix} │ {acc_display}",
             )
-            asyncio.create_task(_bg_sync_pages(pages))
+            rich_html = build_live_progress_rich_html(
+                lex=lex,
+                limits=self._cfg.limits,
+                event=progress,
+                elapsed_sec=elapsed,
+                model_slug=topic.model_slug,
+                account_slug=f"{badge_prefix} │ {acc_display}",
+            )
+            asyncio.create_task(_bg_sync_pages(pages, rich_html))
 
         try:
             result = await self._orchestrator.execute_scheduled_turn(
@@ -835,8 +913,15 @@ class WorkspaceTopicUI:
             model_slug=updated_topic.model_slug,
             account_slug=f"{badge_prefix} │ {upd_acc_display}",
         )
+        final_html = build_final_trace_rich_html(
+            lex=lex,
+            limits=self._cfg.limits,
+            result=result,
+            model_slug=updated_topic.model_slug,
+            account_slug=f"{badge_prefix} │ {upd_acc_display}",
+        )
         await self._finalize_trace_messages(
-            topic_id, trace_msgs, rendered_page_state, sync_lock, final_pages
+            topic_id, trace_msgs, rendered_page_state, sync_lock, final_pages, final_html
         )
 
         footer_bar = f"{badge_prefix}  │  " + render_turn_footer(
@@ -1195,7 +1280,15 @@ class WorkspaceTopicUI:
         )
         buttons = build_topic_header_keyboard(lex, topic)
         with contextlib.suppress(MessageNotModifiedError):
-            await event.edit(card_text, buttons=buttons)
+            await edit_rich_or_standard_message(
+                client=self._client,
+                chat_id=self._cfg.telegram.forum_chat_id,
+                message_id=event.message_id,
+                markdown_text=card_text,
+                fallback_text=card_text,
+                fallback_entities=None,
+                buttons=buttons,
+            )
         await event.answer()
         if topic.pinned_card_msg_id is not None and topic.pinned_card_msg_id != event.message_id:
             await self.refresh_pinned_card(topic_id)

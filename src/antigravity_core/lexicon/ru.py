@@ -20,15 +20,14 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     topic_card_worker_warm="🟢 Прогрет в RAM (TTL: {ttl_min} мин)",
     topic_card_worker_cold="⚪ Холодный (старт по сообщению, TTL: {ttl_min} мин)",
     topic_card_template=(
-        "📌 **Паспорт топика: {title}**\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "💬 **Сессия:** {session_str}\n"
-        "📂 **Папка:** `{workspace_path}`\n"
-        "🧠 **Модель:** `{model_slug}`{effort_str}\n"
-        "👤 **Аккаунт:** `{email_label}`\n"
-        "🛡 **Права агента:** {mode_str}\n"
-        "🔑 **Режим Sudo:** {sudo_str}\n"
-        "📡 **Воркер:** {worker_str}"
+        "### 📌 Паспорт топика: {title}\n\n"
+        "- 💬 **Сессия:** {session_str}\n"
+        "- 📂 **Папка:** `{workspace_path}`\n"
+        "- 🧠 **Модель:** `{model_slug}`{effort_str}\n"
+        "- 👤 **Аккаунт:** `{email_label}`\n"
+        "- 🛡 **Права агента:** {mode_str}\n"
+        "- 🔑 **Режим Sudo:** {sudo_str}\n"
+        "- 📡 **Воркер:** {worker_str}"
     ),
     # New Session Divider
     new_session_mode_full_access="Полный доступ (Запись)",
@@ -81,39 +80,46 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     wake_badge_sensor="📡 Датчик: {sensor_name}",
     # Control Panel Dashboard
     dashboard_header=(
-        "🛠 **ANTIGRAVITY TELEGRAM CORE — ПАНЕЛЬ УПРАВЛЕНИЯ**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📡 **Пул воркеров:** `{warm_count}` прогрето в RAM | `{running_count}` выполняют ход"
+        "### 🛠 Панель управления Antigravity Core\n\n"
+        "- 📡 **Пул воркеров:** `{warm_count}` прогрето в RAM · `{running_count}` в работе"
     ),
     dashboard_worker_running_badge="🔥 В РАБОТЕ",
     dashboard_worker_warm_badge="🟢 ПРОГРЕТ",
-    dashboard_worker_item="  • Топик `{topic_id}`: {state_badge} (`{model_slug}` на `{account_slug}`)",
-    dashboard_accounts_header="\n👤 **Аккаунты Google AI Pro и Квоты:**",
+    dashboard_worker_item="- Топик `{topic_id}`: {state_badge} (`{model_slug}` на `{account_slug}`)",
+    dashboard_accounts_header="\n### 👤 Аккаунты Google AI Pro и Квоты\n",
     dashboard_accounts_empty=(
-        "  • ⚠️ Нет зарегистрированных аккаунтов. Нажмите **[🔑 Авторизовать / Добавить аккаунт]**."
+        "- ⚠️ Нет зарегистрированных аккаунтов. Нажмите **🔑 Авторизовать / Добавить аккаунт**."
     ),
-    dashboard_account_default_badge=" ⭐ **[ОСНОВНОЙ]**",
+    dashboard_account_default_badge="⭐",
     dashboard_account_enabled_icon="🟢",
     dashboard_account_disabled_icon="🔴",
     dashboard_account_quota_unprobed="не проверено",
-    dashboard_account_quota_probed="остаток: `{min_pct}%`",
-    dashboard_account_backup_ok="🔒 Бэкап Fernet OK",
-    dashboard_account_backup_missing="⚠️ Нет токена",
-    dashboard_account_item="  • {status_badge} `{email_label}`{default_badge} — {quota_str} | {backup_badge}",
-    dashboard_hosts_header="\n🖥 **Удалённые серверы и ключи SSH:**",
+    dashboard_account_quota_probed="`{min_pct}%`",
+    dashboard_account_backup_ok="🔒 OK",
+    dashboard_account_backup_missing="⚠️ Нет",
+    dashboard_account_item="- {status_badge} `{email_label}` {default_badge} — {quota_str} · {backup_badge}",
+    dashboard_hosts_header="\n### 🖥 Удалённые серверы и ключи SSH\n",
     dashboard_hosts_empty=(
-        "  • Пока нет сохранённых серверов (подключитесь к любому `user@host` в рабочем топике)."
+        "- Пока нет сохранённых серверов (подключитесь к любому `user@host` в рабочем топике)."
     ),
     dashboard_host_mounted_badge="🟢 Ключ + Sudo OK",
     dashboard_host_unmounted_badge="🔑 Ожидает входа",
-    dashboard_host_item="  • `{alias}` (`{ssh_user}@{hostname_or_ip}:{ssh_port}`) [{m_badge}]",
-    dashboard_tasks_header="\n⏰ **Активные задачи планировщика:** `{count}`",
-    dashboard_task_item="  • `{short_id}` [Топик `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
-    dashboard_sensors_header="\n📡 **Активные датчики (Event Sensors):** `{count}`",
-    dashboard_sensor_item="  • `{short_id}` [Топик `{topic_id}`] **{name}** (`{sensor_kind}` | `{condition}` | {mode_tag})",
+    dashboard_host_item="- `{alias}` (`{ssh_user}@{hostname_or_ip}:{ssh_port}`) [{m_badge}]",
+    dashboard_tasks_header="\n### ⏰ Активные задачи планировщика: `{count}`\n",
+    dashboard_task_item="- `{short_id}` [Топик `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
+    dashboard_sensors_header="\n### 📡 Активные датчики: `{count}`\n",
+    dashboard_sensor_item="- `{short_id}` [Топик `{topic_id}`] **{name}** (`{sensor_kind}` · `{condition}` · {mode_tag})",
     dashboard_settings_summary=(
-        "\n⚙️ **Настройки по умолчанию:**\n"
-        "  • Язык: `{ui_language}` | Модель: `{default_model}` | Режим: `{default_execution_mode}`"
+        "\n### ⚙️ Настройки по умолчанию\n\n"
+        "- Язык: `{ui_language}` · Модель: `{default_model}` · Режим: `{default_execution_mode}`"
+    ),
+    dashboard_accounts_table_header=(
+        "| Аккаунт | Бэкап | Группа моделей | Лимиты и сброс |\n"
+        "| :--- | :---: | :--- | :--- |"
+    ),
+    dashboard_hosts_table_header=(
+        "| Сервер | SSH-адрес | Статус |\n"
+        "| :--- | :--- | :--- |"
     ),
     quota_5h_label="**5ч:** {bar}",
     quota_weekly_label="**Нед:** {bar}",

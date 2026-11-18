@@ -329,14 +329,24 @@ class TopicWorker:
                                     event.tool_summary
                                 )
                             t_sum = tools_by_step[event.tool_summary.step_index]
+                            target_short = (
+                                t_sum.target_hint.replace("\n", " ")[:80]
+                                if t_sum.target_hint
+                                else "-"
+                            )
+                            dur_tag = (
+                                f" {t_sum.duration_seconds:.2f}s"
+                                if t_sum.duration_seconds is not None
+                                else ""
+                            )
                             logger.info(
-                                "Agent tool step",
-                                topic_id=self._topic_id,
-                                step=t_sum.step_index,
-                                tool=t_sum.tool_name,
-                                state=t_sum.state.value,
-                                target=t_sum.target_hint,
-                                duration_sec=t_sum.duration_seconds,
+                                "Step #{} [topic={}] {} ({}{}) -> {}",
+                                t_sum.step_index,
+                                self._topic_id,
+                                t_sum.tool_name,
+                                t_sum.state.value,
+                                dur_tag,
+                                target_short,
                             )
                         for sub in event.subagents:
                             if sub.conversation_id not in active_subagents:

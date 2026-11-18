@@ -111,14 +111,22 @@ class ControlPanelUI:
         settings = await self._settings_repo.load_settings()
         return get_lexicon(settings.ui_language)
 
-    @staticmethod
     async def _safe_edit_event(
+        self,
         event: events.CallbackQuery.Event,
         text: str,
         buttons: list[list[Button]] | None,
     ) -> None:
         with contextlib.suppress(MessageNotModifiedError):
-            await event.edit(text, buttons=buttons)
+            await edit_rich_or_standard_message(
+                client=self._client,
+                chat_id=self._cfg.telegram.forum_chat_id,
+                message_id=event.message_id,
+                markdown_text=text,
+                fallback_text=text,
+                fallback_entities=None,
+                buttons=buttons,
+            )
         await event.answer()
 
     async def render_and_pin_dashboard(self, recreate_at_bottom: bool) -> None:

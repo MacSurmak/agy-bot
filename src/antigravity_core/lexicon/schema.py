@@ -93,6 +93,8 @@ class UiLexicon:
     dashboard_sensors_header: str
     dashboard_sensor_item: str
     dashboard_settings_summary: str
+    dashboard_accounts_table_header: str
+    dashboard_hosts_table_header: str
     quota_5h_label: str
     quota_weekly_label: str
     quota_gemini_prefix: str

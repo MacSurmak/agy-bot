@@ -20,15 +20,14 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     topic_card_worker_warm="🟢 Warm in RAM (TTL: {ttl_min}m)",
     topic_card_worker_cold="⚪ Cold (spawns on message, TTL: {ttl_min}m)",
     topic_card_template=(
-        "📌 **Topic Passport: {title}**\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "💬 **Session:** {session_str}\n"
-        "📂 **Workspace:** `{workspace_path}`\n"
-        "🧠 **Model:** `{model_slug}`{effort_str}\n"
-        "👤 **Account:** `{email_label}`\n"
-        "🛡 **Permissions:** {mode_str}\n"
-        "🔑 **Sudo Mode:** {sudo_str}\n"
-        "📡 **Worker:** {worker_str}"
+        "### 📌 Topic Passport: {title}\n\n"
+        "- 💬 **Session:** {session_str}\n"
+        "- 📂 **Workspace:** `{workspace_path}`\n"
+        "- 🧠 **Model:** `{model_slug}`{effort_str}\n"
+        "- 👤 **Account:** `{email_label}`\n"
+        "- 🛡 **Permissions:** {mode_str}\n"
+        "- 🔑 **Sudo Mode:** {sudo_str}\n"
+        "- 📡 **Worker:** {worker_str}"
     ),
     # New Session Divider
     new_session_mode_full_access="Full Write",
@@ -79,35 +78,42 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     wake_badge_sensor="📡 Sensor: {sensor_name}",
     # Control Panel Dashboard
     dashboard_header=(
-        "🛠 **ANTIGRAVITY TELEGRAM CORE — CONTROL PANEL**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📡 **Worker Pool:** `{warm_count}` warm in RAM | `{running_count}` actively executing"
+        "### 🛠 Antigravity Core — Control Panel\n\n"
+        "- 📡 **Worker Pool:** `{warm_count}` warm in RAM · `{running_count}` executing"
     ),
     dashboard_worker_running_badge="🔥 RUNNING",
     dashboard_worker_warm_badge="🟢 WARM",
-    dashboard_worker_item="  • Topic `{topic_id}`: {state_badge} (`{model_slug}` on `{account_slug}`)",
-    dashboard_accounts_header="\n👤 **Google AI Pro Accounts & Quotas:**",
-    dashboard_accounts_empty="  • ⚠️ No Google accounts registered yet. Click **[🔑 Add / Auth Account]**.",
-    dashboard_account_default_badge=" ⭐ **[DEFAULT]**",
+    dashboard_worker_item="- Topic `{topic_id}`: {state_badge} (`{model_slug}` on `{account_slug}`)",
+    dashboard_accounts_header="\n### 👤 Google AI Pro Accounts & Quotas\n",
+    dashboard_accounts_empty="- ⚠️ No Google accounts registered yet. Click **🔑 Add / Auth Account**.",
+    dashboard_account_default_badge="⭐",
     dashboard_account_enabled_icon="🟢",
     dashboard_account_disabled_icon="🔴",
     dashboard_account_quota_unprobed="not probed yet",
-    dashboard_account_quota_probed="min remaining: `{min_pct}%`",
-    dashboard_account_backup_ok="🔒 Fernet Backup OK",
-    dashboard_account_backup_missing="⚠️ No Token",
-    dashboard_account_item="  • {status_badge} `{email_label}`{default_badge} — {quota_str} | {backup_badge}",
-    dashboard_hosts_header="\n🖥 **Remote Servers & SSH Keys:**",
-    dashboard_hosts_empty="  • None saved yet (connect to any `user@host` in a workspace topic).",
+    dashboard_account_quota_probed="`{min_pct}%`",
+    dashboard_account_backup_ok="🔒 OK",
+    dashboard_account_backup_missing="⚠️ No",
+    dashboard_account_item="- {status_badge} `{email_label}` {default_badge} — {quota_str} · {backup_badge}",
+    dashboard_hosts_header="\n### 🖥 Remote Servers & SSH Keys\n",
+    dashboard_hosts_empty="- None saved yet (connect to any `user@host` in a workspace topic).",
     dashboard_host_mounted_badge="🟢 Key + Sudo OK",
     dashboard_host_unmounted_badge="🔑 Pending Auth",
-    dashboard_host_item="  • `{alias}` (`{ssh_user}@{hostname_or_ip}:{ssh_port}`) [{m_badge}]",
-    dashboard_tasks_header="\n⏰ **Active Scheduled Tasks:** `{count}`",
-    dashboard_task_item="  • `{short_id}` [Topic `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
-    dashboard_sensors_header="\n📡 **Active Event Sensors:** `{count}`",
-    dashboard_sensor_item="  • `{short_id}` [Topic `{topic_id}`] **{name}** (`{sensor_kind}` | `{condition}` | {mode_tag})",
+    dashboard_host_item="- `{alias}` (`{ssh_user}@{hostname_or_ip}:{ssh_port}`) [{m_badge}]",
+    dashboard_tasks_header="\n### ⏰ Active Scheduled Tasks: `{count}`\n",
+    dashboard_task_item="- `{short_id}` [Topic `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
+    dashboard_sensors_header="\n### 📡 Active Event Sensors: `{count}`\n",
+    dashboard_sensor_item="- `{short_id}` [Topic `{topic_id}`] **{name}** (`{sensor_kind}` · `{condition}` · {mode_tag})",
     dashboard_settings_summary=(
-        "\n⚙️ **Default Settings:**\n"
-        "  • Language: `{ui_language}` | Model: `{default_model}` | Mode: `{default_execution_mode}`"
+        "\n### ⚙️ Default Settings\n\n"
+        "- Language: `{ui_language}` · Model: `{default_model}` · Mode: `{default_execution_mode}`"
+    ),
+    dashboard_accounts_table_header=(
+        "| Account | Backup | Model Group | Quotas & Reset |\n"
+        "| :--- | :---: | :--- | :--- |"
+    ),
+    dashboard_hosts_table_header=(
+        "| Server | SSH Address | Status |\n"
+        "| :--- | :--- | :--- |"
     ),
     quota_5h_label="**5h:** {bar}",
     quota_weekly_label="**Wk:** {bar}",

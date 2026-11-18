@@ -316,6 +316,11 @@ def supports_native_rich_output() -> bool:
     return hasattr(types, "InputRichMessageMarkdown")
 
 
+def supports_native_rich_html() -> bool:
+    """Returns True if the installed Telethon MTProto schema provides InputRichMessageHTML."""
+    return hasattr(types, "InputRichMessageHTML")
+
+
 def _extract_sent_message_from_updates(
     client: TelegramClient,
     updates_obj: types.TypeUpdates,
@@ -407,6 +412,85 @@ async def edit_rich_or_standard_message(
             reply_markup=markup,
             entities=None,
             rich_message=rich_cls(markdown=prepared_md[:32768]),
+        )
+        await client(req)
+        return
+
+    await client.edit_message(
+        entity=chat_id,
+        message=message_id,
+        text=fallback_text,
+        formatting_entities=fallback_entities,
+        buttons=buttons,
+    )
+
+
+async def send_rich_html_or_standard_message(
+    client: TelegramClient,
+    chat_id: int,
+    html_text: str,
+    fallback_text: str,
+    fallback_entities: list[TypeMessageEntity] | None,
+    reply_to: int | None,
+    silent: bool,
+    buttons: ButtonLayout,
+) -> Message:
+    """Sends a native Telegram HTML RichMessage (supporting <details> collapsibles) when available."""
+    if supports_native_rich_html():
+        html_cls = getattr(types, "InputRichMessageHTML")
+        peer = await client.get_input_entity(chat_id)
+        markup = client.build_reply_markup(buttons) if buttons is not None else None
+        reply_hdr = (
+            types.InputReplyToMessage(reply_to_msg_id=reply_to)
+            if reply_to is not None
+            else None
+        )
+        req = functions.messages.SendMessageRequest(
+            peer=peer,
+            message=fallback_text[:4000],
+            random_id=random.randrange(-2**63, 2**63),
+            reply_to=reply_hdr,
+            silent=silent,
+            reply_markup=markup,
+            entities=None,
+            rich_message=html_cls(html_text[:32768]),
+        )
+        updates_res = await client(req)
+        extracted = _extract_sent_message_from_updates(client, updates_res, chat_id)
+        if extracted is not None:
+            return extracted
+
+    return await client.send_message(
+        entity=chat_id,
+        message=fallback_text,
+        formatting_entities=fallback_entities,
+        reply_to=reply_to,
+        silent=silent,
+        buttons=buttons,
+    )
+
+
+async def edit_rich_html_or_standard_message(
+    client: TelegramClient,
+    chat_id: int,
+    message_id: int,
+    html_text: str,
+    fallback_text: str,
+    fallback_entities: list[TypeMessageEntity] | None,
+    buttons: ButtonLayout,
+) -> None:
+    """Edits an existing message in-place with native HTML RichMessage (<details> collapsibles)."""
+    if supports_native_rich_html():
+        html_cls = getattr(types, "InputRichMessageHTML")
+        peer = await client.get_input_entity(chat_id)
+        markup = client.build_reply_markup(buttons) if buttons is not None else None
+        req = functions.messages.EditMessageRequest(
+            peer=peer,
+            id=message_id,
+            message=fallback_text[:4000],
+            reply_markup=markup,
+            entities=None,
+            rich_message=html_cls(html_text[:32768]),
         )
         await client(req)
         return

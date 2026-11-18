@@ -1,5 +1,6 @@
 from bisect import bisect_left
 from datetime import UTC, datetime
+import html
 from pathlib import Path
 import re
 from typing import Any
@@ -178,7 +179,7 @@ def render_topic_header_card(
         else lex.topic_card_worker_cold.format(ttl_min=ttl_min)
     )
 
-    raw_card = lex.topic_card_template.format(
+    return lex.topic_card_template.format(
         title=topic.title,
         session_str=session_str,
         workspace_path=topic.workspace_path,
@@ -190,11 +191,6 @@ def render_topic_header_card(
         sudo_str=sudo_str,
         worker_str=worker_str,
     )
-    card_lines = raw_card.splitlines()
-    if len(card_lines) >= 2 and card_lines[1].startswith("━"):
-        header_bar = format_wide_header_block(card_lines[0])
-        return "\n".join([header_bar, *card_lines[2:]])
-    return raw_card
 
 
 def render_new_session_divider(lex: UiLexicon, topic: ForumTopic) -> str:
@@ -502,6 +498,87 @@ def build_final_execution_trace_pages(
     return _paginate_quote_blocks(lex, header, all_blocks)
 
 
+def _format_trace_blocks_as_html(
+    header_line: str,
+    blocks: list[str],
+    max_html_chars: int,
+) -> str:
+    """Renders an Execution Trace header and list of collapsible <details> blocks in Telegram Rich HTML."""
+    clean_header = html.escape(header_line.replace("**", "").replace("`", "").strip())
+    html_parts: list[str] = [f"<h3>{clean_header}</h3>"]
+    curr_len = len(html_parts[0])
+
+    for block in blocks:
+        lines = block.splitlines()
+        summary_raw = lines[0].strip() if lines else "Step"
+        body_raw = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+        if body_raw:
+            piece = (
+                f"<details><summary>{html.escape(summary_raw)}</summary>"
+                f"<pre><code>{html.escape(body_raw)}</code></pre></details>"
+            )
+        else:
+            piece = f"<p>{html.escape(summary_raw)}</p>"
+        if curr_len + len(piece) > max_html_chars:
+            break
+        html_parts.append(piece)
+        curr_len += len(piece)
+
+    return "\n".join(html_parts)
+
+
+def build_live_progress_rich_html(
+    lex: UiLexicon,
+    limits: LimitsStaticConfig,
+    event: TurnProgressEvent,
+    elapsed_sec: float,
+    model_slug: str,
+    account_slug: str,
+) -> str:
+    header = lex.live_progress_header.format(
+        model_slug=model_slug,
+        account_slug=account_slug,
+        elapsed_sec=elapsed_sec,
+    )
+    all_blocks = _build_all_untruncated_blocks(
+        lex=lex,
+        limits=limits,
+        thinking_text=event.thinking_text,
+        subagents=event.active_subagents,
+        tools=event.active_tools,
+        draft_text=event.text_accumulated,
+        is_final=False,
+    )
+    return _format_trace_blocks_as_html(header, all_blocks, 30000)
+
+
+def build_final_trace_rich_html(
+    lex: UiLexicon,
+    limits: LimitsStaticConfig,
+    result: TurnResult,
+    model_slug: str,
+    account_slug: str,
+) -> str:
+    if not result.thinking_text and not result.tool_calls and not result.subagents:
+        return ""
+    header = lex.trace_completed_header.format(
+        model_slug=model_slug,
+        account_slug=account_slug,
+        elapsed_sec=result.turn_delta_duration_sec,
+        steps_count=len(result.tool_calls),
+    )
+    all_blocks = _build_all_untruncated_blocks(
+        lex=lex,
+        limits=limits,
+        thinking_text=result.thinking_text,
+        subagents=result.subagents,
+        tools=result.tool_calls,
+        draft_text=None,
+        is_final=True,
+    )
+    return _format_trace_blocks_as_html(header, all_blocks, 30000)
+
+
 def render_turn_footer(
     lex: UiLexicon,
     limits: LimitsStaticConfig,
@@ -521,7 +598,11 @@ def render_turn_footer(
         model_slug=model_slug,
         account_slug=account_slug,
     )
-    lines = [make_wide_single_line_bar(stats_single_line)]
+    lines = [
+        stats_single_line.replace("**", "").replace("`", "").strip()
+        if supports_native_rich_output()
+        else make_wide_single_line_bar(stats_single_line)
+    ]
 
     if result.account_switched_from and result.account_switched_to:
         failover_clean = (
@@ -901,6 +982,86 @@ def render_Formatted_response_chunks(
     return rendered_pages
 
 
+def _group_account_quota_entries(
+    quota_json: dict[str, int | float | str | list[int] | dict[str, dict[str, int | float | str]]] | None,
+    lex: UiLexicon,
+) -> dict[str, list[str]]:
+    if not quota_json or "buckets" not in quota_json:
+        return {}
+    raw_buckets = quota_json["buckets"]
+    if not isinstance(raw_buckets, dict) or not raw_buckets:
+        return {}
+    grouped_bars: dict[str, list[str]] = {}
+    for b_key, b_val in raw_buckets.items():
+        if not isinstance(b_val, dict):
+            continue
+        grp, formatted_bar = _format_dynamic_bucket_entry(b_key, b_val, lex)
+        if grp not in grouped_bars:
+            grouped_bars[grp] = []
+        grouped_bars[grp].append(formatted_bar)
+    return grouped_bars
+
+
+def _build_accounts_dashboard_lines(
+    lex: UiLexicon,
+    accounts: list[GoogleAccount],
+) -> list[str]:
+    lines: list[str] = [lex.dashboard_accounts_header]
+    if not accounts:
+        lines.append(lex.dashboard_accounts_empty)
+        return lines
+
+    lines.append(lex.dashboard_accounts_table_header)
+    for acc in accounts:
+        default_badge = lex.dashboard_account_default_badge if acc.is_default else ""
+        status_badge = (
+            lex.dashboard_account_enabled_icon
+            if acc.is_enabled
+            else lex.dashboard_account_disabled_icon
+        )
+        backup_badge = (
+            lex.dashboard_account_backup_ok
+            if acc.encrypted_token_backup
+            else lex.dashboard_account_backup_missing
+        )
+        acc_cell = f"{status_badge} {default_badge} `{acc.email_label}`".strip()
+        grouped = _group_account_quota_entries(acc.last_quota_json, lex)
+        if not grouped:
+            lines.append(
+                f"| {acc_cell} | {backup_badge} | — | {lex.dashboard_account_quota_unprobed} |"
+            )
+            continue
+        for g_idx, (grp_name, bars) in enumerate(grouped.items()):
+            first_col = acc_cell if g_idx == 0 else "↳"
+            second_col = backup_badge if g_idx == 0 else ""
+            bars_cell = " · ".join(bars).replace("**", "")
+            lines.append(f"| {first_col} | {second_col} | {grp_name} | {bars_cell} |")
+    return lines
+
+
+def _build_hosts_dashboard_lines(
+    lex: UiLexicon,
+    hosts: list[RemoteHost],
+    mount_statuses: dict[str, bool],
+) -> list[str]:
+    lines: list[str] = [lex.dashboard_hosts_header]
+    if not hosts:
+        lines.append(lex.dashboard_hosts_empty)
+        return lines
+    lines.append(lex.dashboard_hosts_table_header)
+    for h in hosts:
+        mounted = mount_statuses[h.alias] if h.alias in mount_statuses else False
+        m_badge = (
+            lex.dashboard_host_mounted_badge
+            if mounted
+            else lex.dashboard_host_unmounted_badge
+        )
+        lines.append(
+            f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}` | {m_badge} |"
+        )
+    return lines
+
+
 def render_control_panel_dashboard(
     lex: UiLexicon,
     limits: LimitsStaticConfig,
@@ -910,24 +1071,14 @@ def render_control_panel_dashboard(
     pool_snapshots: list[WorkerTopicSnapshot],
     tasks: list[ScheduledTask],
     settings: DynamicSettings,
-    sensors: list[EventSensor] | None = None,
+    sensors: list[EventSensor] | None,
 ) -> str:
     warm_count = sum(1 for s in pool_snapshots if s.is_warm)
     running_count = sum(1 for s in pool_snapshots if s.is_running_turn)
 
-    raw_hdr_lines = lex.dashboard_header.format(
-        warm_count=warm_count, running_count=running_count
-    ).splitlines()
-    if len(raw_hdr_lines) >= 2 and raw_hdr_lines[1].startswith("━"):
-        lines: list[str] = [
-            format_wide_header_block(raw_hdr_lines[0]),
-            *raw_hdr_lines[2:],
-        ]
-    else:
-        lines = [
-            format_wide_header_block(raw_hdr_lines[0]),
-            *raw_hdr_lines[1:],
-        ]
+    lines: list[str] = [
+        lex.dashboard_header.format(warm_count=warm_count, running_count=running_count)
+    ]
     accounts_by_slug = {a.slug: a.display_email for a in accounts}
     for snap in pool_snapshots:
         if snap.is_warm:
@@ -950,72 +1101,8 @@ def render_control_panel_dashboard(
                 )
             )
 
-    lines.append(lex.dashboard_accounts_header)
-    if not accounts:
-        lines.append(lex.dashboard_accounts_empty)
-    for acc in accounts:
-        default_badge = lex.dashboard_account_default_badge if acc.is_default else ""
-        status_badge = (
-            lex.dashboard_account_enabled_icon
-            if acc.is_enabled
-            else lex.dashboard_account_disabled_icon
-        )
-        backup_badge = (
-            lex.dashboard_account_backup_ok
-            if acc.encrypted_token_backup
-            else lex.dashboard_account_backup_missing
-        )
-        quota_lines = format_account_quota_lines(acc.last_quota_json, lex)
-        if not quota_lines:
-            lines.append(
-                lex.dashboard_account_item.format(
-                    status_badge=status_badge,
-                    slug=acc.slug,
-                    email_label=acc.email_label,
-                    default_badge=default_badge,
-                    quota_str=lex.dashboard_account_quota_unprobed,
-                    backup_badge=backup_badge,
-                )
-            )
-        else:
-            min_pct = (
-                acc.last_quota_json.get("min_remaining_pct", "?")
-                if acc.last_quota_json
-                else "?"
-            )
-            short_q = lex.dashboard_account_quota_probed.format(min_pct=min_pct)
-            lines.append(
-                lex.dashboard_account_item.format(
-                    status_badge=status_badge,
-                    slug=acc.slug,
-                    email_label=acc.email_label,
-                    default_badge=default_badge,
-                    quota_str=short_q,
-                    backup_badge=backup_badge,
-                )
-            )
-            lines.extend(quota_lines)
-
-    lines.append(lex.dashboard_hosts_header)
-    if not hosts:
-        lines.append(lex.dashboard_hosts_empty)
-    for h in hosts:
-        mounted = mount_statuses.get(h.alias, False)
-        m_badge = (
-            lex.dashboard_host_mounted_badge
-            if mounted
-            else lex.dashboard_host_unmounted_badge
-        )
-        lines.append(
-            lex.dashboard_host_item.format(
-                alias=h.alias,
-                ssh_user=h.ssh_user,
-                hostname_or_ip=h.hostname_or_ip,
-                ssh_port=h.ssh_port,
-                local_mount_path=h.local_mount_path,
-                m_badge=m_badge,
-            )
-        )
+    lines.extend(_build_accounts_dashboard_lines(lex, accounts))
+    lines.extend(_build_hosts_dashboard_lines(lex, hosts, mount_statuses))
 
     short_len = limits.uuid_short_chars
     tasks_lim = limits.dashboard_tasks_display_limit
@@ -1031,7 +1118,7 @@ def render_control_panel_dashboard(
             )
         )
 
-    active_sensors = sensors or []
+    active_sensors = sensors if sensors is not None else []
     lines.append(lex.dashboard_sensors_header.format(count=len(active_sensors)))
     for s in active_sensors[:tasks_lim]:
         mode_tag = "1x" if s.one_shot else f"↻ {s.poll_interval_sec}s"
