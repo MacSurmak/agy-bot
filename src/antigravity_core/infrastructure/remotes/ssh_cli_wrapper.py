@@ -65,8 +65,7 @@ def _inject_sudo_prompt_token_into_ssh_argv(
         return list(ssh_argv)
 
     wrapped_cmd = (
-        f"export SUDO_PROMPT={shlex.quote(prompt_marker)}; "
-        f"{raw_remote_cmd}"
+        f"export SUDO_PROMPT={shlex.quote(prompt_marker)}; " f"{raw_remote_cmd}"
     )
     return [*host_And_opts, wrapped_cmd]
 
@@ -270,9 +269,7 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
 
             pending_buf += chunk
             if prompt_marker_bytes in pending_buf:
-                before_marker, after_marker = pending_buf.split(
-                    prompt_marker_bytes, 1
-                )
+                before_marker, after_marker = pending_buf.split(prompt_marker_bytes, 1)
                 if before_marker:
                     sys.stdout.buffer.write(before_marker)
                     sys.stdout.buffer.flush()

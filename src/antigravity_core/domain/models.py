@@ -18,7 +18,6 @@ from antigravity_core.domain.enums import (
     UserRole,
 )
 
-
 type QuotaJsonValue = (
     int | float | str | list[int] | dict[str, dict[str, int | float | str]]
 )

@@ -105,7 +105,7 @@ class AgyEnvironmentBootstrapper:
             f"   - Each known host has a passport in `{rules_dir}/infra-<alias>.md`.\n"
             "   - Whenever you discover project paths, databases, or services on a host, record insights using `mcp_telegram-core_update_host_knowledge`.\n\n"
             "## 3. Native Eager MCP Tools (`telegram-core`)\n\n"
-            "All tools from MCP server `telegram-core` are pre-registered with `\"eager\": true` in your native tool declarations (`mcp_telegram-core_<tool>`). "
+            'All tools from MCP server `telegram-core` are pre-registered with `"eager": true` in your native tool declarations (`mcp_telegram-core_<tool>`). '
             "Call them directly in a single step without reading schema files from `~/.gemini/antigravity-cli/mcp/telegram-core/`:\n"
             "- `mcp_telegram-core_register_remote_host`\n"
             "- `mcp_telegram-core_update_host_knowledge`\n"

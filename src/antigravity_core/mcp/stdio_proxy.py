@@ -314,15 +314,21 @@ async def get_bot_ssh_public_key() -> IpcPayload:
 async def register_remote_host(
     alias: Annotated[
         str,
-        Field(description="Short SSH alias for the host (e.g. 'b650mt', 'bigcomp', 'rtx4060')."),
+        Field(
+            description="Short SSH alias for the host (e.g. 'b650mt', 'bigcomp', 'rtx4060')."
+        ),
     ],
     hostname_or_ip: Annotated[
         str,
-        Field(description="IP address or hostname of the target server (e.g. '172.16.6.6', '192.168.1.100')."),
+        Field(
+            description="IP address or hostname of the target server (e.g. '172.16.6.6', '192.168.1.100')."
+        ),
     ],
     ssh_user: Annotated[
         str,
-        Field(description="SSH login username on the target server (e.g. 'user', 'andrey')."),
+        Field(
+            description="SSH login username on the target server (e.g. 'user', 'andrey')."
+        ),
     ],
     ssh_port: Annotated[
         int,
