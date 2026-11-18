@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-import structlog
+from loguru import logger
 
 from antigravity_core.application.scheduler_service import TemporalSchedulerService
 from antigravity_core.application.sensor_service import EventSensorService
@@ -30,8 +30,6 @@ from antigravity_core.infrastructure.database.repositories import (
 )
 from antigravity_core.infrastructure.media.mtproto_media import MediaService
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
-
-logger = structlog.get_logger(__name__)
 
 
 class CoreIpcServer:

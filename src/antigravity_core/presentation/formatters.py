@@ -34,6 +34,7 @@ from antigravity_core.presentation.tg_renderer import (
     WIDE_BAR_LANG,
     make_wide_single_line_bar,
     normalize_latex_outside_code,
+    supports_native_rich_output,
 )
 
 _BINARY_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]+")
@@ -108,7 +109,10 @@ def _pad_wide_bar(text: str) -> str:
 
 
 def format_wide_header_block(title: str) -> str:
-    """Wraps a header line in a single-line wide preformatted block without any visible dashes."""
+    """Renders a clean native Markdown H3 heading when RichMessage is active, or a 1-line wide pre block."""
+    if supports_native_rich_output():
+        clean_title = title.replace("**", "").strip()
+        return f"### {clean_title}"
     return f"```{make_wide_single_line_bar(title)}\n\u2060```"
 
 
@@ -803,8 +807,13 @@ def render_Formatted_response_chunks(
     lex: UiLexicon | None = None,
 ) -> list[tuple[str, list[TypeMessageEntity]]]:
     """Preprocesses GFM tables/headings/LaTeX first, then splits into safe chunks with 1-line wide footer bars."""
-    preprocessed_full = _preprocess_gfm_markdown(body_markdown)
-    raw_chunks = split_markdown_preserving_blocks(preprocessed_full, max_chars - 260)
+    effective_max = 30000 if supports_native_rich_output() else max_chars
+    preprocessed_full = (
+        body_markdown
+        if supports_native_rich_output()
+        else _preprocess_gfm_markdown(body_markdown)
+    )
+    raw_chunks = split_markdown_preserving_blocks(preprocessed_full, effective_max - 260)
     total_chunks = len(raw_chunks)
     rendered_pages: list[tuple[str, list[TypeMessageEntity]]] = []
 

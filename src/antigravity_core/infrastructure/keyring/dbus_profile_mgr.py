@@ -13,7 +13,7 @@ import termios
 from dataclasses import dataclass
 from pathlib import Path
 
-import structlog
+from loguru import logger
 
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import (
@@ -23,8 +23,6 @@ from antigravity_core.domain.exceptions import (
 from antigravity_core.domain.models import GoogleAccount
 from antigravity_core.infrastructure.crypto.fernet_vault import FernetVault
 from antigravity_core.infrastructure.database.repositories import AccountRepository
-
-logger = structlog.get_logger(__name__)
 
 _ANSI_ESCAPE_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\].*?\x07")
 _TUI_NOISE_RE: re.Pattern[str] = re.compile(r"[─━═│┃┌┐└┘├┤┬┴┼\ufffd]+")

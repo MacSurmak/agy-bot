@@ -1,7 +1,7 @@
 from dataclasses import replace
 from uuid import UUID
 
-import structlog
+from loguru import logger
 
 from antigravity_core.config.dynamic_settings import DynamicSettings
 from antigravity_core.domain.exceptions import (
@@ -9,7 +9,12 @@ from antigravity_core.domain.exceptions import (
     DatabaseIntegrityError,
     QuotaExhaustedError,
 )
-from antigravity_core.domain.models import ForumTopic, GoogleAccount, TurnResult
+from antigravity_core.domain.models import (
+    ForumTopic,
+    GoogleAccount,
+    QuotaJsonValue,
+    TurnResult,
+)
 from antigravity_core.infrastructure.agy_runtime.cli_inspector import AgyCliInspector
 from antigravity_core.infrastructure.agy_runtime.worker import ProgressCallback
 from antigravity_core.infrastructure.agy_runtime.worker_pool import AgyWorkerPool
@@ -20,7 +25,14 @@ from antigravity_core.infrastructure.database.repositories import (
     TopicRepository,
 )
 
-logger = structlog.get_logger(__name__)
+
+def _extract_min_remaining_pct(
+    quota_map: dict[str, QuotaJsonValue],
+) -> int:
+    if "min_remaining_pct" not in quota_map:
+        return 100
+    raw_val = quota_map["min_remaining_pct"]
+    return int(raw_val) if isinstance(raw_val, int | float) else 100
 
 
 class TurnOrchestrator:
@@ -57,7 +69,7 @@ class TurnOrchestrator:
 
         # Pre-flight proactive quota threshold check if cached quota is below threshold
         if account.last_quota_json is not None:
-            min_pct = int(account.last_quota_json.get("min_remaining_pct", 100))
+            min_pct = _extract_min_remaining_pct(account.last_quota_json)
             if min_pct < settings.quota_auto_switch_threshold_pct:
                 alt = await self._select_failover_account(
                     exclude_account_id=account.id,
@@ -246,7 +258,7 @@ class TurnOrchestrator:
             try:
                 quota_info = await self._inspector.fetch_account_quota(candidate)
                 await self._account_repo.update_quota_snapshot(candidate.id, quota_info)
-                if int(quota_info.get("min_remaining_pct", 100)) >= threshold_pct:
+                if _extract_min_remaining_pct(quota_info) >= threshold_pct:
                     return candidate
             except AgyProcessError as exc:
                 logger.warning(

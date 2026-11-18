@@ -3,18 +3,16 @@ from datetime import UTC, datetime, timedelta
 import re
 from uuid import UUID, uuid4
 
-import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from loguru import logger
 
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import NotifyPolicy, ScheduleKind
 from antigravity_core.domain.exceptions import ConfigurationError
 from antigravity_core.domain.models import ScheduledTask
 from antigravity_core.infrastructure.database.repositories import ScheduleRepository
-
-logger = structlog.get_logger(__name__)
 
 ScheduledWakeAgentCallback = Callable[[int, str, UUID | None], Awaitable[None]]
 

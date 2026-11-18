@@ -115,6 +115,27 @@ class RemoteMountManager:
             _tid, s_fut = self._pending_sudo.pop(req_id)
             if not s_fut.done():
                 s_fut.cancel()
+        self.cleanup_topic_staged_files(topic_id)
+
+    def cleanup_topic_staged_files(self, topic_id: int) -> None:
+        """Force-cleans any orphaned local TRAMP staged files and baselines for a topic after turn end or cancel."""
+        matching_keys = [
+            b_key for b_key in self._staged_baselines if b_key[0] == topic_id
+        ]
+        for b_key in matching_keys:
+            self._staged_baselines.pop(b_key, None)
+            stage_path_str = b_key[1]
+            self._stage_refcounts.pop(stage_path_str, None)
+            stage_path = Path(stage_path_str)
+            if stage_path.is_file():
+                stage_path.unlink(missing_ok=True)
+            elif stage_path.is_dir():
+                shutil.rmtree(stage_path, ignore_errors=True)
+            top_parts = stage_path_str.lstrip("/").split("/", 1)
+            if top_parts and top_parts[0].startswith("ssh:"):
+                stage_root = Path("/") / top_parts[0]
+                if stage_root.exists():
+                    self._prune_empty_stage_parents(stage_path, stage_root)
 
     def resolve_sudo_approval(self, request_id: str, decision: str) -> tuple[int, bool]:
         if request_id not in self._pending_sudo:

@@ -40,6 +40,10 @@ from antigravity_core.presentation.formatters import (
     format_wide_header_block,
     render_control_panel_dashboard,
 )
+from antigravity_core.presentation.tg_renderer import (
+    edit_rich_or_standard_message,
+    send_rich_or_standard_message,
+)
 from antigravity_core.presentation.keyboards import (
     build_control_panel_keyboard,
     build_default_account_picker_keyboard,
@@ -109,49 +113,48 @@ class ControlPanelUI:
 
     @staticmethod
     async def _safe_edit_event(
-        event: events.CallbackQuery.Event, text: str, buttons: object
+        event: events.CallbackQuery.Event,
+        text: str,
+        buttons: list[list[Button]] | None,
     ) -> None:
-        try:
+        with contextlib.suppress(MessageNotModifiedError):
             await event.edit(text, buttons=buttons)
-        except MessageNotModifiedError:
-            await event.answer()
+        await event.answer()
 
-    async def render_and_pin_dashboard(self, recreate_at_bottom: bool = False) -> None:
+    async def render_and_pin_dashboard(self, recreate_at_bottom: bool) -> None:
         lex, text = await self._build_dashboard_text()
         buttons = build_control_panel_keyboard(lex)
         cp_topic_id = self._cfg.telegram.control_panel_topic_id
         stored_msg_id = await self._settings_repo.get_dashboard_msg_id()
 
         if stored_msg_id is not None and not recreate_at_bottom:
-            try:
-                await self._client.edit_message(
-                    entity=self._cfg.telegram.forum_chat_id,
-                    message=stored_msg_id,
-                    text=text,
+            with contextlib.suppress(MessageNotModifiedError):
+                await edit_rich_or_standard_message(
+                    client=self._client,
+                    chat_id=self._cfg.telegram.forum_chat_id,
+                    message_id=stored_msg_id,
+                    markdown_text=text,
+                    fallback_text=text,
+                    fallback_entities=None,
                     buttons=buttons,
                 )
-                return
-            except MessageNotModifiedError:
-                return
-            except RPCError as exc:
-                logger.debug(
-                    "Stored dashboard message no longer editable; recreating",
-                    error=str(exc),
-                )
+            return
 
         if stored_msg_id is not None:
-            try:
+            with contextlib.suppress(RPCError):
                 await self._client.delete_messages(
                     entity=self._cfg.telegram.forum_chat_id,
                     message_ids=[stored_msg_id],
                 )
-            except RPCError as exc:
-                logger.debug("Could not delete old dashboard message", error=str(exc))
 
-        msg = await self._client.send_message(
-            entity=self._cfg.telegram.forum_chat_id,
-            message=text,
+        msg = await send_rich_or_standard_message(
+            client=self._client,
+            chat_id=self._cfg.telegram.forum_chat_id,
+            markdown_text=text,
+            fallback_text=text,
+            fallback_entities=None,
             reply_to=cp_topic_id,
+            silent=False,
             buttons=buttons,
         )
         self._last_cp_msg_id = max(self._last_cp_msg_id, msg.id)

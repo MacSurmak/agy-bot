@@ -32,7 +32,6 @@ dependencies = [
     "alembic>=1.20.1",
     "apscheduler>=3.11.3",
     "mcp>=2.3.0",
-    "structlog>=25.4.0",
     "loguru>=0.7.3",
 ]
 

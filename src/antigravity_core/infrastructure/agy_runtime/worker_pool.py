@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import dataclass
 from uuid import UUID
 
-import structlog
+from loguru import logger
 
 from antigravity_core.config.dynamic_settings import DynamicSettings
 from antigravity_core.config.static_config import StaticConfig
@@ -21,8 +21,6 @@ from antigravity_core.infrastructure.agy_runtime.worker import (
 from antigravity_core.infrastructure.keyring.dbus_profile_mgr import (
     KeyringProfileManager,
 )
-
-logger = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True)

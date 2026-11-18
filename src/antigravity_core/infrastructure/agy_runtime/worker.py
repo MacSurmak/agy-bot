@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from uuid import UUID
 
-import structlog
+from loguru import logger
 
 from antigravity_core.config.dynamic_settings import DynamicSettings
 from antigravity_core.config.static_config import StaticConfig
@@ -28,10 +28,8 @@ from antigravity_core.infrastructure.agy_runtime.stream_protocol import (
     serialize_user_prompt,
 )
 
-logger = structlog.get_logger(__name__)
-
-ProgressCallback = Callable[[TurnProgressEvent], Awaitable[None]]
-InitCallback = Callable[[UUID], Awaitable[None]]
+type ProgressCallback = Callable[[TurnProgressEvent], Awaitable[None]]
+type InitCallback = Callable[[UUID], Awaitable[None]]
 
 _QUOTA_ERROR_MARKERS: tuple[str, ...] = (
     "resourceexhausted",

@@ -10,6 +10,7 @@ from typing import Final
 from loguru import logger
 from telethon import TelegramClient, events
 from telethon.errors import MessageNotModifiedError, RPCError
+from telethon.tl.custom import Message
 from telethon.tl.types import TypeMessageEntity
 
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
@@ -42,7 +43,10 @@ from antigravity_core.presentation.formatters import (
     render_new_session_divider,
     render_topic_header_card,
     render_turn_footer,
-    split_message_chunks,
+)
+from antigravity_core.presentation.tg_renderer import (
+    edit_rich_or_standard_message,
+    send_rich_or_standard_message,
 )
 from antigravity_core.presentation.keyboards import (
     build_live_progress_keyboard,
@@ -59,6 +63,8 @@ from antigravity_core.presentation.keyboards import (
 )
 
 _CMD_WITH_ARG_PARTS: Final[int] = 2
+_SUDO_CB_MIN_PARTS: Final[int] = 4
+_TITLE_SYNC_ATTEMPTS: Final[int] = 4
 
 
 class WorkspaceTopicUI:
@@ -243,39 +249,34 @@ class WorkspaceTopicUI:
         buttons = build_topic_header_keyboard(lex, topic)
 
         if topic.pinned_card_msg_id is not None:
-            try:
-                await self._client.edit_message(
-                    entity=self._cfg.telegram.forum_chat_id,
-                    message=topic.pinned_card_msg_id,
-                    text=card_text,
+            with contextlib.suppress(MessageNotModifiedError):
+                await edit_rich_or_standard_message(
+                    client=self._client,
+                    chat_id=self._cfg.telegram.forum_chat_id,
+                    message_id=topic.pinned_card_msg_id,
+                    markdown_text=card_text,
+                    fallback_text=card_text,
+                    fallback_entities=None,
                     buttons=buttons,
                 )
-                return
-            except MessageNotModifiedError:
-                return
-            except RPCError as exc:
-                logger.debug(
-                    "Pinned card message edit skipped or expired; sending fresh card",
-                    topic_id=topic_id,
-                    error=str(exc),
-                )
+            return
 
-        sent = await self._client.send_message(
-            entity=self._cfg.telegram.forum_chat_id,
-            message=card_text,
+        sent = await send_rich_or_standard_message(
+            client=self._client,
+            chat_id=self._cfg.telegram.forum_chat_id,
+            markdown_text=card_text,
+            fallback_text=card_text,
+            fallback_entities=None,
             reply_to=topic_id,
+            silent=False,
             buttons=buttons,
         )
         await self._topic_repo.set_pinned_card_msg_id(topic_id, sent.id)
-        try:
+        with contextlib.suppress(RPCError):
             await self._client.pin_message(
                 entity=self._cfg.telegram.forum_chat_id,
                 message=sent.id,
                 notify=False,
-            )
-        except RPCError as exc:
-            logger.warning(
-                "Could not pin topic card message", topic_id=topic_id, error=str(exc)
             )
 
     async def handle_slash_command(self, topic_id: int, raw_text: str) -> bool:
@@ -327,16 +328,21 @@ class WorkspaceTopicUI:
                 if q_lines:
                     body = f"{hdr_q}\n" + "\n".join(q_lines)
                 else:
-                    min_p = q_info.get("min_remaining_pct", "?")
+                    min_p = (
+                        q_info["min_remaining_pct"]
+                        if "min_remaining_pct" in q_info
+                        else "?"
+                    )
                     body = f"{hdr_q}\n" + lex.ws_quota_fallback_body.format(
                         min_pct=min_p
                     )
                 await wait_msg.edit(body)
-            except Exception as exc:
+            except AgyProcessError as exc:
                 max_err = self._cfg.limits.error_summary_max_chars
                 await wait_msg.edit(
                     lex.ws_quota_error_msg.format(error=str(exc)[:max_err])
                 )
+                raise
             return True
 
         if cmd == "/model":
@@ -351,7 +357,7 @@ class WorkspaceTopicUI:
                     message=lex.ws_turn_error_msg.format(error=exc),
                     reply_to=topic_id,
                 )
-                return True
+                raise
 
             if len(parts) == _CMD_WITH_ARG_PARTS and parts[1].strip():
                 requested = parts[1].strip()
@@ -404,7 +410,7 @@ class WorkspaceTopicUI:
 
         if cmd == "/rename":
             parts = raw_text.split(maxsplit=1)
-            if len(parts) == 2 and parts[1].strip():
+            if len(parts) == _CMD_WITH_ARG_PARTS and parts[1].strip():
                 new_title = parts[1].strip()
                 await self._lifecycle.rename_topic(topic_id, new_title)
                 await self.refresh_pinned_card(topic_id)
@@ -412,24 +418,162 @@ class WorkspaceTopicUI:
 
         return False
 
+    async def _sync_single_trace_page_list(
+        self,
+        topic_id: int,
+        trace_msgs: list[Message],
+        rendered_page_state: dict[int, tuple[str, bool]],
+        pages: list[tuple[str, list[TypeMessageEntity]]],
+        is_final: bool,
+    ) -> None:
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
+
+        if topic_id in self._relocate_trace_topics:
+            self._relocate_trace_topics.discard(topic_id)
+            old_ids = [m.id for m in trace_msgs]
+            if old_ids:
+                with contextlib.suppress(RPCError):
+                    await self._client.delete_messages(
+                        entity=self._cfg.telegram.forum_chat_id,
+                        message_ids=old_ids,
+                    )
+            trace_msgs.clear()
+            rendered_page_state.clear()
+
+        total_pages = len(pages)
+        for idx, (page_text, ents) in enumerate(pages):
+            has_cancel_btn = (not is_final) and (idx == total_pages - 1)
+            desired_state = (page_text, has_cancel_btn)
+            kb = build_live_progress_keyboard(lex, topic_id) if has_cancel_btn else None
+
+            if idx < len(trace_msgs):
+                if idx in rendered_page_state and rendered_page_state[idx] == desired_state:
+                    continue
+                msg_id = trace_msgs[idx].id
+                with contextlib.suppress(MessageNotModifiedError, RPCError):
+                    await self._client.edit_message(
+                        entity=self._cfg.telegram.forum_chat_id,
+                        message=msg_id,
+                        text=page_text,
+                        formatting_entities=ents,
+                        buttons=kb,
+                    )
+                    rendered_page_state[idx] = desired_state
+                if is_final and idx not in rendered_page_state:
+                    with contextlib.suppress(RPCError):
+                        await self._client.edit_message(
+                            entity=self._cfg.telegram.forum_chat_id,
+                            message=msg_id,
+                            buttons=None,
+                        )
+            else:
+                with contextlib.suppress(RPCError):
+                    new_msg: Message = await self._client.send_message(
+                        entity=self._cfg.telegram.forum_chat_id,
+                        message=page_text,
+                        formatting_entities=ents,
+                        reply_to=topic_id,
+                        silent=True,
+                        buttons=kb,
+                    )
+                    trace_msgs.append(new_msg)
+                    rendered_page_state[idx] = desired_state
+
+    async def _deliver_formatted_turn_output(
+        self,
+        topic_id: int,
+        reply_to_msg_id: int,
+        body_text: str,
+        footer_bar: str,
+        updated_topic: ForumTopic,
+    ) -> None:
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
+        formatted_chunks = render_Formatted_response_chunks(
+            body_markdown=body_text,
+            footer_bar_text=footer_bar,
+            max_chars=settings.tg_max_message_chars,
+            lex=lex,
+        )
+        total_chunks = len(formatted_chunks)
+        for idx, (chunk_text, chunk_entities) in enumerate(formatted_chunks):
+            is_first = idx == 0
+            is_last = idx == total_chunks - 1
+            rich_md = (
+                f"{body_text}\n\n`{footer_bar.strip()}`"
+                if total_chunks == 1
+                else chunk_text
+            )
+            await send_rich_or_standard_message(
+                client=self._client,
+                chat_id=self._cfg.telegram.forum_chat_id,
+                markdown_text=rich_md,
+                fallback_text=chunk_text,
+                fallback_entities=chunk_entities,
+                reply_to=reply_to_msg_id if is_first else topic_id,
+                silent=not is_first,
+                buttons=(
+                    build_turn_response_keyboard(lex, updated_topic)
+                    if is_last
+                    else None
+                ),
+            )
+
+    async def _finalize_trace_messages(
+        self,
+        topic_id: int,
+        trace_msgs: list[Message],
+        rendered_page_state: dict[int, tuple[str, bool]],
+        sync_lock: asyncio.Lock,
+        final_pages: list[tuple[str, list[TypeMessageEntity]]],
+    ) -> None:
+        if final_pages:
+            async with sync_lock:
+                await self._sync_single_trace_page_list(
+                    topic_id, trace_msgs, rendered_page_state, final_pages, True
+                )
+            if len(trace_msgs) > len(final_pages):
+                extra_ids = [m.id for m in trace_msgs[len(final_pages) :]]
+                del trace_msgs[len(final_pages) :]
+                if extra_ids:
+                    with contextlib.suppress(RPCError):
+                        await self._client.delete_messages(
+                            entity=self._cfg.telegram.forum_chat_id,
+                            message_ids=extra_ids,
+                        )
+        else:
+            del_ids = [m.id for m in trace_msgs]
+            if del_ids:
+                with contextlib.suppress(RPCError):
+                    await self._client.delete_messages(
+                        entity=self._cfg.telegram.forum_chat_id,
+                        message_ids=del_ids,
+                    )
+
+    async def _handle_custom_dir_reply(
+        self, topic_id: int, reply_to_msg_id: int, prompt: str
+    ) -> None:
+        self._awaiting_custom_dir_topics.discard(topic_id)
+        settings = await self._settings_repo.load_settings()
+        lex = get_lexicon(settings.ui_language)
+        custom_path = Path(prompt.strip()).expanduser().resolve()
+        custom_path.mkdir(parents=True, exist_ok=True)
+        await self._topic_repo.update_workspace_path(topic_id, str(custom_path))
+        await self._pool.evict_topic_worker(topic_id)
+        await self.refresh_pinned_card(topic_id)
+        await self._client.send_message(
+            entity=self._cfg.telegram.forum_chat_id,
+            message=lex.ws_dir_confirmed_msg.format(workspace_path=custom_path),
+            reply_to=reply_to_msg_id,
+            silent=True,
+        )
+
     async def execute_batched_prompt(
         self, topic_id: int, reply_to_msg_id: int, prompt: str
     ) -> None:
         if topic_id in self._awaiting_custom_dir_topics:
-            self._awaiting_custom_dir_topics.discard(topic_id)
-            settings = await self._settings_repo.load_settings()
-            lex = get_lexicon(settings.ui_language)
-            custom_path = Path(prompt.strip()).expanduser().resolve()
-            custom_path.mkdir(parents=True, exist_ok=True)
-            await self._topic_repo.update_workspace_path(topic_id, str(custom_path))
-            await self._pool.evict_topic_worker(topic_id)
-            await self.refresh_pinned_card(topic_id)
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=lex.ws_dir_confirmed_msg.format(workspace_path=custom_path),
-                reply_to=reply_to_msg_id,
-                silent=True,
-            )
+            await self._handle_custom_dir_reply(topic_id, reply_to_msg_id, prompt)
             return
 
         topic = await self.ensure_topic_registered(topic_id)
@@ -438,19 +582,18 @@ class WorkspaceTopicUI:
         lex = get_lexicon(settings.ui_language)
 
         logger.info(
-            "Starting user turn in topic",
-            topic_id=topic_id,
-            model=topic.model_slug,
-            account=account.slug,
-            workspace=topic.workspace_path,
-            prompt_preview=prompt[:100].replace("\n", " "),
+            "Starting user turn in topic: topic_id={} model={} account={} workspace={}",
+            topic_id,
+            topic.model_slug,
+            account.slug,
+            topic.workspace_path,
         )
         await self._clear_staged_media_card(topic_id)
         start_ts = time.monotonic()
         self._last_trace_edit_ts[topic_id] = start_ts
 
         acc_display = account.display_email
-        status_msg = await self._client.send_message(
+        status_msg: Message = await self._client.send_message(
             entity=self._cfg.telegram.forum_chat_id,
             message=lex.ws_starting_turn_msg.format(
                 model_slug=topic.model_slug, account_slug=acc_display
@@ -459,98 +602,20 @@ class WorkspaceTopicUI:
             silent=True,
             buttons=build_live_progress_keyboard(lex, topic_id),
         )
-        trace_msgs = [status_msg]
+        trace_msgs: list[Message] = [status_msg]
         rendered_page_state: dict[int, tuple[str, bool]] = {}
-
-        async def _sync_trace_pages(
-            pages: list[tuple[str, list[TypeMessageEntity]]], is_final: bool
-        ) -> None:
-            if topic_id in self._relocate_trace_topics:
-                self._relocate_trace_topics.discard(topic_id)
-                for old_msg in trace_msgs:
-                    with contextlib.suppress(RPCError):
-                        await old_msg.delete()
-                trace_msgs.clear()
-                rendered_page_state.clear()
-
-            total_pages = len(pages)
-            for idx, (page_text, raw_ents) in enumerate(pages):
-                ents: list[TypeMessageEntity] = [
-                    e for e in raw_ents if isinstance(e, TypeMessageEntity)
-                ]
-                has_cancel_btn = (not is_final) and (idx == total_pages - 1)
-                desired_state = (page_text, has_cancel_btn)
-
-                if idx < len(trace_msgs):
-                    if rendered_page_state.get(idx) == desired_state:
-                        continue
-                    try:
-                        await self._client.edit_message(
-                            entity=self._cfg.telegram.forum_chat_id,
-                            message=trace_msgs[idx].id,
-                            text=page_text,
-                            formatting_entities=ents,
-                            buttons=(
-                                build_live_progress_keyboard(lex, topic_id)
-                                if has_cancel_btn
-                                else None
-                            ),
-                        )
-                        rendered_page_state[idx] = desired_state
-                    except MessageNotModifiedError:
-                        rendered_page_state[idx] = desired_state
-                    except RPCError as exc:
-                        if is_final:
-                            # Ensure the cancel button is removed even if text edit hit a minor RPC limit
-                            try:
-                                await self._client.edit_message(
-                                    entity=self._cfg.telegram.forum_chat_id,
-                                    message=trace_msgs[idx].id,
-                                    buttons=None,
-                                )
-                            except RPCError as btn_exc:
-                                logger.debug(
-                                    "Could not clear cancel button on final trace page",
-                                    error=str(btn_exc),
-                                )
-                        logger.debug(
-                            "Trace page edit skipped",
-                            topic_id=topic_id,
-                            page=idx + 1,
-                            error=str(exc),
-                        )
-                else:
-                    try:
-                        new_msg = await self._client.send_message(
-                            entity=self._cfg.telegram.forum_chat_id,
-                            message=page_text,
-                            formatting_entities=ents,
-                            reply_to=topic_id,
-                            silent=True,
-                            buttons=(
-                                build_live_progress_keyboard(lex, topic_id)
-                                if has_cancel_btn
-                                else None
-                            ),
-                        )
-                        trace_msgs.append(new_msg)
-                        rendered_page_state[idx] = desired_state
-                    except RPCError as exc:
-                        logger.warning(
-                            "Failed to send overflow trace page",
-                            topic_id=topic_id,
-                            page=idx + 1,
-                            error=str(exc),
-                        )
-
         sync_lock = asyncio.Lock()
 
-        async def _bg_sync_pages(pages: list[tuple[str, list[TypeMessageEntity]]]) -> None:
+        async def _bg_sync_pages(
+            pages: list[tuple[str, list[TypeMessageEntity]]],
+        ) -> None:
             if sync_lock.locked() or not self._client.is_connected():
                 return
             async with sync_lock:
                 if self._client.is_connected():
-                    await _sync_trace_pages(pages, is_final=False)
+                    await self._sync_single_trace_page_list(
+                        topic_id, trace_msgs, rendered_page_state, pages, False
+                    )
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
             now = time.monotonic()
@@ -584,17 +649,18 @@ class WorkspaceTopicUI:
         except Exception as exc:
             max_err = self._cfg.limits.error_summary_max_chars
             err_short = str(exc)[:max_err]
-            logger.error("Turn execution failed", topic_id=topic_id, error=err_short)
-            try:
-                await trace_msgs[-1].edit(
-                    lex.ws_turn_error_msg.format(error=err_short), buttons=None
+            logger.error("Turn execution failed: topic_id={} error={}", topic_id, err_short)
+            last_mid = trace_msgs[-1].id
+            with contextlib.suppress(RPCError):
+                await self._client.edit_message(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message=last_mid,
+                    text=lex.ws_turn_error_msg.format(error=err_short),
+                    buttons=None,
                 )
-            except RPCError as edit_exc:
-                logger.warning(
-                    "Failed to update status message with turn error",
-                    error=str(edit_exc),
-                )
-            return
+            raise
+        finally:
+            self._mount_mgr.cleanup_topic_staged_files(topic_id)
 
         updated_topic = await self._topic_repo.get_topic_strict(topic_id)
         updated_account = await self._account_repo.get_by_id(
@@ -609,19 +675,9 @@ class WorkspaceTopicUI:
             model_slug=updated_topic.model_slug,
             account_slug=upd_acc_display,
         )
-        if final_pages:
-            async with sync_lock:
-                await _sync_trace_pages(final_pages, is_final=True)
-            if len(trace_msgs) > len(final_pages):
-                extra_msgs = trace_msgs[len(final_pages) :]
-                del trace_msgs[len(final_pages) :]
-                for extra_msg in extra_msgs:
-                    with contextlib.suppress(RPCError):
-                        await extra_msg.delete()
-        else:
-            for msg in trace_msgs:
-                with contextlib.suppress(RPCError):
-                    await msg.delete()
+        await self._finalize_trace_messages(
+            topic_id, trace_msgs, rendered_page_state, sync_lock, final_pages
+        )
 
         footer_bar = render_turn_footer(
             lex=lex,
@@ -635,45 +691,9 @@ class WorkspaceTopicUI:
             if result.response_text.strip()
             else lex.ws_empty_response_fallback.format(status=result.status.value)
         )
-
-        try:
-            formatted_chunks = render_Formatted_response_chunks(
-                body_markdown=body_text,
-                footer_bar_text=footer_bar,
-                max_chars=settings.tg_max_message_chars,
-                lex=lex,
-            )
-            for idx, (chunk_text, chunk_entities) in enumerate(formatted_chunks):
-                is_first = idx == 0
-                is_last = idx == len(formatted_chunks) - 1
-                await self._client.send_message(
-                    entity=self._cfg.telegram.forum_chat_id,
-                    message=chunk_text,
-                    formatting_entities=chunk_entities,
-                    reply_to=reply_to_msg_id if is_first else topic_id,
-                    silent=not is_first,
-                    buttons=(
-                        build_turn_response_keyboard(lex, updated_topic)
-                        if is_last
-                        else None
-                    ),
-                )
-        except Exception as exc:
-            logger.error(
-                "Failed to render or send formatted response chunks; sending plain fallback",
-                topic_id=topic_id,
-                error=str(exc),
-                exc_info=True,
-            )
-            for plain_chunk in split_message_chunks(
-                f"{body_text}\n\n{footer_bar}", settings.tg_max_message_chars
-            ):
-                await self._client.send_message(
-                    entity=self._cfg.telegram.forum_chat_id,
-                    message=plain_chunk,
-                    reply_to=topic_id,
-                )
-
+        await self._deliver_formatted_turn_output(
+            topic_id, reply_to_msg_id, body_text, footer_bar, updated_topic
+        )
         await self._auto_sync_topic_title_if_generic(
             updated_topic, result.conversation_id
         )
@@ -685,7 +705,7 @@ class WorkspaceTopicUI:
         if not topic.title.startswith(("💬", "Рабочий топик #", "Workspace #")):
             return
         summary = None
-        for _ in range(4):
+        for _ in range(_TITLE_SYNC_ATTEMPTS):
             summary = self._history_reader.get_conversation_summary(conversation_id)
             if (
                 summary is not None
@@ -743,72 +763,20 @@ class WorkspaceTopicUI:
             silent=True,
             buttons=build_live_progress_keyboard(lex, topic_id),
         )
-        trace_msgs = [status_msg]
+        trace_msgs: list[Message] = [status_msg]
         rendered_page_state: dict[int, tuple[str, bool]] = {}
         sync_lock = asyncio.Lock()
 
-        async def _sync_trace_pages(
-            pages: list[tuple[str, list[object]]], is_final: bool
+        async def _bg_sync_pages(
+            pages: list[tuple[str, list[TypeMessageEntity]]],
         ) -> None:
-            from telethon.tl.types import TypeMessageEntity
-
-            total_pages = len(pages)
-            for idx, (page_text, raw_ents) in enumerate(pages):
-                ents: list[TypeMessageEntity] = [
-                    e for e in raw_ents if isinstance(e, TypeMessageEntity)
-                ]
-                has_cancel_btn = (not is_final) and (idx == total_pages - 1)
-                desired_state = (page_text, has_cancel_btn)
-
-                if idx < len(trace_msgs):
-                    if rendered_page_state.get(idx) == desired_state:
-                        continue
-                    try:
-                        await self._client.edit_message(
-                            entity=self._cfg.telegram.forum_chat_id,
-                            message=trace_msgs[idx].id,
-                            text=page_text,
-                            formatting_entities=ents,
-                            buttons=(
-                                build_live_progress_keyboard(lex, topic_id)
-                                if has_cancel_btn
-                                else None
-                            ),
-                        )
-                        rendered_page_state[idx] = desired_state
-                    except MessageNotModifiedError:
-                        rendered_page_state[idx] = desired_state
-                    except RPCError:
-                        if is_final:
-                            with contextlib.suppress(RPCError):
-                                await self._client.edit_message(
-                                    entity=self._cfg.telegram.forum_chat_id,
-                                    message=trace_msgs[idx].id,
-                                    buttons=None,
-                                )
-                else:
-                    with contextlib.suppress(RPCError):
-                        new_msg = await self._client.send_message(
-                            entity=self._cfg.telegram.forum_chat_id,
-                            message=page_text,
-                            formatting_entities=ents,
-                            reply_to=topic_id,
-                            silent=True,
-                            buttons=(
-                                build_live_progress_keyboard(lex, topic_id)
-                                if has_cancel_btn
-                                else None
-                            ),
-                        )
-                        trace_msgs.append(new_msg)
-                        rendered_page_state[idx] = desired_state
-
-        async def _bg_sync_pages(pages: list[tuple[str, list[object]]]) -> None:
-            if sync_lock.locked():
+            if sync_lock.locked() or not self._client.is_connected():
                 return
-            with contextlib.suppress(Exception):
-                async with sync_lock:
-                    await _sync_trace_pages(pages, is_final=False)
+            async with sync_lock:
+                if self._client.is_connected():
+                    await self._sync_single_trace_page_list(
+                        topic_id, trace_msgs, rendered_page_state, pages, False
+                    )
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
             now = time.monotonic()
@@ -841,12 +809,17 @@ class WorkspaceTopicUI:
             )
         except Exception as exc:
             max_err = self._cfg.limits.error_summary_max_chars
+            last_mid = trace_msgs[-1].id
             with contextlib.suppress(RPCError):
-                await trace_msgs[-1].edit(
-                    lex.ws_turn_error_msg.format(error=str(exc)[:max_err]),
+                await self._client.edit_message(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message=last_mid,
+                    text=lex.ws_turn_error_msg.format(error=str(exc)[:max_err]),
                     buttons=None,
                 )
-            return
+            raise
+        finally:
+            self._mount_mgr.cleanup_topic_staged_files(topic_id)
 
         cleaned_resp = result.response_text.strip()
         updated_topic = await self._topic_repo.get_topic_strict(topic_id)
@@ -862,17 +835,9 @@ class WorkspaceTopicUI:
             model_slug=updated_topic.model_slug,
             account_slug=f"{badge_prefix} │ {upd_acc_display}",
         )
-        if final_pages:
-            async with sync_lock:
-                await _sync_trace_pages(final_pages, is_final=True)
-            if len(trace_msgs) > len(final_pages):
-                for extra_msg in trace_msgs[len(final_pages) :]:
-                    with contextlib.suppress(RPCError):
-                        await extra_msg.delete()
-        else:
-            for msg in trace_msgs:
-                with contextlib.suppress(RPCError):
-                    await msg.delete()
+        await self._finalize_trace_messages(
+            topic_id, trace_msgs, rendered_page_state, sync_lock, final_pages
+        )
 
         footer_bar = f"{badge_prefix}  │  " + render_turn_footer(
             lex=lex,
@@ -886,25 +851,9 @@ class WorkspaceTopicUI:
             if cleaned_resp
             else lex.ws_empty_response_fallback.format(status=result.status.value)
         )
-        formatted_chunks = render_Formatted_response_chunks(
-            body_markdown=body_text,
-            footer_bar_text=footer_bar,
-            max_chars=settings.tg_max_message_chars,
-            lex=lex,
+        await self._deliver_formatted_turn_output(
+            topic_id, topic_id, body_text, footer_bar, updated_topic
         )
-        for idx, (chunk_text, chunk_entities) in enumerate(formatted_chunks):
-            is_last = idx == len(formatted_chunks) - 1
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=chunk_text,
-                formatting_entities=chunk_entities,
-                reply_to=topic_id,
-                buttons=(
-                    build_turn_response_keyboard(lex, updated_topic)
-                    if is_last
-                    else None
-                ),
-            )
         await self.refresh_pinned_card(topic_id)
 
     async def execute_scheduled_wake_turn(
@@ -1042,7 +991,7 @@ class WorkspaceTopicUI:
             await event.answer(toast_msg)
             return
 
-        if action in ("sudo_ok", "sudo_cb", "sudo_no") and len(parts) >= 4:
+        if action in ("sudo_ok", "sudo_cb", "sudo_no") and len(parts) >= _SUDO_CB_MIN_PARTS:
             req_id = parts[3]
             decision_map = {
                 "sudo_ok": "allow",

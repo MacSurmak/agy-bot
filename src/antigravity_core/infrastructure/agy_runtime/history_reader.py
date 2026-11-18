@@ -4,12 +4,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import UUID
 
-import structlog
+from loguru import logger
 
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import AgyProcessError
-
-logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)

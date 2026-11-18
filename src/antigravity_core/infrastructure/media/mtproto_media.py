@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import structlog
+from loguru import logger
 from telethon import TelegramClient
 from telethon.errors import RPCError
 from telethon.tl.custom import Message
@@ -17,8 +17,6 @@ from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import AntigravityError
 from antigravity_core.infrastructure.database.repositories import SettingsRepository
 from antigravity_core.lexicon import get_lexicon
-
-logger = structlog.get_logger(__name__)
 
 
 class MediaTransferError(AntigravityError):

@@ -9,7 +9,7 @@ import re
 import signal
 from uuid import UUID, uuid4
 
-import structlog
+from loguru import logger
 
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import (
@@ -25,8 +25,6 @@ from antigravity_core.infrastructure.database.repositories import (
     SettingsRepository,
 )
 from antigravity_core.lexicon import get_lexicon
-
-logger = structlog.get_logger(__name__)
 
 SensorWakeAgentCallback = Callable[[int, str, str, UUID | None], Awaitable[None]]
 SensorReflexDeliverCallback = Callable[[int, str, str], Awaitable[None]]
