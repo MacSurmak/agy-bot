@@ -33,6 +33,7 @@ dependencies = [
     "apscheduler>=3.11.3",
     "mcp>=2.3.0",
     "structlog>=25.4.0",
+    "loguru>=0.7.3",
 ]
 
 [project.optional-dependencies]
@@ -67,6 +68,7 @@ module = [
     "telethon.*",
     "apscheduler.*",
     "cryptg.*",
+    "loguru.*",
 ]
 ignore_missing_imports = true
 

@@ -56,6 +56,7 @@ class AgyEnvironmentBootstrapper:
         self._write_hooks_json(config_dir / "hooks.json")
         self._write_mcp_config_json(config_dir / "mcp_config.json")
         self._write_onboarding_skill(skills_dir / "SKILL.md")
+        self._sync_external_skill_repositories(config_dir / "skills")
         self._configure_agy_internal_sqlite_wal(cli_dir / "conversation_summaries.db")
 
     def sync_global_agents_md_host_map(self, hosts: list[RemoteHost]) -> None:
@@ -98,7 +99,9 @@ class AgyEnvironmentBootstrapper:
             "   - If `read_file` returns `REMOTE FILE DOES NOT EXIST`, it simply means the file does not exist on the remote host yet — call `write_file` on `/ssh:user@<alias>:/abs/path` to create it.\n"
             "   - Never edit files via `sed -i`, `awk`, or `perl -pi` in shell commands.\n"
             '   - Shell commands (`run_command`): `ssh user@<alias> "command"` (write plain `sudo` inside the command when root privileges are needed).\n'
-            "   - Local container access is restricted strictly to your topic scratchpad and `/tmp`. Never inspect `/srv/antigravity` or `/root/.gemini/antigravity-cli/mcp`.\n"
+            "   - You may manage local `/etc/systemd/system` services when asked, but NEVER inspect or touch the bot's own source code (`/srv/antigravity/app/src`), configuration (`config.yaml`, `.env`), logs, or other topics' folders.\n"
+            "   - For multi-line scripts over SSH, never nest quotes in `ssh user@<alias> \"python3 -c '...'\"`; always use `ssh user@<alias> \"python3 - << 'PYEOF'\\n...\\nPYEOF\"`.\n"
+            "   - When using `pkill -f` over SSH, bracket the first character (`pkill -f '[p]attern'`) so the SSH subshell does not kill itself.\n"
             "3. **DIRECT REMOTE FILE SENDING TO TELEGRAM:**\n"
             "   - Pass TRAMP paths (`/ssh:user@<alias>:/path/to/file.png`) directly into `mcp_telegram-core_send_file_to_telegram` — never run manual `scp`.\n"
             "4. **SELF-UPDATING INFRASTRUCTURE MEMORY:**\n"
@@ -174,12 +177,20 @@ class AgyEnvironmentBootstrapper:
 
     def _write_hooks_json(self, hooks_path: Path) -> None:
         python_bin = str(self._cfg.paths.venv_python_path)
+        pre_matcher = (
+            "run_command|read_file|write_file|edit_file|view_file|write_to_file|"
+            "replace_file_content|multi_replace_file_content|list_dir|find_by_name|grep_search|schedule"
+        )
+        post_matcher = (
+            "read_file|write_file|edit_file|view_file|write_to_file|"
+            "replace_file_content|multi_replace_file_content"
+        )
         payload = {
             "enforce-native-file-tools": {
                 "enabled": True,
                 "PreToolUse": [
                     {
-                        "matcher": "run_command|read_file|write_file|edit_file|schedule",
+                        "matcher": pre_matcher,
                         "hooks": [
                             {
                                 "type": "command",
@@ -191,7 +202,7 @@ class AgyEnvironmentBootstrapper:
                 ],
                 "PostToolUse": [
                     {
-                        "matcher": "read_file|write_file|edit_file",
+                        "matcher": post_matcher,
                         "hooks": [
                             {
                                 "type": "command",
@@ -255,6 +266,43 @@ class AgyEnvironmentBootstrapper:
             f"3. Call `mcp_telegram-core_update_host_knowledge` to save architectural notes into `{rules_dir}/infra-<alias>.md`.\n"
         )
         skill_path.write_text(content, encoding="utf-8")
+
+    def _sync_external_skill_repositories(self, skills_root: Path) -> None:
+        """Symlinks cloned external skill repositories from runtime_data/external_repos into ~/.gemini/config/skills."""
+        skills_root.mkdir(parents=True, exist_ok=True)
+        ext_repos_dir = self._cfg.paths.workspaces_root_dir.parent / "external_repos"
+        if not ext_repos_dir.is_dir():
+            return
+
+        agent_skills_dir = ext_repos_dir / "agent-skills" / "skills"
+        if agent_skills_dir.is_dir():
+            for skill_dir in sorted(agent_skills_dir.iterdir()):
+                if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
+                    self._ensure_skill_symlink(skills_root / skill_dir.name, skill_dir)
+
+        for repo_name in ("ponytail", "caveman"):
+            repo_dir = ext_repos_dir / repo_name
+            if not repo_dir.is_dir():
+                continue
+            nested_skills = repo_dir / "skills"
+            if nested_skills.is_dir():
+                for skill_dir in sorted(nested_skills.iterdir()):
+                    if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
+                        self._ensure_skill_symlink(
+                            skills_root / skill_dir.name, skill_dir
+                        )
+            elif (repo_dir / "SKILL.md").is_file():
+                self._ensure_skill_symlink(skills_root / repo_name, repo_dir)
+
+    @staticmethod
+    def _ensure_skill_symlink(link_path: Path, target_dir: Path) -> None:
+        if link_path.is_symlink():
+            if link_path.resolve() == target_dir.resolve():
+                return
+            link_path.unlink()
+        elif link_path.exists():
+            return
+        link_path.symlink_to(target_dir.resolve())
 
     def _configure_agy_internal_sqlite_wal(self, db_path: Path) -> None:
         # Errata Patch #4: Switch internal agy conversation_summaries.db into non-blocking WAL mode

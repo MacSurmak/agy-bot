@@ -10,15 +10,22 @@ _WRITE_TOOLS: Final[frozenset[str]] = frozenset(
     {
         "write_file",
         "edit_file",
+        "write_to_file",
+        "replace_file_content",
+        "multi_replace_file_content",
     }
 )
 _ALL_FILE_TOOLS: Final[frozenset[str]] = frozenset(
     {
         "read_file",
+        "view_file",
+        "list_dir",
+        "find_by_name",
+        "grep_search",
         *_WRITE_TOOLS,
     }
 )
-_PATH_ARG_KEYS: tuple[str, ...] = (
+_PATH_ARG_KEYS: Final[tuple[str, ...]] = (
     "TargetFile",
     "AbsolutePath",
     "Path",
@@ -30,11 +37,32 @@ _PATH_ARG_KEYS: tuple[str, ...] = (
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 _RUNTIME_DATA_DIR: Final[Path] = (_REPO_ROOT / "runtime_data").resolve()
 
+_FORBIDDEN_BOT_INTERNAL_PATHS: Final[tuple[str, ...]] = (
+    str(_REPO_ROOT / "src"),
+    str(_REPO_ROOT / "migrations"),
+    str(_REPO_ROOT / "devtool_pkg"),
+    str(_REPO_ROOT / "config.yaml"),
+    str(_REPO_ROOT / ".env"),
+    str(_RUNTIME_DATA_DIR / "logs"),
+    str(_RUNTIME_DATA_DIR / "data"),
+    str(_RUNTIME_DATA_DIR / "profiles"),
+    str(_RUNTIME_DATA_DIR / "run"),
+    "/srv/antigravity/app/src",
+    "/srv/antigravity/app/migrations",
+    "/srv/antigravity/app/config.yaml",
+    "/srv/antigravity/app/.env",
+    "/srv/antigravity/app/runtime_data/logs",
+    "/srv/antigravity/app/runtime_data/data",
+    "/srv/antigravity/app/runtime_data/profiles",
+    "/srv/antigravity/app/runtime_data/run",
+)
+
 _ALLOWED_LOCAL_WRITE_PREFIXES: Final[tuple[str, ...]] = (
     str(_RUNTIME_DATA_DIR / "workspaces"),
     str(_RUNTIME_DATA_DIR / "inbox"),
     "/srv/antigravity/app/runtime_data/workspaces",
     "/srv/antigravity/app/runtime_data/inbox",
+    "/etc/systemd/system",
     "/root/.gemini/config/rules",
     "/root/.gemini/config/skills",
     "/tmp",
@@ -46,6 +74,7 @@ _ALLOWED_LOCAL_READ_ONLY_SEGMENTS: Final[tuple[str, ...]] = (
     "/.gemini/config/rules/",
     "/.gemini/config/skills/",
     "/.gemini/AGENTS.md",
+    "/etc/systemd/system",
 )
 
 _SAFE_FD_REDIRECT_RE: Final[re.Pattern[str]] = re.compile(
@@ -54,6 +83,7 @@ _SAFE_FD_REDIRECT_RE: Final[re.Pattern[str]] = re.compile(
 _FORBIDDEN_INPLACE_EDIT_RE: Final[re.Pattern[str]] = re.compile(
     r"\b(?:sed\s+(?:-[a-zA-Z]*i|--in-place)|awk\s+-i\s+inplace|perl\s+-[a-zA-Z]*p[a-zA-Z]*i)\b"
 )
+_TOPIC_DIR_RE: Final[re.Pattern[str]] = re.compile(r"\btopic_(\d+)\b")
 
 
 def _ipc_call(method: str, params: dict[str, str | int | bool]) -> tuple[bool, str]:
@@ -114,6 +144,34 @@ def _extract_file_path(args: dict[str, str]) -> str:
         if key in args and args[key]:
             return str(args[key]).strip()
     return ""
+
+
+def _violates_bot_internals_or_topic_isolation(text_or_path: str) -> str | None:
+    """Blocks access to the bot's own source code, secrets, logs, and other topics' directories."""
+    if "/.system_generated/tasks/" in text_or_path or "/.gemini/config/" in text_or_path:
+        return None
+
+    for forbidden in _FORBIDDEN_BOT_INTERNAL_PATHS:
+        if forbidden in text_or_path:
+            return (
+                f"SANDBOX POLICY VIOLATION: Access to bot internal path '{forbidden}' is strictly forbidden. "
+                "Never inspect or modify the orchestrator bot's own source code, logs, or secrets."
+            )
+
+    current_topic = (
+        os.environ["AGY_CURRENT_TOPIC_ID"].strip()
+        if "AGY_CURRENT_TOPIC_ID" in os.environ
+        else ""
+    )
+    if current_topic:
+        for match in _TOPIC_DIR_RE.finditer(text_or_path):
+            referenced_topic = match.group(1)
+            if referenced_topic != current_topic:
+                return (
+                    f"TOPIC ISOLATION VIOLATION: You are running in topic_{current_topic} and cannot access "
+                    f"files belonging to topic_{referenced_topic}."
+                )
+    return None
 
 
 def _handle_post_tool_use(raw_stdin: str) -> None:
@@ -203,102 +261,121 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
     )
 
     if tool_name == "run_command":
-        cmd_line = str_args["CommandLine"] if "CommandLine" in str_args else ""
-        cleaned_cmd = _SAFE_FD_REDIRECT_RE.sub("", cmd_line)
-        if _FORBIDDEN_INPLACE_EDIT_RE.search(cleaned_cmd) is not None:
+        _handle_pre_run_command(str_args)
+        return
+
+    if tool_name in _ALL_FILE_TOOLS:
+        _handle_pre_file_tool(tool_name, str_args)
+        return
+
+    sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+
+
+def _handle_pre_run_command(str_args: dict[str, str]) -> None:
+    cmd_line = str_args["CommandLine"] if "CommandLine" in str_args else ""
+    violation = _violates_bot_internals_or_topic_isolation(cmd_line)
+    if violation is not None:
+        sys.stdout.write(json.dumps({"decision": "deny", "reason": violation}) + "\n")
+        return
+
+    cleaned_cmd = _SAFE_FD_REDIRECT_RE.sub("", cmd_line)
+    if _FORBIDDEN_INPLACE_EDIT_RE.search(cleaned_cmd) is not None:
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "decision": "deny",
+                    "reason": (
+                        "POLICY VIOLATION: In-place file editing via sed -i / awk -i / perl -pi in run_command is forbidden. "
+                        "Use native file tools (read_file, edit_file, write_file) "
+                        "on local scratchpad files or remote TRAMP paths (/ssh:user@<alias>:/abs/path)."
+                    ),
+                }
+            )
+            + "\n"
+        )
+        return
+    sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+
+
+def _handle_pre_file_tool(tool_name: str, str_args: dict[str, str]) -> None:
+    target_path = _extract_file_path(str_args)
+    if not target_path:
+        sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+        return
+
+    if ":" in target_path and not target_path.startswith("/"):
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "decision": "deny",
+                    "reason": (
+                        f"INVALID REMOTE PATH FORMAT: '{target_path}'. "
+                        f"Native file tools require an absolute TRAMP path starting with '/ssh:'. "
+                        f"Call this tool with '/ssh:{target_path}' instead."
+                    ),
+                }
+            )
+            + "\n"
+        )
+        return
+
+    if target_path.startswith("/ssh:"):
+        if tool_name in ("find_by_name", "grep_search"):
             sys.stdout.write(
                 json.dumps(
                     {
                         "decision": "deny",
                         "reason": (
-                            "POLICY VIOLATION: In-place file editing via sed -i / awk -i / perl -pi in run_command is forbidden. "
-                            "Use native file tools (read_file, edit_file, write_file) "
-                            "on local scratchpad files or remote TRAMP paths (/ssh:user@<alias>:/abs/path)."
+                            "SEARCH ON REMOTE HOST: Do not run local find_by_name/grep_search on '/ssh:...' paths. "
+                            "Run 'ssh user@<alias> \"rg -n ...\"' or 'ssh user@<alias> \"find ...\"' via run_command, "
+                            "then open the specific files with view_file/read_file/edit_file on '/ssh:user@<alias>:/path'."
                         ),
                     }
                 )
                 + "\n"
             )
+            return
+
+        ok, err_msg = _ipc_call(
+            "stage_remote_file",
+            {
+                "path": target_path,
+                "for_write": tool_name in _WRITE_TOOLS,
+            },
+        )
+        if not ok:
+            sys.stdout.write(json.dumps({"decision": "deny", "reason": err_msg}) + "\n")
             return
         sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
         return
 
-    if tool_name in _ALL_FILE_TOOLS:
-        target_path = _extract_file_path(str_args)
-        if not target_path:
-            sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
-            return
+    resolved_local = str(Path(target_path).expanduser().resolve())
+    violation = _violates_bot_internals_or_topic_isolation(resolved_local)
+    if violation is not None:
+        sys.stdout.write(json.dumps({"decision": "deny", "reason": violation}) + "\n")
+        return
 
-        if ":" in target_path and not target_path.startswith("/"):
-            sys.stdout.write(
-                json.dumps(
-                    {
-                        "decision": "deny",
-                        "reason": (
-                            f"INVALID REMOTE PATH FORMAT: '{target_path}'. "
-                            f"Native file tools require an absolute TRAMP path starting with '/ssh:'. "
-                            f"Call this tool with '/ssh:{target_path}' instead."
-                        ),
-                    }
-                )
-                + "\n"
-            )
-            return
-
-        if target_path.startswith("/ssh:"):
-            if tool_name in ("find_by_name", "grep_search"):
-                sys.stdout.write(
-                    json.dumps(
-                        {
-                            "decision": "deny",
-                            "reason": (
-                                "SEARCH ON REMOTE HOST: Do not run local find_by_name/grep_search on '/ssh:...' paths. "
-                                "Run 'ssh user@<alias> \"rg -n ...\"' or 'ssh user@<alias> \"find ...\"' via run_command, "
-                                "then open the specific files with view_file/read_file/edit_file on '/ssh:user@<alias>:/path'."
-                            ),
-                        }
-                    )
-                    + "\n"
-                )
-                return
-
-            ok, err_msg = _ipc_call(
-                "stage_remote_file",
+    is_allowed_write = resolved_local.startswith(_ALLOWED_LOCAL_WRITE_PREFIXES)
+    is_allowed_ro = (tool_name not in _WRITE_TOOLS) and any(
+        seg in resolved_local or seg in target_path
+        for seg in _ALLOWED_LOCAL_READ_ONLY_SEGMENTS
+    )
+    if not is_allowed_write and not is_allowed_ro:
+        sys.stdout.write(
+            json.dumps(
                 {
-                    "path": target_path,
-                    "for_write": tool_name in _WRITE_TOOLS,
-                },
+                    "decision": "deny",
+                    "reason": (
+                        f"LOCAL LXC SANDBOX RESTRICTION: Access to '{resolved_local}' inside the LXC brain container is forbidden. "
+                        "You may only access your topic workspace (/srv/antigravity/app/runtime_data/workspaces/...), "
+                        "inbox (/srv/antigravity/app/runtime_data/inbox/...), /etc/systemd/system, host passports (/root/.gemini/config/rules/...), or /tmp. "
+                        "To access files on a remote machine, use '/ssh:user@<alias>:/abs/path'."
+                    ),
+                }
             )
-            if not ok:
-                sys.stdout.write(
-                    json.dumps({"decision": "deny", "reason": err_msg}) + "\n"
-                )
-                return
-            sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
-            return
-
-        resolved_local = str(Path(target_path).expanduser().resolve())
-        is_allowed_write = resolved_local.startswith(_ALLOWED_LOCAL_WRITE_PREFIXES)
-        is_allowed_ro = (tool_name not in _WRITE_TOOLS) and any(
-            seg in resolved_local or seg in target_path
-            for seg in _ALLOWED_LOCAL_READ_ONLY_SEGMENTS
+            + "\n"
         )
-        if not is_allowed_write and not is_allowed_ro:
-            sys.stdout.write(
-                json.dumps(
-                    {
-                        "decision": "deny",
-                        "reason": (
-                            f"LOCAL LXC SANDBOX RESTRICTION: Access to '{resolved_local}' inside the LXC brain container is forbidden. "
-                            "You may only access your topic workspace (/srv/antigravity/app/runtime_data/workspaces/...), "
-                            "inbox (/srv/antigravity/app/runtime_data/inbox/...), host passports (/root/.gemini/config/rules/...), or /tmp. "
-                            "To access files on a remote machine, use '/ssh:user@<alias>:/abs/path'."
-                        ),
-                    }
-                )
-                + "\n"
-            )
-            return
+        return
 
     sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
 
