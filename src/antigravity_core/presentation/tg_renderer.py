@@ -367,8 +367,8 @@ async def send_rich_or_standard_message(
             reply_to=reply_hdr,
             silent=silent,
             reply_markup=markup,
-            entities=fallback_entities,
-            rich_message=rich_cls(text=prepared_md[:32768]),
+            entities=None,
+            rich_message=rich_cls(markdown=prepared_md[:32768]),
         )
         updates_res = await client(req)
         extracted = _extract_sent_message_from_updates(client, updates_res, chat_id)
@@ -405,8 +405,8 @@ async def edit_rich_or_standard_message(
             id=message_id,
             message=fallback_text[:4000],
             reply_markup=markup,
-            entities=fallback_entities,
-            rich_message=rich_cls(text=prepared_md[:32768]),
+            entities=None,
+            rich_message=rich_cls(markdown=prepared_md[:32768]),
         )
         await client(req)
         return

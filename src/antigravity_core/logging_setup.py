@@ -1,20 +1,36 @@
 """Canonical Loguru logging configuration with stdlib interception and JSONL sink."""
 
 import logging
+import os
 import sys
 from pathlib import Path
-from typing import Final
+from typing import Final, TypedDict
 
 from loguru import logger
 
-_CONSOLE_FORMAT: Final[str] = (
-    "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-    "<level>{level: <8}</level> | "
-    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
-    "<level>{message}</level> <dim>{extra}</dim>"
-)
 _LOG_ROTATION_SIZE: Final[str] = "50 MB"
 _LOG_RETENTION_COUNT: Final[int] = 10
+
+
+class _LoguruRecord(TypedDict):
+    extra: dict[str, str]
+
+
+def _format_console_record(record: _LoguruRecord) -> str:
+    """Formats concise console/journald log lines without redundant timestamps or empty extra dicts."""
+    extra_map = record["extra"]
+    pairs = [f"{k}={v}" for k, v in extra_map.items() if k != "_ctx"]
+    extra_map["_ctx"] = f"  [{', '.join(pairs)}]" if pairs else ""
+    time_prefix = (
+        ""
+        if "INVOCATION_ID" in os.environ
+        else "<green>{time:HH:mm:ss.SSS}</green> | "
+    )
+    return (
+        f"{time_prefix}<level>{{level: <7}}</level> | "
+        "<cyan>{module}</cyan>:<cyan>{line}</cyan> - "
+        "<level>{message}</level><dim>{extra[_ctx]}</dim>\n{exception}"
+    )
 
 _STDLIB_TO_LOGURU_LEVEL: Final[tuple[tuple[int, str], ...]] = (
     (logging.DEBUG, "DEBUG"),
@@ -58,7 +74,7 @@ def configure_loguru(log_file_path: Path) -> None:
     logger.add(
         sys.stdout,
         level="INFO",
-        format=_CONSOLE_FORMAT,
+        format=_format_console_record,
         colorize=True,
         backtrace=True,
         diagnose=False,

@@ -108,7 +108,10 @@ sync_git_repo "https://github.com/juliusbrussee/caveman.git" "${EXT_REPOS_DIR}/c
 sync_git_repo "https://github.com/mksglu/context-mode.git" "${EXT_REPOS_DIR}/context-mode"
 
 if ! command -v rtk >/dev/null 2>&1 && [[ ! -x /usr/local/bin/rtk ]]; then
-    curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/main/install.sh | sh || true
+    curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh | sh || true
+    if [[ -x "${HOME}/.local/bin/rtk" ]]; then
+        install -m 0755 "${HOME}/.local/bin/rtk" /usr/local/bin/rtk
+    fi
 fi
 
 echo "==> [6/6] Preparing runtime directories..."
