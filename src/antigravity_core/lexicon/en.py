@@ -1,6 +1,14 @@
+# ==============================================================================
+# STRICT ARCHITECTURAL CONSTITUTION: UI LEXICON SINGLE SOURCE OF TRUTH (SSOT)
+# All English user-facing strings, templates, and button captions live here.
+# Hardcoding any user-visible string outside `lexicon/` is strictly prohibited.
+# ==============================================================================
+
+from typing import Final
+
 from antigravity_core.lexicon.schema import UiLexicon
 
-EN_LEXICON = UiLexicon(
+EN_LEXICON: Final[UiLexicon] = UiLexicon(
     language_self_name="🇬🇧 English",
     # Topic Header Card
     topic_card_session_with_stats="`{conv_short}...` ({turns_count} turns, {tok_k:.1f}k tok.)",
@@ -325,4 +333,56 @@ EN_LEXICON = UiLexicon(
         "🔓 **Approved + Full Sudo Carte Blanche enabled** for this topic (`{target}`)."
     ),
     sudo_rejected_status="❌ **Rejected by owner:** `{action_summary}` on `{target}`.",
+    cp_toast_oauth_canceled="Authentication canceled.",
+    cp_toast_logging_out_account="Logging out and removing account profile...",
+    cp_toast_cred_reset="Password for {cred_key} reset.",
+    cp_toast_host_deleted="Host {alias} removed.",
+    cp_oauth_preparing_card=(
+        "⏳ **Preparing Google OAuth session (`{slug}`)**...\n"
+        "Spawning isolated `agy` process and capturing authorization URL..."
+    ),
+    btn_cp_cancel_short="❌ Cancel",
+    btn_cp_cancel_oauth="❌ Cancel Sign-In",
+    cp_oauth_failed_banner="❌ **Authentication Failed:**\n`{error}`\n\n",
+    cp_oauth_success_banner="✅ **Account `{email_label}` authenticated!**\n\n",
+    cp_accounts_hub_title="🔑 Google AI Pro Account Management",
+    cp_accounts_hub_subtitle="Select an account to manage or add a new profile:",
+    cp_accounts_hub_empty_hint="\n⚠️ No accounts connected yet. Click **➕ Add Account**.",
+    btn_cp_add_account="➕ Add Account",
+    cp_acc_role_default="⭐ **Default Account**",
+    cp_acc_role_secondary="👤 Secondary Account",
+    cp_acc_status_authed="🟢 Authenticated (Fernet Backup OK)",
+    cp_acc_status_needs_login="⚠️ Sign-In Required",
+    cp_acc_quota_line="\n📊 **Remaining Quota:** `{min_pct}%`",
+    cp_acc_card_header="👤 Account: {email_label}",
+    cp_acc_card_profile_line="• **Profile:** `{slug}` ({role_label})",
+    cp_acc_card_status_line="• **Status:** {status_label}{quota_line}",
+    btn_cp_make_default_acc="⭐ Set as Default",
+    btn_cp_reauth_oauth="🔄 Re-Authenticate (OAuth)",
+    btn_cp_delete_acc="🗑 Delete Account",
+    btn_cp_back_to_accounts="⬅️ Back to Accounts",
+    cp_hosts_menu_title="🖥 Servers & Saved SSH / Sudo Passwords",
+    cp_hosts_menu_subtitle="Registry of all known infrastructure servers:\n",
+    cp_hosts_menu_empty="• No servers registered yet. Onboard a host or connect to `user@host`.",
+    cp_host_key_ok_badge="🟢 Key OK",
+    cp_host_key_authed_badge="🔑 Authorized",
+    cp_host_key_missing_badge="⚠️ No Key",
+    cp_host_sudo_saved_badge="🔒 Sudo Password Saved",
+    cp_host_sudo_missing_badge="⚠️ No Sudo Password",
+    btn_cp_reset_host_pass="🔄 Reset Password: {label}",
+    btn_cp_delete_host="🗑 Delete Server: {alias}",
+    ws_select_model_group_prompt="🧠 **Select Model Family** (active: `{current_model}`):",
+    ws_select_model_variant_prompt="🧠 **Select Variant for `{family}`:**",
+    btn_ws_model_group_item="{mark}🧠 {family} ({count})",
+    btn_ws_back_to_model_groups="⬅️ Back to Model Families",
+    btn_ws_back_to_topic_card="⬅️ Back to Topic Passport",
+    ws_staged_media_card=(
+        "📎 **Files attached for your next prompt: `{count}`**\n"
+        "{files_list}\n\n"
+        "✍️ *Send a text message (it will automatically combine with these files) or choose an action:*"
+    ),
+    btn_ws_flush_staged_media="▶️ Run Without Text",
+    btn_ws_clear_staged_media="🗑 Discard Files",
+    ws_toast_staged_media_cleared="Attached files discarded.",
+    ws_staged_media_default_prompt="Analyze the attached files.",
 )

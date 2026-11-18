@@ -1,6 +1,14 @@
+# ==============================================================================
+# STRICT ARCHITECTURAL CONSTITUTION: UI LEXICON SINGLE SOURCE OF TRUTH (SSOT)
+# All Russian user-facing strings, templates, and button captions live here.
+# Hardcoding any user-visible string outside `lexicon/` is strictly prohibited.
+# ==============================================================================
+
+from typing import Final
+
 from antigravity_core.lexicon.schema import UiLexicon
 
-RU_LEXICON = UiLexicon(
+RU_LEXICON: Final[UiLexicon] = UiLexicon(
     language_self_name="🇷🇺 Русский",
     # Topic Header Card
     topic_card_session_with_stats="`{conv_short}...` ({turns_count} ход., {tok_k:.1f}k ток.)",
@@ -332,4 +340,56 @@ RU_LEXICON = UiLexicon(
         "🔓 **Одобрено + включен полный карт-бланш Sudo** для этого топика (`{target}`)."
     ),
     sudo_rejected_status="❌ **Отклонено пользователем:** `{action_summary}` на `{target}`.",
+    cp_toast_oauth_canceled="Авторизация отменена.",
+    cp_toast_logging_out_account="Выполняю выход из аккаунта и удаление профиля...",
+    cp_toast_cred_reset="Пароль для {cred_key} сброшен.",
+    cp_toast_host_deleted="Хост {alias} удалён из картотеки.",
+    cp_oauth_preparing_card=(
+        "⏳ **Подготовка сессии Google OAuth (`{slug}`)**...\n"
+        "Запускаю изолированный процесс `agy` и получаю ссылку авторизации..."
+    ),
+    btn_cp_cancel_short="❌ Отмена",
+    btn_cp_cancel_oauth="❌ Отменить вход",
+    cp_oauth_failed_banner="❌ **Ошибка авторизации:**\n`{error}`\n\n",
+    cp_oauth_success_banner="✅ **Аккаунт `{email_label}` успешно авторизован!**\n\n",
+    cp_accounts_hub_title="🔑 Управление аккаунтами Google AI Pro",
+    cp_accounts_hub_subtitle="Выберите аккаунт для управления или добавьте новый:",
+    cp_accounts_hub_empty_hint="\n⚠️ Нет подключенных аккаунтов. Нажмите **➕ Добавить аккаунт**.",
+    btn_cp_add_account="➕ Добавить аккаунт",
+    cp_acc_role_default="⭐ **Основной аккаунт**",
+    cp_acc_role_secondary="👤 Дополнительный аккаунт",
+    cp_acc_status_authed="🟢 Авторизован (Fernet Backup OK)",
+    cp_acc_status_needs_login="⚠️ Требуется вход",
+    cp_acc_quota_line="\n📊 **Остаток квоты:** `{min_pct}%`",
+    cp_acc_card_header="👤 Аккаунт: {email_label}",
+    cp_acc_card_profile_line="• **Профиль:** `{slug}` ({role_label})",
+    cp_acc_card_status_line="• **Статус:** {status_label}{quota_line}",
+    btn_cp_make_default_acc="⭐ Сделать основным",
+    btn_cp_reauth_oauth="🔄 Переавторизовать (OAuth)",
+    btn_cp_delete_acc="🗑 Удалить аккаунт",
+    btn_cp_back_to_accounts="⬅️ Назад к аккаунтам",
+    cp_hosts_menu_title="🖥 Серверы и сохранённые пароли SSH / Sudo",
+    cp_hosts_menu_subtitle="Реестр всех известных серверов инфраструктуры:\n",
+    cp_hosts_menu_empty="• Серверов пока нет. Зарегистрируйте хост или обратитесь к `user@host`.",
+    cp_host_key_ok_badge="🟢 Ключ OK",
+    cp_host_key_authed_badge="🔑 Авторизован",
+    cp_host_key_missing_badge="⚠️ Нет ключа",
+    cp_host_sudo_saved_badge="🔒 Sudo-пароль сохранён",
+    cp_host_sudo_missing_badge="⚠️ Sudo-пароль не задан",
+    btn_cp_reset_host_pass="🔄 Сбросить пароль: {label}",
+    btn_cp_delete_host="🗑 Удалить сервер: {alias}",
+    ws_select_model_group_prompt="🧠 **Выберите семейство моделей** (активна: `{current_model}`):",
+    ws_select_model_variant_prompt="🧠 **Выберите вариант модели `{family}`:**",
+    btn_ws_model_group_item="{mark}🧠 {family} ({count})",
+    btn_ws_back_to_model_groups="⬅️ К семействам моделей",
+    btn_ws_back_to_topic_card="⬅️ Назад к паспорту топика",
+    ws_staged_media_card=(
+        "📎 **Прикреплено файлов к следующему запросу: `{count}`**\n"
+        "{files_list}\n\n"
+        "✍️ *Отправьте текстовое сообщение (оно автоматически объединится с файлами) или выберите действие:*"
+    ),
+    btn_ws_flush_staged_media="▶️ Запустить без текста",
+    btn_ws_clear_staged_media="🗑 Отменить файлы",
+    ws_toast_staged_media_cleared="Прикрепленные файлы отменены.",
+    ws_staged_media_default_prompt="Проанализируй прикрепленные файлы.",
 )

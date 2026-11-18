@@ -1,3 +1,16 @@
+# ==============================================================================
+# STRICT ARCHITECTURAL CONSTITUTION: UI LEXICON SINGLE SOURCE OF TRUTH (SSOT)
+# ==============================================================================
+# 1. ZERO HARDCODED UI STRINGS IN LOGIC: It is STRICTLY FORBIDDEN to hardcode
+#    any user-facing messages, button labels, toast alerts, or Markdown card
+#    templates inside presentation handlers, keyboards, or application services.
+# 2. COMPLETE MULTILINGUAL PARITY: Every new UI string MUST first be declared as
+#    a typed attribute in `UiLexicon` below, and then populated in both `ru.py`
+#    and `en.py`.
+# 3. DETERMINISTIC FORMATTING: Dynamic parameters MUST use explicit named
+#    placeholders (e.g., `{topic_id}`, `{model_slug}`) formatted at render time.
+# ==============================================================================
+
 from dataclasses import dataclass
 
 
@@ -244,3 +257,54 @@ class UiLexicon:
     sudo_approved_status: str
     sudo_carte_blanche_status: str
     sudo_rejected_status: str
+
+    # Previously hardcoded Control Panel & Account Hub strings
+    cp_toast_oauth_canceled: str
+    cp_toast_logging_out_account: str
+    cp_toast_cred_reset: str
+    cp_toast_host_deleted: str
+    cp_oauth_preparing_card: str
+    btn_cp_cancel_short: str
+    btn_cp_cancel_oauth: str
+    cp_oauth_failed_banner: str
+    cp_oauth_success_banner: str
+    cp_accounts_hub_title: str
+    cp_accounts_hub_subtitle: str
+    cp_accounts_hub_empty_hint: str
+    btn_cp_add_account: str
+    cp_acc_role_default: str
+    cp_acc_role_secondary: str
+    cp_acc_status_authed: str
+    cp_acc_status_needs_login: str
+    cp_acc_quota_line: str
+    cp_acc_card_header: str
+    cp_acc_card_profile_line: str
+    cp_acc_card_status_line: str
+    btn_cp_make_default_acc: str
+    btn_cp_reauth_oauth: str
+    btn_cp_delete_acc: str
+    btn_cp_back_to_accounts: str
+    cp_hosts_menu_title: str
+    cp_hosts_menu_subtitle: str
+    cp_hosts_menu_empty: str
+    cp_host_key_ok_badge: str
+    cp_host_key_authed_badge: str
+    cp_host_key_missing_badge: str
+    cp_host_sudo_saved_badge: str
+    cp_host_sudo_missing_badge: str
+    btn_cp_reset_host_pass: str
+    btn_cp_delete_host: str
+
+    # Two-level Model Group Picker & In-Place Navigation
+    ws_select_model_group_prompt: str
+    ws_select_model_variant_prompt: str
+    btn_ws_model_group_item: str
+    btn_ws_back_to_model_groups: str
+    btn_ws_back_to_topic_card: str
+
+    # Staged Media Holding Buffer (files sent without text caption)
+    ws_staged_media_card: str
+    btn_ws_flush_staged_media: str
+    btn_ws_clear_staged_media: str
+    ws_toast_staged_media_cleared: str
+    ws_staged_media_default_prompt: str

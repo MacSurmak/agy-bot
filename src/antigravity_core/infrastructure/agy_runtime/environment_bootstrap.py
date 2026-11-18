@@ -1,15 +1,12 @@
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
 
-import structlog
+from loguru import logger
 
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import StartupValidationError
 from antigravity_core.domain.models import RemoteHost
-
-logger = structlog.get_logger(__name__)
 
 
 class AgyEnvironmentBootstrapper:
