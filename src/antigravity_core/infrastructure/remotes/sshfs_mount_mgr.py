@@ -11,7 +11,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-import structlog
+from typing import Final
+
+from loguru import logger
 
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import ExecutionMode
@@ -24,9 +26,8 @@ from antigravity_core.infrastructure.database.repositories import (
     TopicRepository,
 )
 
-logger: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
-
-_AI_NOTES_MARKER: str = "<!-- AI_NOTES_START -->"
+_AI_NOTES_MARKER: Final[str] = "<!-- AI_NOTES_START -->"
+MAX_REMOTE_STAGE_FILE_BYTES: Final[int] = 2_097_152
 
 
 @dataclass(frozen=True, slots=True)
@@ -902,7 +903,9 @@ class RemoteMountManager:
         probe_cmd = (
             f"if [ -d {qpath} ]; then echo AGY_KIND_DIR; ls -la {qpath}; "
             f"elif [ -e {qpath} ]; then "
-            f"  if [ -r {qpath} ]; then "
+            f"  fsize=$(stat -c %s {qpath} 2>/dev/null || wc -c < {qpath} 2>/dev/null || echo 0); "
+            f'  if [ "$fsize" -gt {MAX_REMOTE_STAGE_FILE_BYTES} ]; then echo "AGY_TOO_LARGE:$fsize"; '
+            f"  elif [ -r {qpath} ]; then "
             f"    if [ -w {qpath} ]; then echo AGY_FILE_RW; else echo AGY_FILE_RO; fi; "
             f"    cat {qpath}; "
             f"  else echo AGY_NEED_SUDO_READ; fi; "
@@ -940,6 +943,25 @@ class RemoteMountManager:
         else:
             header = stdout_bytes[:nl_idx].decode("utf-8", errors="replace").strip()
             body_bytes = stdout_bytes[nl_idx + 1 :]
+
+        if header.startswith("AGY_TOO_LARGE:"):
+            raw_sz = header.split(":", 1)[1].strip()
+            sz_mb = round(int(raw_sz) / (1024 * 1024), 2) if raw_sz.isdigit() else 2.0
+            async with lock:
+                rem = (
+                    self._stage_refcounts[stage_key] - 1
+                    if stage_key in self._stage_refcounts
+                    else 0
+                )
+                if rem <= 0:
+                    self._stage_refcounts.pop(stage_key, None)
+                else:
+                    self._stage_refcounts[stage_key] = rem
+            raise RemoteMountError(
+                f"REMOTE FILE TOO LARGE FOR CONTAINER STAGING: '{spec.remote_path}' on '{resolved_target}' "
+                f"is {sz_mb} MB (limit is 2.0 MB). Do NOT copy large files into the LXC container via read_file/edit_file. "
+                f"Inspect or process it directly on '{resolved_target}' via ssh (e.g., head, tail, rg, or python3 script)."
+            )
 
         if header == "AGY_KIND_DIR":
             spec.local_stage_path.mkdir(parents=True, exist_ok=True)

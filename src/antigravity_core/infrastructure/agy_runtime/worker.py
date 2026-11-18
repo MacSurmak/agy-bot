@@ -453,6 +453,14 @@ class TopicWorker:
                             else:
                                 final_trailing_parts.append(cleaned_s_txt)
 
+                        if not final_trailing_parts and not event.response_text.strip() and text_by_step:
+                            last_text_step = max(text_by_step.keys())
+                            recovered_text = text_by_step[last_text_step].strip()
+                            if recovered_text:
+                                if last_text_step in final_tools_and_notes:
+                                    del final_tools_and_notes[last_text_step]
+                                final_trailing_parts.append(recovered_text)
+
                         ordered_final_steps = tuple(
                             final_tools_and_notes[k]
                             for k in sorted(final_tools_and_notes.keys())

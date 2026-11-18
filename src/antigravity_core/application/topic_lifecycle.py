@@ -1,7 +1,8 @@
+import asyncio
 from pathlib import Path
 from uuid import UUID
 
-import structlog
+from loguru import logger
 
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.enums import EffortLevel, ExecutionMode, TopicKind
@@ -16,8 +17,6 @@ from antigravity_core.infrastructure.database.repositories import (
     TopicRepository,
 )
 from antigravity_core.lexicon import get_lexicon
-
-logger = structlog.get_logger(__name__)
 
 
 class TopicLifecycleService:
@@ -138,17 +137,21 @@ class TopicLifecycleService:
         await self._pool.evict_topic_worker(topic_id)
         return updated
 
+    async def _bg_rename_forum_topic(self, topic_id: int, clean_title: str) -> None:
+        await self._forum_gateway.rename_forum_topic(
+            topic_id=topic_id, new_title=clean_title
+        )
+
     async def rename_topic(self, topic_id: int, new_title: str) -> ForumTopic:
         max_len = self._cfg.limits.topic_title_max_chars
         clean_title = new_title.strip()[:max_len]
         if not clean_title:
             return await self._topic_repo.get_topic_strict(topic_id)
-        await self._forum_gateway.rename_forum_topic(
+        updated = await self._topic_repo.update_topic_title(
             topic_id=topic_id, new_title=clean_title
         )
-        return await self._topic_repo.update_topic_title(
-            topic_id=topic_id, new_title=clean_title
-        )
+        asyncio.create_task(self._bg_rename_forum_topic(topic_id, clean_title))
+        return updated
 
     async def archive_topic(self, topic_id: int) -> ForumTopic:
         topic = await self._topic_repo.get_topic_strict(topic_id)

@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
-import structlog
+from loguru import logger
 from telethon import TelegramClient, events
 from telethon.errors import MessageNotModifiedError, RPCError
 from telethon.tl.custom import Button
@@ -50,8 +50,6 @@ from antigravity_core.presentation.keyboards import (
     build_tasks_management_keyboard,
 )
 from antigravity_core.presentation.workspace_topic_ui import WorkspaceTopicUI
-
-logger: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,7 +324,7 @@ class ControlPanelUI:
                         self._state.pending_oauth.account
                     )
             self._state = None
-            await event.answer("Авторизация отменена.")
+            await event.answer(lex.cp_toast_oauth_canceled)
             await self._render_accounts_hub(event, lex, 0, False)
             return
 
@@ -347,7 +345,7 @@ class ControlPanelUI:
         if data_str.startswith("cp:del_acc:"):
             acc_id = int(data_str.split(":")[2])
             acc = await self._account_repo.get_by_id(acc_id)
-            await event.answer("Выполняю выход из аккаунта и удаление профиля...")
+            await event.answer(lex.cp_toast_logging_out_account)
             await self._keyring_mgr.logout_account(acc)
             await self._account_repo.delete_account(acc_id)
             shutil.rmtree(Path(acc.xdg_data_dir), ignore_errors=True)
@@ -387,7 +385,7 @@ class ControlPanelUI:
         if data_str.startswith("cp:del_cred:"):
             _, _, cred_key = data_str.split(":", 2)
             await self._cred_repo.delete_credential(cred_key)
-            await event.answer(f"Пароль для {cred_key} сброшен.")
+            await event.answer(lex.cp_toast_cred_reset.format(cred_key=cred_key))
             await self._render_hosts_and_credentials_menu(event, lex)
             return
 
@@ -405,7 +403,7 @@ class ControlPanelUI:
                 await self._cred_repo.delete_credential(cred_key_ip)
                 all_hosts = await self._host_repo.list_hosts()
                 self._bootstrapper.sync_global_agents_md_host_map(all_hosts)
-            await event.answer(f"Хост {alias} удалён из картотеки.")
+            await event.answer(lex.cp_toast_host_deleted.format(alias=alias))
             await self._render_hosts_and_credentials_menu(event, lex)
             return
 
@@ -594,8 +592,8 @@ class ControlPanelUI:
         await event.answer(lex.cp_toast_launching_oauth)
         await self._update_or_recreate_panel(
             event,
-            f"⏳ **Подготовка сессии Google OAuth (`{account.slug}`)**...\nЗапускаю изолированный процесс `agy` и получаю ссылку авторизации...",
-            [[Button.inline("❌ Отмена", b"cp:auth_menu")]],
+            lex.cp_oauth_preparing_card.format(slug=account.slug),
+            [[Button.inline(lex.btn_cp_cancel_short, b"cp:auth_menu")]],
         )
         pending, err_msg = await self._keyring_mgr.try_start_remote_oauth_flow(account)
         if pending is None:
@@ -606,7 +604,7 @@ class ControlPanelUI:
             text, kb = await self._build_accounts_hub_view(lex, 0)
             await self._update_or_recreate_panel(
                 event,
-                f"❌ **Не удалось запустить OAuth:**\n`{err_detail}`\n\n" + text,
+                lex.cp_oauth_failed_banner.format(error=err_detail) + text,
                 kb,
             )
             return
@@ -642,9 +640,7 @@ class ControlPanelUI:
                 await self._discard_staged_account(pending.account)
             max_err = self._cfg.limits.error_summary_max_chars
             err_detail = err_msg[:max_err]
-            status_banner = (
-                f"❌ **Ошибка авторизации (аккаунт не добавлен):**\n`{err_detail}`\n\n"
-            )
+            status_banner = lex.cp_oauth_failed_banner.format(error=err_detail)
             text, kb = await self._build_accounts_hub_view(lex, 0)
             await self._send_fresh_bottom_panel(status_banner + text, kb)
             return
@@ -656,8 +652,8 @@ class ControlPanelUI:
             )
         await self._account_repo.update_quota_snapshot(pending.account.id, q_info)
         updated_acc = await self._account_repo.get_by_id(pending.account.id)
-        status_banner = (
-            f"✅ **Аккаунт `{updated_acc.email_label}` успешно авторизован!**\n\n"
+        status_banner = lex.cp_oauth_success_banner.format(
+            email_label=updated_acc.email_label
         )
         text, kb = await self._build_accounts_hub_view(lex, 0)
         await self._send_fresh_bottom_panel(status_banner + text, kb)
@@ -706,13 +702,11 @@ class ControlPanelUI:
     ) -> tuple[str, list[list[Button]]]:
         accounts = await self._account_repo.list_accounts()
         lines = [
-            format_wide_header_block("🔑 Управление аккаунтами Google AI Pro"),
-            "Выберите аккаунт для управления или добавьте новый:",
+            format_wide_header_block(lex.cp_accounts_hub_title),
+            lex.cp_accounts_hub_subtitle,
         ]
         if not accounts:
-            lines.append(
-                "\n⚠️ Нет подключенных аккаунтов. Нажмите **➕ Добавить аккаунт**."
-            )
+            lines.append(lex.cp_accounts_hub_empty_hint)
         return "\n".join(lines), build_paginated_accounts_keyboard(lex, accounts, page)
 
     async def _render_accounts_hub(
@@ -732,23 +726,31 @@ class ControlPanelUI:
         self, event: events.CallbackQuery.Event, lex: UiLexicon, acc_id: int
     ) -> None:
         acc = await self._account_repo.get_by_id(acc_id)
-        star = (
-            "⭐ **Основной аккаунт**" if acc.is_default else "👤 Дополнительный аккаунт"
+        role_label = (
+            lex.cp_acc_role_default if acc.is_default else lex.cp_acc_role_secondary
         )
-        tok_status = (
-            "🟢 Авторизован (Fernet Backup OK)"
+        status_label = (
+            lex.cp_acc_status_authed
             if acc.encrypted_token_backup
-            else "⚠️ Требуется вход"
+            else lex.cp_acc_status_needs_login
         )
-        min_q = (
-            f"\n📊 **Остаток квоты:** `{acc.last_quota_json['min_remaining_pct']}%`"
+        quota_line = (
+            lex.cp_acc_quota_line.format(
+                min_pct=acc.last_quota_json["min_remaining_pct"]
+            )
             if acc.last_quota_json and "min_remaining_pct" in acc.last_quota_json
             else ""
         )
         lines = [
-            format_wide_header_block(f"👤 Аккаунт: {acc.email_label}"),
-            f"• **Профиль:** `{acc.slug}` ({star})",
-            f"• **Статус:** {tok_status}{min_q}",
+            format_wide_header_block(
+                lex.cp_acc_card_header.format(email_label=acc.email_label)
+            ),
+            lex.cp_acc_card_profile_line.format(
+                slug=acc.slug, role_label=role_label
+            ),
+            lex.cp_acc_card_status_line.format(
+                status_label=status_label, quota_line=quota_line
+            ),
         ]
         await self._update_or_recreate_panel(
             event,
@@ -765,15 +767,13 @@ class ControlPanelUI:
         processed_creds: set[str] = set()
 
         lines = [
-            format_wide_header_block("🖥 Серверы и сохранённые пароли SSH / Sudo"),
-            "Реестр всех известных серверов инфраструктуры:\n",
+            format_wide_header_block(lex.cp_hosts_menu_title),
+            lex.cp_hosts_menu_subtitle,
         ]
         rows: list[list[Button]] = []
 
         if not hosts and not creds:
-            lines.append(
-                "• Серверов пока нет. Зарегистрируйте хост или обратитесь к `user@host`."
-            )
+            lines.append(lex.cp_hosts_menu_empty)
 
         for h in hosts:
             k_alias = f"{h.ssh_user}@{h.alias}:{h.ssh_port}"
@@ -786,12 +786,14 @@ class ControlPanelUI:
 
             route_info = f" (via `{h.jump_host}`)" if h.jump_host else ""
             key_badge = (
-                "🟢 Ключ OK"
+                lex.cp_host_key_ok_badge
                 if (matched_c and matched_c.key_provisioned)
-                else "🔑 Авторизован"
+                else lex.cp_host_key_authed_badge
             )
             sudo_badge = (
-                "🔒 Sudo-пароль сохранён" if matched_c else "⚠️ Sudo-пароль не задан"
+                lex.cp_host_sudo_saved_badge
+                if matched_c
+                else lex.cp_host_sudo_missing_badge
             )
 
             lines.append(
@@ -802,13 +804,13 @@ class ControlPanelUI:
             if matched_c is not None:
                 row.append(
                     Button.inline(
-                        f"🔄 Сбросить пароль: {h.alias}",
+                        lex.btn_cp_reset_host_pass.format(label=h.alias),
                         f"cp:del_cred:{matched_c.credential_key}".encode("utf-8"),
                     )
                 )
             row.append(
                 Button.inline(
-                    f"🗑 Удалить сервер: {h.alias}",
+                    lex.btn_cp_delete_host.format(alias=h.alias),
                     f"cp:del_host:{h.alias}".encode("utf-8"),
                 )
             )
@@ -817,15 +819,19 @@ class ControlPanelUI:
         for c in creds:
             if c.credential_key in processed_creds:
                 continue
-            key_badge = "🟢 Ключ OK" if c.key_provisioned else "⚠️ Нет ключа"
+            key_badge = (
+                lex.cp_host_key_ok_badge
+                if c.key_provisioned
+                else lex.cp_host_key_missing_badge
+            )
             lines.append(
                 f"▸ **`{c.credential_key}`**\n"
-                f"   └─ {key_badge} │ 🔒 Sudo-пароль сохранён"
+                f"   └─ {key_badge} │ {lex.cp_host_sudo_saved_badge}"
             )
             rows.append(
                 [
                     Button.inline(
-                        f"🗑 Сбросить пароль: {c.credential_key}",
+                        lex.btn_cp_reset_host_pass.format(label=c.credential_key),
                         f"cp:del_cred:{c.credential_key}".encode("utf-8"),
                     )
                 ]
