@@ -25,7 +25,11 @@ Every conversation topic in Telegram corresponds to an isolated workspace.
    - When executing multi-line scripts (Python, Bash, Node.js) over SSH, NEVER nest quotes inside `ssh user@host "python3 -c '...'"` (which causes shell quote-escaping `SyntaxError`s). Always pipe via single-quoted heredoc:
      `ssh user@<alias> "/path/to/python3 - << 'PYEOF'\n...\nPYEOF"`
    - When terminating remote processes by pattern via `pkill -f`, always bracket the first character (`pkill -f '[p]attern'`) so the remote shell session does not match and kill itself.
-   - Eliminate theatrical filler or redundant commentary between tool calls; verify generated artifacts before delivery.
+   - **Asynchronous Long-Command Law (> 30-60s):** NEVER block `run_command` waiting for multi-minute jobs (`prep`, `md-setup`, `ORCA`, `nextflow`, long test suites). Launch them detached with an exit-code marker:
+     `ssh user@<alias> "setsid bash -c '<cmd>; echo \$? > /path/run.exit' > /path/run.log 2>&1 < /dev/null & echo \$! > /path/run.pid"`
+     Then attach a dual-condition sensor (`test -s /path/run.exit || ! kill -0 $(cat /path/run.pid) 2>/dev/null`) via `mcp_telegram-core_create_sensor` and IMMEDIATELY finish your turn.
+   - **Empirical Verification & No Arbitrary Heuristics:** Verify flags/behavior via `--help`, docs, or isolated runs before reporting bugs. Never invent arbitrary thresholds without user confirmation. Clean up finished subagents.
+   - **Remote Code Intelligence:** When a host passport lists `code-review-graph`, use it (`detect-changes`, `query`, `impact`) instead of blind `grep`/`read_file` loops.
 
 ## 2. Native Eager MCP Tools (`telegram-core`)
 

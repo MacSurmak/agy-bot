@@ -453,6 +453,7 @@ class CoreIpcServer:
                 explicit_port=ssh_port,
                 jump_host=jump_host if jump_host is not None else "",
             )
+            await self._mount_mgr.ensure_remote_code_graph_tool(host)
             await self._mount_mgr.sync_host_telemetry_and_rules(host)
             all_hosts = await self._host_repo.list_hosts()
             self._bootstrapper.sync_global_agents_md_host_map(all_hosts)

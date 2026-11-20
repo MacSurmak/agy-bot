@@ -1285,6 +1285,39 @@ class RemoteMountManager:
                 return cleaned
         return "- *(Add architectural notes, project paths, and service details here via `update_host_knowledge`.)*"
 
+    async def ensure_remote_code_graph_tool(self, host: RemoteHost) -> bool:
+        """Best-effort user-space installation of code-review-graph on a Linux remote host during onboarding."""
+        self.write_ssh_config_entry(host)
+        install_script = (
+            'export PATH="$HOME/.local/bin:$PATH"; '
+            "if command -v code-review-graph >/dev/null 2>&1; then exit 0; fi; "
+            "if command -v uv >/dev/null 2>&1; then timeout 75 uv tool install code-review-graph >/dev/null 2>&1; "
+            "elif command -v pipx >/dev/null 2>&1; then timeout 75 pipx install code-review-graph >/dev/null 2>&1; "
+            "else exit 1; fi; "
+            "command -v code-review-graph >/dev/null 2>&1"
+        )
+        proc = await asyncio.create_subprocess_exec(
+            "/usr/bin/ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            f"ConnectTimeout={self._cfg.remotes.ssh_connect_timeout_sec}",
+            host.alias,
+            install_script,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._internal_ssh_env(),
+        )
+        await proc.communicate()
+        installed = proc.returncode == 0
+        logger.info(
+            "Remote code-review-graph provisioning check: host={} installed={}",
+            host.alias,
+            installed,
+        )
+        return installed
+
     async def sync_host_telemetry_and_rules(self, host: RemoteHost) -> Path:
         """Probes live hardware, disks, Docker, Proxmox, Slurm, and key folders over SSH (0 LLM tokens) and updates infra-<alias>.md."""
         self.write_ssh_config_entry(host)
@@ -1297,6 +1330,7 @@ class RemoteMountManager:
             "docker ps --format '{{.Names}} ({{.Image}}) [{{.Status}}]' 2>/dev/null | head -n 15 || true; "
             "pct list 2>/dev/null | head -n 15 || true; qm list 2>/dev/null | head -n 15 || true; "
             "sinfo -s 2>/dev/null | head -n 10 || true; "
+            'echo \'=== DEV TOOLS ===\'; PATH="$HOME/.local/bin:$PATH" command -v code-review-graph || echo \'code-review-graph: not installed\'; '
             f"echo '=== KEY DIRECTORIES ({host.remote_root_path}) ==='; ls -1 {host.remote_root_path} 2>/dev/null | head -n 30; "
             "if [ -d /shared ]; then echo '=== /shared ==='; ls -1 /shared 2>/dev/null | head -n 25; fi"
         )

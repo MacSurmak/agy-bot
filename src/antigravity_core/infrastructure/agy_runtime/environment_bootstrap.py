@@ -1,4 +1,5 @@
 import json
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -53,7 +54,6 @@ class AgyEnvironmentBootstrapper:
         self._write_hooks_json(config_dir / "hooks.json")
         self._write_mcp_config_json(config_dir / "mcp_config.json")
         self._write_onboarding_skill(skills_dir / "SKILL.md")
-        self._sync_external_skill_repositories(config_dir / "skills")
         self._configure_agy_internal_sqlite_wal(cli_dir / "conversation_summaries.db")
 
     def sync_global_agents_md_host_map(self, hosts: list[RemoteHost]) -> None:
@@ -99,11 +99,16 @@ class AgyEnvironmentBootstrapper:
             "   - You may manage local `/etc/systemd/system` services when asked, but NEVER inspect or touch the bot's own source code (`/srv/antigravity/app/src`), configuration (`config.yaml`, `.env`), logs, or other topics' folders.\n"
             "   - For multi-line scripts over SSH, never nest quotes in `ssh user@<alias> \"python3 -c '...'\"`; always use `ssh user@<alias> \"python3 - << 'PYEOF'\\n...\\nPYEOF\"`.\n"
             "   - When using `pkill -f` over SSH, bracket the first character (`pkill -f '[p]attern'`) so the SSH subshell does not kill itself.\n"
+            "   - **ASYNCHRONOUS LONG-COMMAND LAW (> 30-60s):** NEVER block `run_command` waiting for multi-minute jobs (`prep`, `md-setup`, `ORCA`, `nextflow`, long test suites). Launch them detached on the remote host with an exit-code marker:\n"
+            '     `ssh user@<alias> "setsid bash -c \'<cmd>; echo \\$? > /path/run.exit\' > /path/run.log 2>&1 < /dev/null & echo \\$! > /path/run.pid"`\n'
+            "     Then create a dual-condition sensor via `mcp_telegram-core_create_sensor` checking `test -s /path/run.exit || ! kill -0 $(cat /path/run.pid) 2>/dev/null` and IMMEDIATELY finish your turn to unblock the chat.\n"
+            "   - **EMPIRICAL VERIFICATION & NO ARBITRARY HEURISTICS:** Before reporting a bug in an audit or proposing a fix, verify flags/behavior via `--help`, documentation, or an isolated test run. Never invent arbitrary thresholds or heuristics without user confirmation. Terminate or clean up finished subagents.\n"
+            "   - **REMOTE CODE INTELLIGENCE:** If a host passport lists `code-review-graph` as installed, prefer `code-review-graph` (`detect-changes`, `query`, `impact`) over blind `grep`/`read_file` loops when auditing repositories or reviewing commits.\n"
             "3. **DIRECT REMOTE FILE SENDING TO TELEGRAM:**\n"
             "   - Pass TRAMP paths (`/ssh:user@<alias>:/path/to/file.png`) directly into `mcp_telegram-core_send_file_to_telegram` — never run manual `scp`.\n"
-            "4. **SELF-UPDATING INFRASTRUCTURE MEMORY:**\n"
+            "4. **SELF-UPDATING INFRASTRUCTURE MEMORY (MANDATORY):**\n"
             f"   - Each known host has a passport in `{rules_dir}/infra-<alias>.md`.\n"
-            "   - Whenever you discover project paths, databases, or services on a host, record insights using `mcp_telegram-core_update_host_knowledge`.\n\n"
+            "   - Whenever you discover a host invariant (canonical Python/conda path, container mount restriction like `/shared/`, CLI flag quirk, database, or service), IMMEDIATELY persist it via `mcp_telegram-core_update_host_knowledge` in the same turn.\n\n"
             "## 3. Native Eager MCP Tools (`telegram-core`)\n\n"
             'All tools from MCP server `telegram-core` are pre-registered with `"eager": true` in your native tool declarations (`mcp_telegram-core_<tool>`). '
             "Call them directly in a single step without reading schema files from `~/.gemini/antigravity-cli/mcp/telegram-core/`:\n"
@@ -233,16 +238,24 @@ class AgyEnvironmentBootstrapper:
                 "get_bot_ssh_public_key",
             )
         }
-        payload = {
-            "mcpServers": {
-                "telegram-core": {
-                    "command": python_bin,
-                    "args": ["-m", "antigravity_core.mcp.stdio_proxy"],
-                    "timeoutSeconds": self._cfg.runtime.mcp_stdio_timeout_sec,
-                    "tools": eager_tools,
-                }
+        mcp_servers: dict[str, dict[str, str | list[str] | int | dict[str, dict[str, bool]]]] = {
+            "telegram-core": {
+                "command": python_bin,
+                "args": ["-m", "antigravity_core.mcp.stdio_proxy"],
+                "timeoutSeconds": self._cfg.runtime.mcp_stdio_timeout_sec,
+                "tools": eager_tools,
             }
         }
+        plugin_ctx_dir = self._cfg.paths.agy_home_dir / "config" / "plugins" / "context-mode"
+        context_mode_bin = shutil.which("context-mode")
+        if context_mode_bin is not None and not plugin_ctx_dir.is_dir():
+            mcp_servers["context-mode"] = {
+                "command": context_mode_bin,
+                "args": [],
+                "timeoutSeconds": self._cfg.runtime.mcp_stdio_timeout_sec,
+            }
+
+        payload = {"mcpServers": mcp_servers}
         mcp_config_path.write_text(
             json.dumps(payload, indent=2) + "\n", encoding="utf-8"
         )
@@ -264,43 +277,6 @@ class AgyEnvironmentBootstrapper:
         )
         skill_path.write_text(content, encoding="utf-8")
 
-    def _sync_external_skill_repositories(self, skills_root: Path) -> None:
-        """Symlinks cloned external skill repositories from runtime_data/external_repos into ~/.gemini/config/skills."""
-        skills_root.mkdir(parents=True, exist_ok=True)
-        ext_repos_dir = self._cfg.paths.workspaces_root_dir.parent / "external_repos"
-        if not ext_repos_dir.is_dir():
-            return
-
-        agent_skills_dir = ext_repos_dir / "agent-skills" / "skills"
-        if agent_skills_dir.is_dir():
-            for skill_dir in sorted(agent_skills_dir.iterdir()):
-                if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
-                    self._ensure_skill_symlink(skills_root / skill_dir.name, skill_dir)
-
-        for repo_name in ("ponytail", "caveman"):
-            repo_dir = ext_repos_dir / repo_name
-            if not repo_dir.is_dir():
-                continue
-            nested_skills = repo_dir / "skills"
-            if nested_skills.is_dir():
-                for skill_dir in sorted(nested_skills.iterdir()):
-                    if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
-                        self._ensure_skill_symlink(
-                            skills_root / skill_dir.name, skill_dir
-                        )
-            elif (repo_dir / "SKILL.md").is_file():
-                self._ensure_skill_symlink(skills_root / repo_name, repo_dir)
-
-    @staticmethod
-    def _ensure_skill_symlink(link_path: Path, target_dir: Path) -> None:
-        if link_path.is_symlink():
-            if link_path.resolve() == target_dir.resolve():
-                return
-            link_path.unlink()
-        elif link_path.exists():
-            return
-        link_path.symlink_to(target_dir.resolve())
-
     def _configure_agy_internal_sqlite_wal(self, db_path: Path) -> None:
         # Errata Patch #4: Switch internal agy conversation_summaries.db into non-blocking WAL mode
         busy_timeout_ms = self._cfg.runtime.agy_sqlite_busy_timeout_ms
@@ -314,6 +290,6 @@ class AgyEnvironmentBootstrapper:
                 f"Failed to configure WAL mode on agy internal SQLite file {db_path}: {exc}"
             ) from exc
         logger.info(
-            "Configured WAL mode for agy internal conversation_summaries.db",
-            path=str(db_path),
+            "Configured WAL mode for agy internal conversation_summaries.db: path={}",
+            db_path,
         )

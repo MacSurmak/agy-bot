@@ -71,8 +71,10 @@ _ALLOWED_LOCAL_WRITE_PREFIXES: Final[tuple[str, ...]] = (
 _ALLOWED_LOCAL_READ_ONLY_SEGMENTS: Final[tuple[str, ...]] = (
     "/.gemini/antigravity-cli/mcp/",
     "/.system_generated/tasks/",
+    "/.system_generated/steps/",
     "/.gemini/config/rules/",
     "/.gemini/config/skills/",
+    "/.gemini/config/plugins/",
     "/.gemini/AGENTS.md",
     "/etc/systemd/system",
 )
@@ -148,7 +150,11 @@ def _extract_file_path(args: dict[str, str]) -> str:
 
 def _violates_bot_internals_or_topic_isolation(text_or_path: str) -> str | None:
     """Blocks access to the bot's own source code, secrets, logs, and other topics' directories."""
-    if "/.system_generated/tasks/" in text_or_path or "/.gemini/config/" in text_or_path:
+    if (
+        "/.system_generated/tasks/" in text_or_path
+        or "/.system_generated/steps/" in text_or_path
+        or "/.gemini/config/" in text_or_path
+    ):
         return None
 
     for forbidden in _FORBIDDEN_BOT_INTERNAL_PATHS:

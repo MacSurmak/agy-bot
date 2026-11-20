@@ -87,32 +87,9 @@ if ! command -v agy >/dev/null 2>&1 && [[ ! -x /usr/local/bin/agy ]]; then
     fi
 fi
 
-echo "==> [5/6] Syncing external skill repositories and token optimization tools..."
-EXT_REPOS_DIR="/srv/antigravity/app/runtime_data/external_repos"
-mkdir -p "${EXT_REPOS_DIR}"
-
-sync_git_repo() {
-    local repo_url="$1"
-    local target_dir="$2"
-    if [[ -d "${target_dir}/.git" ]]; then
-        git -C "${target_dir}" pull --ff-only || true
-    else
-        rm -rf "${target_dir}"
-        git clone --depth 1 "${repo_url}" "${target_dir}"
-    fi
-}
-
-sync_git_repo "https://github.com/addyosmani/agent-skills.git" "${EXT_REPOS_DIR}/agent-skills"
-sync_git_repo "https://github.com/DietrichGebert/ponytail.git" "${EXT_REPOS_DIR}/ponytail"
-sync_git_repo "https://github.com/juliusbrussee/caveman.git" "${EXT_REPOS_DIR}/caveman"
-sync_git_repo "https://github.com/mksglu/context-mode.git" "${EXT_REPOS_DIR}/context-mode"
-
-if ! command -v rtk >/dev/null 2>&1 && [[ ! -x /usr/local/bin/rtk ]]; then
-    curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh | sh || true
-    if [[ -x "${HOME}/.local/bin/rtk" ]]; then
-        install -m 0755 "${HOME}/.local/bin/rtk" /usr/local/bin/rtk
-    fi
-fi
+echo "==> [5/6] Provisioning native agy plugins and context-mode harness..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash "${SCRIPT_DIR}/setup_harness.sh"
 
 echo "==> [6/6] Preparing runtime directories..."
 mkdir -p \
