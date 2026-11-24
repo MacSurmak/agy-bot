@@ -86,6 +86,14 @@ _FORBIDDEN_INPLACE_EDIT_RE: Final[re.Pattern[str]] = re.compile(
     r"\b(?:sed\s+(?:-[a-zA-Z]*i|--in-place)|awk\s+-i\s+inplace|perl\s+-[a-zA-Z]*p[a-zA-Z]*i)\b"
 )
 _TOPIC_DIR_RE: Final[re.Pattern[str]] = re.compile(r"\btopic_(\d+)\b")
+_HOOK_LOG_PATH: Final[Path] = _RUNTIME_DATA_DIR / "logs" / "agy_hooks.log"
+
+
+def _log_hook_decision(tool_name: str, decision: str, detail: str) -> None:
+    if not _HOOK_LOG_PATH.parent.is_dir():
+        return
+    with _HOOK_LOG_PATH.open("a", encoding="utf-8") as fh:
+        fh.write(f"{tool_name} | {decision} | {detail[:180]}\n")
 
 
 def _ipc_call(method: str, params: dict[str, str | int | bool]) -> tuple[bool, str]:
@@ -274,7 +282,7 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
         else {}
     )
 
-    if tool_name == "run_command":
+    if tool_name in ("run_command", "command"):
         _handle_pre_run_command(str_args)
         return
 
@@ -286,14 +294,21 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
 
 
 def _handle_pre_run_command(str_args: dict[str, str]) -> None:
-    cmd_line = str_args["CommandLine"] if "CommandLine" in str_args else ""
+    cmd_line = ""
+    for key in ("CommandLine", "command", "cmd"):
+        if key in str_args and str_args[key]:
+            cmd_line = str_args[key]
+            break
+
     violation = _violates_bot_internals_or_topic_isolation(cmd_line, False)
     if violation is not None:
+        _log_hook_decision("run_command", "deny_internal", cmd_line)
         sys.stdout.write(json.dumps({"decision": "deny", "reason": violation}) + "\n")
         return
 
     cleaned_cmd = _SAFE_FD_REDIRECT_RE.sub("", cmd_line)
     if _FORBIDDEN_INPLACE_EDIT_RE.search(cleaned_cmd) is not None:
+        _log_hook_decision("run_command", "deny_inplace", cmd_line)
         sys.stdout.write(
             json.dumps(
                 {
@@ -308,6 +323,8 @@ def _handle_pre_run_command(str_args: dict[str, str]) -> None:
             + "\n"
         )
         return
+
+    _log_hook_decision("run_command", "allow", cmd_line)
     sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
 
 

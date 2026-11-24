@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+from dataclasses import replace
 from pathlib import Path
 import time
 from uuid import UUID
@@ -73,6 +74,63 @@ _CMD_WITH_ARG_PARTS: Final[int] = 2
 _SUDO_CB_MIN_PARTS: Final[int] = 4
 _TITLE_SYNC_ATTEMPTS: Final[int] = 4
 _MAX_RICH_OUTPUT_CHARS: Final[int] = 6800
+_LIVE_LOG_TAIL_BYTES: Final[int] = 4096
+_LIVE_LOG_MAX_LINES: Final[int] = 8
+_LIVE_LOG_MAX_CHARS: Final[int] = 900
+
+
+def _read_live_task_log_tail(
+    agy_home_dir: Path, conversation_id: UUID, step_index: int
+) -> str | None:
+    log_path = (
+        agy_home_dir
+        / "antigravity-cli"
+        / "brain"
+        / str(conversation_id)
+        / ".system_generated"
+        / "tasks"
+        / f"task-{step_index}.log"
+    )
+    if not log_path.is_file():
+        return None
+    file_size = log_path.stat().st_size
+    if file_size <= 0:
+        return None
+    offset = max(0, file_size - _LIVE_LOG_TAIL_BYTES)
+    with log_path.open("rb") as fh:
+        if offset > 0:
+            fh.seek(offset)
+        raw_bytes = fh.read(_LIVE_LOG_TAIL_BYTES)
+    decoded = raw_bytes.decode("utf-8", errors="replace")
+    lines = [ln for ln in decoded.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    tail = "\n".join(lines[-_LIVE_LOG_MAX_LINES:])
+    return tail[-_LIVE_LOG_MAX_CHARS:]
+
+
+def _enrich_progress_with_live_logs(
+    agy_home_dir: Path, progress: TurnProgressEvent
+) -> TurnProgressEvent:
+    enriched_tools = []
+    changed = False
+    for tool in progress.active_tools:
+        if (
+            tool.state == StepState.ACTIVE
+            and tool.tool_name in ("run_command", "command")
+            and not tool.output_text
+        ):
+            live_tail = _read_live_task_log_tail(
+                agy_home_dir, progress.conversation_id, tool.step_index
+            )
+            if live_tail:
+                enriched_tools.append(replace(tool, output_text=live_tail))
+                changed = True
+                continue
+        enriched_tools.append(tool)
+    if not changed:
+        return progress
+    return replace(progress, active_tools=tuple(enriched_tools))
 
 
 class _LiveTraceFlusher:
@@ -812,10 +870,13 @@ class WorkspaceTopicUI:
         async def _flush_progress(progress: TurnProgressEvent, elapsed: float) -> None:
             if not self._client.is_connected():
                 return
+            live_progress = _enrich_progress_with_live_logs(
+                self._cfg.paths.agy_home_dir, progress
+            )
             pages = build_live_progress_pages(
                 lex=lex,
                 limits=self._cfg.limits,
-                event=progress,
+                event=live_progress,
                 elapsed_sec=elapsed,
                 model_slug=topic.model_slug,
                 account_slug=acc_display,
@@ -823,7 +884,7 @@ class WorkspaceTopicUI:
             rich_html_pages = build_live_progress_rich_html_pages(
                 lex=lex,
                 limits=self._cfg.limits,
-                event=progress,
+                event=live_progress,
                 elapsed_sec=elapsed,
                 model_slug=topic.model_slug,
                 account_slug=acc_display,
@@ -1013,10 +1074,13 @@ class WorkspaceTopicUI:
         async def _flush_progress(progress: TurnProgressEvent, elapsed: float) -> None:
             if not self._client.is_connected():
                 return
+            live_progress = _enrich_progress_with_live_logs(
+                self._cfg.paths.agy_home_dir, progress
+            )
             pages = build_live_progress_pages(
                 lex=lex,
                 limits=self._cfg.limits,
-                event=progress,
+                event=live_progress,
                 elapsed_sec=elapsed,
                 model_slug=topic.model_slug,
                 account_slug=f"{badge_prefix} │ {acc_display}",
@@ -1024,7 +1088,7 @@ class WorkspaceTopicUI:
             rich_html_pages = build_live_progress_rich_html_pages(
                 lex=lex,
                 limits=self._cfg.limits,
-                event=progress,
+                event=live_progress,
                 elapsed_sec=elapsed,
                 model_slug=topic.model_slug,
                 account_slug=f"{badge_prefix} │ {acc_display}",

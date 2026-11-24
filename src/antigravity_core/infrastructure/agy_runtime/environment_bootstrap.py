@@ -179,7 +179,7 @@ class AgyEnvironmentBootstrapper:
     def _write_hooks_json(self, hooks_path: Path) -> None:
         python_bin = str(self._cfg.paths.venv_python_path)
         pre_matcher = (
-            "run_command|read_file|write_file|edit_file|view_file|write_to_file|"
+            "run_command|command|read_file|write_file|edit_file|view_file|write_to_file|"
             "replace_file_content|multi_replace_file_content|list_dir|find_by_name|grep_search|schedule"
         )
         post_matcher = (
