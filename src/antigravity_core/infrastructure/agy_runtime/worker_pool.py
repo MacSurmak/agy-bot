@@ -9,6 +9,7 @@ from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.models import (
     ForumTopic,
     GoogleAccount,
+    TurnProgressEvent,
     TurnResult,
     WorkerSignature,
     WorkerTopicSnapshot,
@@ -189,58 +190,68 @@ class AgyWorkerPool:
         on_progress: ProgressCallback | None,
         initial_cumulative_tokens: int,
     ) -> TurnResult:
-        """Executes an isolated background/scheduled turn in parallel with full live progress streaming."""
-        conv_id = (
-            conversation_id_override
-            if conversation_id_override is not None
-            and conversation_id_override not in self._busy_conversations
-            else None
-        )
-        if conv_id is not None:
-            self._busy_conversations.add(conv_id)
-        sig = WorkerSignature(
-            conversation_id=conv_id,
-            model_slug=topic.model_slug,
-            effort_level=None,
-            execution_mode=topic.execution_mode,
-            account_id=account.id,
-            account_slug=account.slug,
-            dbus_socket_path=account.dbus_socket_path,
-            xdg_data_dir=account.xdg_data_dir,
-            workspace_path=topic.workspace_path,
-            additional_dirs=topic.additional_dirs,
-        )
-        account_env = await self._keyring_mgr.ensure_account_bus(account)
-        ephemeral_worker = TopicWorker(
-            topic_id=topic.topic_id,
-            signature=sig,
-            static_config=self._cfg,
-            account_env=account_env,
-            initial_cumulative_tokens=initial_cumulative_tokens,
-        )
+        """Executes a scheduled/sensor turn serialized per topic to prevent split-brain races."""
+        slot = await self._get_or_create_slot(topic.topic_id)
+        async with slot.turn_lock:
+            self._cancel_idle_timer(slot)
+            slot.is_running_turn = True
+            try:
+                if (
+                    conversation_id_override is not None
+                    and slot.worker is not None
+                    and slot.worker.is_alive()
+                ):
+                    await slot.worker.close_gracefully()
+                    slot.worker = None
 
-        async def _noop_init(_cid: UUID) -> None:
-            return
+                conv_id = conversation_id_override
+                if conv_id is not None:
+                    self._busy_conversations.add(conv_id)
+                sig = WorkerSignature(
+                    conversation_id=conv_id,
+                    model_slug=topic.model_slug,
+                    effort_level=None,
+                    execution_mode=topic.execution_mode,
+                    account_id=account.id,
+                    account_slug=account.slug,
+                    dbus_socket_path=account.dbus_socket_path,
+                    xdg_data_dir=account.xdg_data_dir,
+                    workspace_path=topic.workspace_path,
+                    additional_dirs=topic.additional_dirs,
+                )
+                account_env = await self._keyring_mgr.ensure_account_bus(account)
+                ephemeral_worker = TopicWorker(
+                    topic_id=topic.topic_id,
+                    signature=sig,
+                    static_config=self._cfg,
+                    account_env=account_env,
+                    initial_cumulative_tokens=initial_cumulative_tokens,
+                )
 
-        async def _noop_prog(_ev: object) -> None:
-            return
+                async def _noop_init(_cid: UUID) -> None:
+                    return
 
-        effective_prog: ProgressCallback = (
-            on_progress if on_progress is not None else _noop_prog
-        )
+                async def _noop_prog(_ev: TurnProgressEvent) -> None:
+                    return
 
-        try:
-            await ephemeral_worker.start(settings)
-            return await ephemeral_worker.execute_turn(
-                prompt=prompt,
-                settings=settings,
-                on_init=_noop_init,
-                on_progress=effective_prog,
-            )
-        finally:
-            if conv_id is not None:
-                self._busy_conversations.discard(conv_id)
-            await ephemeral_worker.close_gracefully()
+                effective_prog: ProgressCallback = (
+                    on_progress if on_progress is not None else _noop_prog
+                )
+
+                try:
+                    await ephemeral_worker.start(settings)
+                    return await ephemeral_worker.execute_turn(
+                        prompt=prompt,
+                        settings=settings,
+                        on_init=_noop_init,
+                        on_progress=effective_prog,
+                    )
+                finally:
+                    if conv_id is not None:
+                        self._busy_conversations.discard(conv_id)
+                    await ephemeral_worker.close_gracefully()
+            finally:
+                slot.is_running_turn = False
 
     async def cancel_active_turn(self, topic_id: int) -> bool:
         slot = await self._get_or_create_slot(topic_id)

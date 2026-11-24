@@ -1,5 +1,4 @@
 import json
-import shutil
 import sqlite3
 from pathlib import Path
 
@@ -238,24 +237,18 @@ class AgyEnvironmentBootstrapper:
                 "get_bot_ssh_public_key",
             )
         }
-        mcp_servers: dict[str, dict[str, str | list[str] | int | dict[str, dict[str, bool]]]] = {
-            "telegram-core": {
-                "command": python_bin,
-                "args": ["-m", "antigravity_core.mcp.stdio_proxy"],
-                "timeoutSeconds": self._cfg.runtime.mcp_stdio_timeout_sec,
-                "tools": eager_tools,
+        payload: dict[
+            str, dict[str, dict[str, str | list[str] | int | dict[str, dict[str, bool]]]]
+        ] = {
+            "mcpServers": {
+                "telegram-core": {
+                    "command": python_bin,
+                    "args": ["-m", "antigravity_core.mcp.stdio_proxy"],
+                    "timeoutSeconds": self._cfg.runtime.mcp_stdio_timeout_sec,
+                    "tools": eager_tools,
+                }
             }
         }
-        plugin_ctx_dir = self._cfg.paths.agy_home_dir / "config" / "plugins" / "context-mode"
-        context_mode_bin = shutil.which("context-mode")
-        if context_mode_bin is not None and not plugin_ctx_dir.is_dir():
-            mcp_servers["context-mode"] = {
-                "command": context_mode_bin,
-                "args": [],
-                "timeoutSeconds": self._cfg.runtime.mcp_stdio_timeout_sec,
-            }
-
-        payload = {"mcpServers": mcp_servers}
         mcp_config_path.write_text(
             json.dumps(payload, indent=2) + "\n", encoding="utf-8"
         )

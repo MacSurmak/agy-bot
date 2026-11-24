@@ -160,9 +160,13 @@ def _parse_step_update_event(
         parameters_text: str | None = None
         output_text: str | None = None
 
-        tool_info = body.get("tool_info")
+        if tool_name.startswith("mcp_telegram-core_"):
+            short_mcp = tool_name[len("mcp_telegram-core_") :]
+            tool_name = f"mcp:{short_mcp}"
+
+        tool_info = body["tool_info"] if "tool_info" in body else None
         if isinstance(tool_info, dict):
-            params = tool_info.get("parameters")
+            params = tool_info["parameters"] if "parameters" in tool_info else None
             if isinstance(params, dict) and params:
                 for key in (
                     "Path",
@@ -196,10 +200,7 @@ def _parse_step_update_event(
                     param_lines.append(f"{k}: {val_str}")
                 parameters_text = "\n".join(param_lines)
 
-                if tool_name.startswith("mcp_telegram-core_"):
-                    short_mcp = tool_name[len("mcp_telegram-core_") :]
-                    tool_name = f"mcp:{short_mcp}"
-                elif tool_name == "call_mcp_tool" and "ToolName" in params:
+                if tool_name == "call_mcp_tool" and "ToolName" in params:
                     mcp_tool = str(params["ToolName"]).strip()
                     raw_args = params["Arguments"] if "Arguments" in params else None
                     parsed_mcp_args: dict[str, str | int | bool] = {}

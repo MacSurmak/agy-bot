@@ -108,10 +108,15 @@ class WorkspaceTopicUI:
         self._password_prompt_msgs: dict[int, tuple[str, int]] = {}
         self._sudo_prompt_meta: dict[str, tuple[str, str]] = {}
         self._relocate_trace_topics: set[int] = set()
-        self._last_trace_edit_ts: dict[int, float] = {}
+        self._topic_locks: dict[int, asyncio.Lock] = {}
         self._staged_media_msg_ids: dict[int, int] = {}
         self._flush_staged_cb: Callable[[int, str], Awaitable[bool]] | None = None
         self._clear_staged_cb: Callable[[int], Awaitable[int]] | None = None
+
+    def _get_topic_lock(self, topic_id: int) -> asyncio.Lock:
+        if topic_id not in self._topic_locks:
+            self._topic_locks[topic_id] = asyncio.Lock()
+        return self._topic_locks[topic_id]
 
     def bind_staged_media_callbacks(
         self,
@@ -627,6 +632,14 @@ class WorkspaceTopicUI:
             await self._handle_custom_dir_reply(topic_id, reply_to_msg_id, prompt)
             return
 
+        async with self._get_topic_lock(topic_id):
+            await self._execute_batched_prompt_locked(
+                topic_id, reply_to_msg_id, prompt
+            )
+
+    async def _execute_batched_prompt_locked(
+        self, topic_id: int, reply_to_msg_id: int, prompt: str
+    ) -> None:
         topic = await self.ensure_topic_registered(topic_id)
         account = await self._account_repo.get_by_id(topic.assigned_account_id)
         settings = await self._settings_repo.load_settings()
@@ -641,7 +654,7 @@ class WorkspaceTopicUI:
         )
         await self._clear_staged_media_card(topic_id)
         start_ts = time.monotonic()
-        self._last_trace_edit_ts[topic_id] = start_ts
+        last_edit_ts: list[float] = [start_ts]
 
         acc_display = account.display_email
         status_msg: Message = await self._client.send_message(
@@ -671,14 +684,9 @@ class WorkspaceTopicUI:
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
             now = time.monotonic()
-            prev_ts = (
-                self._last_trace_edit_ts[topic_id]
-                if topic_id in self._last_trace_edit_ts
-                else 0.0
-            )
-            if (now - prev_ts) < settings.tg_edit_throttle_sec:
+            if (now - last_edit_ts[0]) < settings.tg_edit_throttle_sec:
                 return
-            self._last_trace_edit_ts[topic_id] = now
+            last_edit_ts[0] = now
             if not self._client.is_connected():
                 return
             elapsed = now - start_ts
@@ -803,7 +811,22 @@ class WorkspaceTopicUI:
         badge_prefix: str,
         conversation_id: UUID | None,
     ) -> None:
-        """Executes an automated wake-up turn (timer or sensor) with full live tool trace in the topic."""
+        """Executes an automated wake-up turn serialized per topic with full live tool trace."""
+        async with self._get_topic_lock(topic_id):
+            await self._run_interactive_wake_turn_locked(
+                topic_id=topic_id,
+                wake_prompt=wake_prompt,
+                badge_prefix=badge_prefix,
+                conversation_id=conversation_id,
+            )
+
+    async def _run_interactive_wake_turn_locked(
+        self,
+        topic_id: int,
+        wake_prompt: str,
+        badge_prefix: str,
+        conversation_id: UUID | None,
+    ) -> None:
         existing_topic = await self._topic_repo.get_topic(topic_id)
         if existing_topic is None or existing_topic.status.value == "ARCHIVED":
             logger.warning(
@@ -818,7 +841,7 @@ class WorkspaceTopicUI:
         lex = get_lexicon(settings.ui_language)
 
         start_ts = time.monotonic()
-        self._last_trace_edit_ts[topic_id] = start_ts
+        last_edit_ts: list[float] = [start_ts]
         acc_display = account.display_email
 
         status_msg = await self._client.send_message(
@@ -849,14 +872,9 @@ class WorkspaceTopicUI:
 
         async def _on_progress(progress: TurnProgressEvent) -> None:
             now = time.monotonic()
-            prev_ts = (
-                self._last_trace_edit_ts[topic_id]
-                if topic_id in self._last_trace_edit_ts
-                else 0.0
-            )
-            if (now - prev_ts) < settings.tg_edit_throttle_sec:
+            if (now - last_edit_ts[0]) < settings.tg_edit_throttle_sec:
                 return
-            self._last_trace_edit_ts[topic_id] = now
+            last_edit_ts[0] = now
             if not self._client.is_connected():
                 return
             elapsed = now - start_ts

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import signal
 import sys
 from typing import Final
@@ -58,12 +59,17 @@ async def _wait_with_mtproto_watchdog(
     """Monitors MTProto connection health and triggers reconnect or fatal restart if permanently wedged."""
     disconnected_ticks = 0
     while not stop_event.is_set():
-        done, _pending = await asyncio.wait(
-            [asyncio.create_task(stop_event.wait())],
+        stop_task = asyncio.create_task(stop_event.wait())
+        done, pending = await asyncio.wait(
+            [stop_task],
             timeout=_WATCHDOG_CHECK_INTERVAL_SEC,
         )
         if done:
             break
+        for pending_task in pending:
+            pending_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pending_task
         if client.is_connected():
             disconnected_ticks = 0
             continue
@@ -73,7 +79,8 @@ async def _wait_with_mtproto_watchdog(
             disconnected_ticks,
             _MAX_CONSECUTIVE_DISCONNECT_CHECKS,
         )
-        await client.connect()
+        with contextlib.suppress(OSError, ConnectionError):
+            await client.connect()
         if client.is_connected():
             logger.info("MTProto watchdog successfully reconnected TelegramClient")
             disconnected_ticks = 0

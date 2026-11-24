@@ -57,15 +57,15 @@ _FORBIDDEN_BOT_INTERNAL_PATHS: Final[tuple[str, ...]] = (
     "/srv/antigravity/app/runtime_data/run",
 )
 
-_ALLOWED_LOCAL_WRITE_PREFIXES: Final[tuple[str, ...]] = (
-    str(_RUNTIME_DATA_DIR / "workspaces"),
-    str(_RUNTIME_DATA_DIR / "inbox"),
-    "/srv/antigravity/app/runtime_data/workspaces",
-    "/srv/antigravity/app/runtime_data/inbox",
-    "/etc/systemd/system",
-    "/root/.gemini/config/rules",
-    "/root/.gemini/config/skills",
-    "/tmp",
+_ALLOWED_LOCAL_WRITE_ROOTS: Final[tuple[Path, ...]] = (
+    (_RUNTIME_DATA_DIR / "workspaces").resolve(),
+    (_RUNTIME_DATA_DIR / "inbox").resolve(),
+    Path("/srv/antigravity/app/runtime_data/workspaces"),
+    Path("/srv/antigravity/app/runtime_data/inbox"),
+    Path("/etc/systemd/system"),
+    Path("/root/.gemini/config/rules"),
+    Path("/root/.gemini/config/skills"),
+    Path("/tmp"),
 )
 
 _ALLOWED_LOCAL_READ_ONLY_SEGMENTS: Final[tuple[str, ...]] = (
@@ -148,12 +148,12 @@ def _extract_file_path(args: dict[str, str]) -> str:
     return ""
 
 
-def _violates_bot_internals_or_topic_isolation(text_or_path: str) -> str | None:
+def _violates_bot_internals_or_topic_isolation(
+    text_or_path: str, is_readonly_file_tool: bool
+) -> str | None:
     """Blocks access to the bot's own source code, secrets, logs, and other topics' directories."""
-    if (
-        "/.system_generated/tasks/" in text_or_path
-        or "/.system_generated/steps/" in text_or_path
-        or "/.gemini/config/" in text_or_path
+    if is_readonly_file_tool and any(
+        seg in text_or_path for seg in _ALLOWED_LOCAL_READ_ONLY_SEGMENTS
     ):
         return None
 
@@ -180,39 +180,47 @@ def _violates_bot_internals_or_topic_isolation(text_or_path: str) -> str | None:
     return None
 
 
-def _handle_post_tool_use(raw_stdin: str) -> None:
+def _handle_post_tool_use(raw_stdin: str) -> int:
     if not raw_stdin.strip():
         sys.stdout.write("{}\n")
-        return
+        return 0
 
     parsed = json.loads(raw_stdin)
     if not isinstance(parsed, dict) or "toolCall" not in parsed:
         sys.stdout.write("{}\n")
-        return
+        return 0
 
     tool_call = parsed["toolCall"]
     if not isinstance(tool_call, dict):
         sys.stdout.write("{}\n")
-        return
+        return 0
 
     tool_name = str(tool_call["name"]) if "name" in tool_call else ""
     raw_args = tool_call["args"] if "args" in tool_call else {}
     if not isinstance(raw_args, dict) or tool_name not in _ALL_FILE_TOOLS:
         sys.stdout.write("{}\n")
-        return
+        return 0
 
     str_args = {str(k): str(v) for k, v in raw_args.items() if v is not None}
     target_path = _extract_file_path(str_args)
     if target_path.startswith("/ssh:"):
-        _ipc_call(
+        ok, err_msg = _ipc_call(
             "commit_remote_file",
             {
                 "path": target_path,
                 "cleanup_only": tool_name not in _WRITE_TOOLS,
             },
         )
+        if not ok:
+            reason = f"REMOTE FILE COMMIT FAILED for '{target_path}': {err_msg}"
+            sys.stdout.write(
+                json.dumps({"decision": "block", "reason": reason}) + "\n"
+            )
+            sys.stderr.write(f"{reason}\n")
+            return 1
 
     sys.stdout.write("{}\n")
+    return 0
 
 
 def _handle_pre_tool_use(raw_stdin: str) -> None:
@@ -279,7 +287,7 @@ def _handle_pre_tool_use(raw_stdin: str) -> None:
 
 def _handle_pre_run_command(str_args: dict[str, str]) -> None:
     cmd_line = str_args["CommandLine"] if "CommandLine" in str_args else ""
-    violation = _violates_bot_internals_or_topic_isolation(cmd_line)
+    violation = _violates_bot_internals_or_topic_isolation(cmd_line, False)
     if violation is not None:
         sys.stdout.write(json.dumps({"decision": "deny", "reason": violation}) + "\n")
         return
@@ -355,14 +363,18 @@ def _handle_pre_file_tool(tool_name: str, str_args: dict[str, str]) -> None:
         sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
         return
 
-    resolved_local = str(Path(target_path).expanduser().resolve())
-    violation = _violates_bot_internals_or_topic_isolation(resolved_local)
+    resolved_path = Path(target_path).expanduser().resolve()
+    resolved_local = str(resolved_path)
+    is_readonly = tool_name not in _WRITE_TOOLS
+    violation = _violates_bot_internals_or_topic_isolation(resolved_local, is_readonly)
     if violation is not None:
         sys.stdout.write(json.dumps({"decision": "deny", "reason": violation}) + "\n")
         return
 
-    is_allowed_write = resolved_local.startswith(_ALLOWED_LOCAL_WRITE_PREFIXES)
-    is_allowed_ro = (tool_name not in _WRITE_TOOLS) and any(
+    is_allowed_write = any(
+        resolved_path.is_relative_to(root) for root in _ALLOWED_LOCAL_WRITE_ROOTS
+    )
+    is_allowed_ro = is_readonly and any(
         seg in resolved_local or seg in target_path
         for seg in _ALLOWED_LOCAL_READ_ONLY_SEGMENTS
     )
@@ -389,7 +401,9 @@ def _handle_pre_file_tool(tool_name: str, str_args: dict[str, str]) -> None:
 def main() -> None:
     raw_stdin = sys.stdin.read()
     if len(sys.argv) > 1 and sys.argv[1] == "--post":
-        _handle_post_tool_use(raw_stdin)
+        exit_code = _handle_post_tool_use(raw_stdin)
+        if exit_code != 0:
+            sys.exit(exit_code)
     else:
         _handle_pre_tool_use(raw_stdin)
 

@@ -37,9 +37,10 @@ _REMOTE_OPTIONS_WITH_ARG: Final[frozenset[str]] = frozenset(
 )
 
 
-def _inject_sudo_prompt_token_into_ssh_argv(
+def _prepare_ssh_command(
     ssh_argv: list[str], prompt_marker: str
-) -> list[str]:
+) -> tuple[bool, list[str]]:
+    """Inject non-interactive pager env vars and detect whether PTY allocation for sudo is needed."""
     idx = 0
     n = len(ssh_argv)
     while idx < n:
@@ -56,18 +57,21 @@ def _inject_sudo_prompt_token_into_ssh_argv(
         break
 
     if idx >= n - 1:
-        return list(ssh_argv)
+        return False, list(ssh_argv)
 
-    host_And_opts = ssh_argv[: idx + 1]
+    host_and_opts = ssh_argv[: idx + 1]
     remote_cmd_parts = ssh_argv[idx + 1 :]
     raw_remote_cmd = " ".join(remote_cmd_parts)
-    if "sudo" not in raw_remote_cmd:
-        return list(ssh_argv)
+    needs_pty = "sudo" in raw_remote_cmd
 
-    wrapped_cmd = (
-        f"export SUDO_PROMPT={shlex.quote(prompt_marker)}; " f"{raw_remote_cmd}"
-    )
-    return [*host_And_opts, wrapped_cmd]
+    if needs_pty:
+        wrapped_cmd = (
+            f"export GIT_PAGER=cat PAGER=cat SUDO_PROMPT={shlex.quote(prompt_marker)}; "
+            f"{raw_remote_cmd}"
+        )
+    else:
+        wrapped_cmd = f"export GIT_PAGER=cat PAGER=cat; {raw_remote_cmd}"
+    return needs_pty, [*host_and_opts, wrapped_cmd]
 
 
 def _ipc_call(
@@ -214,14 +218,19 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
 
     prompt_marker_str = f"__AGY_SUDO_{secrets.token_hex(8)}__:"
     prompt_marker_bytes = prompt_marker_str.encode("ascii")
-    effective_argv = _inject_sudo_prompt_token_into_ssh_argv(
-        ssh_argv, prompt_marker_str
-    )
+    needs_pty, effective_argv = _prepare_ssh_command(ssh_argv, prompt_marker_str)
 
     child_env = {
         **os.environ,
         "LC_ALL": "C",
     }
+
+    if not needs_pty:
+        os.execve(
+            "/usr/bin/ssh",
+            ["/usr/bin/ssh", "-o", "LogLevel=ERROR", *effective_argv],
+            child_env,
+        )
 
     master_fd, slave_fd = pty.openpty()
     pid = os.fork()
@@ -293,7 +302,7 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
                         os.write(master_fd, b"\x03\n")
                         sys.stderr.write(f"\nSudo rejected: {err_msg}\n")
                         sys.stderr.flush()
-                        continue
+                        break
 
                     sys.stderr.write(
                         f"[Antigravity Sudo Gateway]: Owner approved sudo on {target_label}. Executing command...\n"

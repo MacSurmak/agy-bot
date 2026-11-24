@@ -28,6 +28,7 @@ from antigravity_core.infrastructure.database.repositories import (
 
 _AI_NOTES_MARKER: Final[str] = "<!-- AI_NOTES_START -->"
 MAX_REMOTE_STAGE_FILE_BYTES: Final[int] = 2_097_152
+_LS_LA_MIN_COLUMNS: Final[int] = 9
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +70,7 @@ class RemoteMountManager:
         self._stage_locks: dict[str, asyncio.Lock] = {}
         self._stage_refcounts: dict[str, int] = {}
         self._onboarding_locks: dict[str, asyncio.Lock] = {}
+        self._password_prompt_locks: dict[int, asyncio.Lock] = {}
 
     def bind_security_gateways(
         self,
@@ -118,13 +120,21 @@ class RemoteMountManager:
         self.cleanup_topic_staged_files(topic_id)
 
     def cleanup_topic_staged_files(self, topic_id: int) -> None:
-        """Force-cleans any orphaned local TRAMP staged files and baselines for a topic after turn end or cancel."""
+        """Cleans orphaned local TRAMP staged files and decrements shared refcounts for a topic."""
         matching_keys = [
             b_key for b_key in self._staged_baselines if b_key[0] == topic_id
         ]
         for b_key in matching_keys:
             self._staged_baselines.pop(b_key, None)
             stage_path_str = b_key[1]
+            remaining = (
+                self._stage_refcounts[stage_path_str] - 1
+                if stage_path_str in self._stage_refcounts
+                else 0
+            )
+            if remaining > 0:
+                self._stage_refcounts[stage_path_str] = remaining
+                continue
             self._stage_refcounts.pop(stage_path_str, None)
             stage_path = Path(stage_path_str)
             if stage_path.is_file():
@@ -516,21 +526,24 @@ class RemoteMountManager:
             raise RemoteMountError(
                 f"SSH key is not provisioned for '{target_label}' and interactive prompt callback is not bound."
             )
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[str] = loop.create_future()
-        self._pending_passwords[topic_id] = (target_label, fut)
-        try:
-            await self._on_password_prompt(topic_id, target_label)
-            return await asyncio.wait_for(
-                fut,
-                timeout=self._cfg.remotes.interactive_approval_timeout_sec,
-            )
-        except TimeoutError as exc:
-            raise RemoteMountError(
-                f"Timed out waiting for SSH password for '{target_label}' in Telegram."
-            ) from exc
-        finally:
-            self._pending_passwords.pop(topic_id, None)
+        if topic_id not in self._password_prompt_locks:
+            self._password_prompt_locks[topic_id] = asyncio.Lock()
+        async with self._password_prompt_locks[topic_id]:
+            loop = asyncio.get_running_loop()
+            fut: asyncio.Future[str] = loop.create_future()
+            self._pending_passwords[topic_id] = (target_label, fut)
+            try:
+                await self._on_password_prompt(topic_id, target_label)
+                return await asyncio.wait_for(
+                    fut,
+                    timeout=self._cfg.remotes.interactive_approval_timeout_sec,
+                )
+            except TimeoutError as exc:
+                raise RemoteMountError(
+                    f"Timed out waiting for SSH password for '{target_label}' in Telegram."
+                ) from exc
+            finally:
+                self._pending_passwords.pop(topic_id, None)
 
     async def ensure_target_access(
         self, topic_id: int, raw_target: str, explicit_port: int
@@ -563,6 +576,19 @@ class RemoteMountManager:
         ssh_user, host_part, port, cred_key, candidate_targets = (
             await self._resolve_ssh_target_details(raw_target, explicit_port)
         )
+        if ssh_user == "root" and self._host_repo is not None:
+            registered_hosts = await self._host_repo.list_hosts()
+            for reg_host in registered_hosts:
+                if (
+                    reg_host.ssh_user != "root"
+                    and host_part in (reg_host.alias, reg_host.hostname_or_ip)
+                ):
+                    raise RemoteMountError(
+                        f"ROOT SSH FORBIDDEN for host '{reg_host.alias}' "
+                        f"(registered user: '{reg_host.ssh_user}'). "
+                        f"Use 'ssh {reg_host.ssh_user}@{reg_host.alias} \"sudo ...\"' instead."
+                    )
+
         resolved_target = f"{ssh_user}@{host_part}"
 
         if cred_key not in self._onboarding_locks:
@@ -600,22 +626,6 @@ class RemoteMountManager:
                     and self._cred_repo is not None
                 ):
                     cred = await self._cred_repo.mark_key_provisioned(cred_key, True)
-                if cred is not None or ssh_user == "root":
-                    return resolved_target, cred
-
-                entered_host_pass = await self._request_password_from_owner(
-                    topic_id, resolved_target
-                )
-                if self._vault is not None and self._cred_repo is not None:
-                    enc = self._vault.encrypt_text(entered_host_pass)
-                    cred = await self._cred_repo.upsert_credential(
-                        credential_key=cred_key,
-                        ssh_user=ssh_user,
-                        host_target=host_part,
-                        ssh_port=port,
-                        encrypted_password=enc,
-                        key_provisioned=True,
-                    )
                 return resolved_target, cred
 
             lower_err = ssh_err.lower()
@@ -905,12 +915,6 @@ class RemoteMountManager:
 
         stage_key = str(spec.local_stage_path)
         lock = self._get_stage_lock(spec.local_stage_path)
-        async with lock:
-            self._stage_refcounts[stage_key] = (
-                self._stage_refcounts[stage_key] + 1
-                if stage_key in self._stage_refcounts
-                else 1
-            )
 
         resolved_target, _cred = await self.ensure_target_access_with_jump(
             topic_id=topic_id,
@@ -950,7 +954,17 @@ class RemoteMountManager:
             stderr=asyncio.subprocess.PIPE,
             env=self._internal_ssh_env(),
         )
-        stdout_bytes, stderr_bytes = await proc.communicate()
+        stage_timeout = float(self._cfg.remotes.ssh_connect_timeout_sec * 3)
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=stage_timeout
+            )
+        except TimeoutError as exc:
+            proc.kill()
+            await proc.wait()
+            raise RemoteMountError(
+                f"Timed out probing '{spec.remote_path}' on '{resolved_target}' after {stage_timeout:.0f}s."
+            ) from exc
         if proc.returncode != 0 and not stdout_bytes:
             err_str = stderr_bytes.decode("utf-8", errors="replace").strip()
             raise RemoteMountError(
@@ -968,16 +982,6 @@ class RemoteMountManager:
         if header.startswith("AGY_TOO_LARGE:"):
             raw_sz = header.split(":", 1)[1].strip()
             sz_mb = round(int(raw_sz) / (1024 * 1024), 2) if raw_sz.isdigit() else 2.0
-            async with lock:
-                rem = (
-                    self._stage_refcounts[stage_key] - 1
-                    if stage_key in self._stage_refcounts
-                    else 0
-                )
-                if rem <= 0:
-                    self._stage_refcounts.pop(stage_key, None)
-                else:
-                    self._stage_refcounts[stage_key] = rem
             raise RemoteMountError(
                 f"REMOTE FILE TOO LARGE FOR CONTAINER STAGING: '{spec.remote_path}' on '{resolved_target}' "
                 f"is {sz_mb} MB (limit is 2.0 MB). Do NOT copy large files into the LXC container via read_file/edit_file. "
@@ -988,7 +992,7 @@ class RemoteMountManager:
             spec.local_stage_path.mkdir(parents=True, exist_ok=True)
             for raw_entry in body_bytes.decode("utf-8", errors="replace").splitlines():
                 parts = raw_entry.split()
-                if len(parts) >= 9:
+                if len(parts) >= _LS_LA_MIN_COLUMNS:
                     entry_name = " ".join(parts[8:])
                     if entry_name not in (".", "..") and "/" not in entry_name:
                         entry_path = spec.local_stage_path / entry_name
@@ -996,6 +1000,12 @@ class RemoteMountManager:
                             entry_path.mkdir(parents=True, exist_ok=True)
                         else:
                             entry_path.write_bytes(b"")
+            async with lock:
+                self._stage_refcounts[stage_key] = (
+                    self._stage_refcounts[stage_key] + 1
+                    if stage_key in self._stage_refcounts
+                    else 1
+                )
             return {"status": "staged_dir", "local_path": str(spec.local_stage_path)}
 
         existed = True
@@ -1015,6 +1025,7 @@ class RemoteMountManager:
             )
             s_proc = await asyncio.create_subprocess_exec(
                 "/usr/bin/ssh",
+                *jump_args,
                 "-o",
                 "BatchMode=yes",
                 resolved_target,
@@ -1025,7 +1036,16 @@ class RemoteMountManager:
                 env=self._internal_ssh_env(),
             )
             stdin_payload = (sudo_pass + "\n").encode("utf-8") if not is_root else b""
-            body_bytes, s_err = await s_proc.communicate(input=stdin_payload)
+            try:
+                body_bytes, s_err = await asyncio.wait_for(
+                    s_proc.communicate(input=stdin_payload), timeout=stage_timeout
+                )
+            except TimeoutError as exc:
+                s_proc.kill()
+                await s_proc.wait()
+                raise RemoteMountError(
+                    f"Timed out reading '{spec.remote_path}' on '{resolved_target}' via sudo."
+                ) from exc
             if s_proc.returncode != 0:
                 raise RemoteMountError(
                     f"Failed to read '{spec.remote_path}' with sudo: {s_err.decode('utf-8', errors='replace')}"
@@ -1060,6 +1080,12 @@ class RemoteMountManager:
                 requires_sudo_write=requires_sudo_write,
             )
         )
+        async with lock:
+            self._stage_refcounts[stage_key] = (
+                self._stage_refcounts[stage_key] + 1
+                if stage_key in self._stage_refcounts
+                else 1
+            )
         return {"status": "staged", "local_path": str(spec.local_stage_path)}
 
     async def commit_remote_file(
@@ -1159,8 +1185,10 @@ class RemoteMountManager:
                 "tmp_stage=$(mktemp /tmp/.agy_stage_XXXXXXXXXX) && "
                 'cat > "$tmp_stage" && printf \'%s\' "$tmp_stage"'
             )
+            commit_timeout = float(self._cfg.remotes.ssh_connect_timeout_sec * 3)
             up_proc = await asyncio.create_subprocess_exec(
                 "/usr/bin/ssh",
+                *jump_args,
                 "-o",
                 "BatchMode=yes",
                 resolved_target,
@@ -1170,7 +1198,16 @@ class RemoteMountManager:
                 stderr=asyncio.subprocess.PIPE,
                 env=self._internal_ssh_env(),
             )
-            up_out, up_err = await up_proc.communicate(input=new_bytes)
+            try:
+                up_out, up_err = await asyncio.wait_for(
+                    up_proc.communicate(input=new_bytes), timeout=commit_timeout
+                )
+            except TimeoutError as exc:
+                up_proc.kill()
+                await up_proc.wait()
+                raise RemoteMountError(
+                    f"Timed out uploading staging buffer to '{resolved_target}'."
+                ) from exc
             remote_tmp = up_out.decode("utf-8", errors="replace").strip()
             if up_proc.returncode != 0 or not remote_tmp.startswith("/tmp/"):
                 raise RemoteMountError(
@@ -1188,6 +1225,7 @@ class RemoteMountManager:
             )
             sw_proc = await asyncio.create_subprocess_exec(
                 "/usr/bin/ssh",
+                *jump_args,
                 "-o",
                 "BatchMode=yes",
                 resolved_target,
@@ -1198,7 +1236,16 @@ class RemoteMountManager:
                 env=self._internal_ssh_env(),
             )
             stdin_pass = (sudo_pass + "\n").encode("utf-8") if not is_root else b""
-            _, sw_err = await sw_proc.communicate(input=stdin_pass)
+            try:
+                _, sw_err = await asyncio.wait_for(
+                    sw_proc.communicate(input=stdin_pass), timeout=commit_timeout
+                )
+            except TimeoutError as exc:
+                sw_proc.kill()
+                await sw_proc.wait()
+                raise RemoteMountError(
+                    f"Timed out applying sudo write to '{spec.remote_path}' on '{resolved_target}'."
+                ) from exc
             if sw_proc.returncode != 0:
                 err_msg = sw_err.decode("utf-8", errors="replace").strip()
                 raise RemoteMountError(
@@ -1285,39 +1332,6 @@ class RemoteMountManager:
                 return cleaned
         return "- *(Add architectural notes, project paths, and service details here via `update_host_knowledge`.)*"
 
-    async def ensure_remote_code_graph_tool(self, host: RemoteHost) -> bool:
-        """Best-effort user-space installation of code-review-graph on a Linux remote host during onboarding."""
-        self.write_ssh_config_entry(host)
-        install_script = (
-            'export PATH="$HOME/.local/bin:$PATH"; '
-            "if command -v code-review-graph >/dev/null 2>&1; then exit 0; fi; "
-            "if command -v uv >/dev/null 2>&1; then timeout 75 uv tool install code-review-graph >/dev/null 2>&1; "
-            "elif command -v pipx >/dev/null 2>&1; then timeout 75 pipx install code-review-graph >/dev/null 2>&1; "
-            "else exit 1; fi; "
-            "command -v code-review-graph >/dev/null 2>&1"
-        )
-        proc = await asyncio.create_subprocess_exec(
-            "/usr/bin/ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            f"ConnectTimeout={self._cfg.remotes.ssh_connect_timeout_sec}",
-            host.alias,
-            install_script,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._internal_ssh_env(),
-        )
-        await proc.communicate()
-        installed = proc.returncode == 0
-        logger.info(
-            "Remote code-review-graph provisioning check: host={} installed={}",
-            host.alias,
-            installed,
-        )
-        return installed
-
     async def sync_host_telemetry_and_rules(self, host: RemoteHost) -> Path:
         """Probes live hardware, disks, Docker, Proxmox, Slurm, and key folders over SSH (0 LLM tokens) and updates infra-<alias>.md."""
         self.write_ssh_config_entry(host)
@@ -1348,12 +1362,22 @@ class RemoteMountManager:
             env=self._internal_ssh_env(),
         )
         now_str = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
-        stdout_bytes, _ = await proc.communicate()
-        telemetry_out = (
-            stdout_bytes.decode("utf-8", errors="replace").strip()
-            if proc.returncode == 0
-            else "[Telemetry SSH probe failed or timed out]"
-        )
+        probe_timeout = float(self._cfg.remotes.ssh_connect_timeout_sec * 3)
+        try:
+            stdout_bytes, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=probe_timeout
+            )
+            telemetry_out = (
+                stdout_bytes.decode("utf-8", errors="replace").strip()
+                if proc.returncode == 0
+                else "[Telemetry SSH probe failed]"
+            )
+        except TimeoutError as exc:
+            proc.kill()
+            await proc.wait()
+            raise RemoteMountError(
+                f"Telemetry SSH probe timed out for host '{host.alias}' after {probe_timeout:.0f}s."
+            ) from exc
 
         auto_section = (
             f"*Last auto-synced: `{now_str}`*\n\n"
