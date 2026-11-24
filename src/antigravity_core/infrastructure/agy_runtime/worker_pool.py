@@ -66,7 +66,6 @@ class AgyWorkerPool:
         return WorkerSignature(
             conversation_id=topic.active_conversation_id,
             model_slug=topic.model_slug,
-            effort_level=topic.effort_level,
             execution_mode=topic.execution_mode,
             account_id=account.id,
             account_slug=account.slug,
@@ -87,7 +86,6 @@ class AgyWorkerPool:
         return (
             conv_ok
             and current.model_slug == desired.model_slug
-            and current.effort_level == desired.effort_level
             and current.execution_mode == desired.execution_mode
             and current.account_id == desired.account_id
             and current.workspace_path == desired.workspace_path
@@ -210,7 +208,6 @@ class AgyWorkerPool:
                 sig = WorkerSignature(
                     conversation_id=conv_id,
                     model_slug=topic.model_slug,
-                    effort_level=None,
                     execution_mode=topic.execution_mode,
                     account_id=account.id,
                     account_slug=account.slug,

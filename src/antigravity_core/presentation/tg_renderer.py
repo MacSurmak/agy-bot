@@ -50,16 +50,40 @@ _INTRAWORD_UNDERSCORE_RE: Final[re.Pattern[str]] = re.compile(
 _MATH_SPLIT_RE: Final[re.Pattern[str]] = re.compile(
     r"(\$\$[^$]+\$\$|\$[^$\n]+\$)"
 )
+_URL_SPLIT_RE: Final[re.Pattern[str]] = re.compile(r"(https?://[^\s<>)\]]+)")
+_GFM_TABLE_LINE_RE: Final[re.Pattern[str]] = re.compile(r"^\s*\|.+\|\s*$")
+_GFM_TABLE_SEP_RE: Final[re.Pattern[str]] = re.compile(
+    r"^\s*\|(?:\s*:?-{2,}:?\s*\|)+\s*$"
+)
+
+
+def _escape_underscores_preserving_urls(text: str) -> str:
+    url_parts = _URL_SPLIT_RE.split(text)
+    for idx in range(0, len(url_parts), 2):
+        url_parts[idx] = _INTRAWORD_UNDERSCORE_RE.sub(r"\_", url_parts[idx])
+    return "".join(url_parts)
 
 
 def _normalize_non_math_text(segment: str) -> str:
-    """Normalizes currency dollars, bare LaTeX commands, and snake_case underscores outside $...$."""
+    """Normalizes currency dollars, bare LaTeX commands, and snake_case underscores outside $...$ and URLs."""
     escaped_currency = _CURRENCY_DOLLAR_RE.sub(r"\\$\1", segment)
     wrapped_bare_latex = _BARE_LATEX_CMD_RE.sub(r"$\1$", escaped_currency)
     sub_parts = _MATH_SPLIT_RE.split(wrapped_bare_latex)
     for idx in range(0, len(sub_parts), 2):
-        sub_parts[idx] = _INTRAWORD_UNDERSCORE_RE.sub(r"\_", sub_parts[idx])
+        sub_parts[idx] = _escape_underscores_preserving_urls(sub_parts[idx])
     return "".join(sub_parts)
+
+
+def _escape_pipes_in_table_math(line: str) -> str:
+    """Replaces raw pipe characters inside $...$ math spans on GFM table rows so cells do not split."""
+    code_parts = line.split("`")
+    for idx in range(0, len(code_parts), 2):
+        math_parts = _MATH_SPLIT_RE.split(code_parts[idx])
+        for m_idx in range(1, len(math_parts), 2):
+            if "|" in math_parts[m_idx]:
+                math_parts[m_idx] = math_parts[m_idx].replace("|", r"\vert ")
+        code_parts[idx] = "".join(math_parts)
+    return "`".join(code_parts)
 
 
 def normalize_latex_outside_code(line: str) -> str:
@@ -77,9 +101,13 @@ def normalize_latex_outside_code(line: str) -> str:
 
 def prepare_rich_markdown(raw_md: str) -> str:
     """Prepares multi-line GFM and LaTeX Markdown for Telegram Native RichMessage rendering."""
+    raw_lines = raw_md.splitlines()
     out_lines: list[str] = []
     in_fence = False
-    for line in raw_md.splitlines():
+    in_display_math = False
+    total_lines = len(raw_lines)
+
+    for idx, line in enumerate(raw_lines):
         stripped = line.strip()
         if stripped.startswith("```"):
             is_single_line_fence = (
@@ -94,9 +122,32 @@ def prepare_rich_markdown(raw_md: str) -> str:
         if in_fence:
             out_lines.append(line)
             continue
-        out_lines.append(normalize_latex_outside_code(line))
-    return "\n".join(out_lines)
+        if stripped == "$$":
+            in_display_math = not in_display_math
+            out_lines.append(line)
+            continue
+        if in_display_math:
+            out_lines.append(line)
+            continue
 
+        is_table_header = (
+            _GFM_TABLE_LINE_RE.match(line) is not None
+            and (idx + 1) < total_lines
+            and _GFM_TABLE_SEP_RE.match(raw_lines[idx + 1]) is not None
+        )
+        if (
+            is_table_header
+            and out_lines
+            and out_lines[-1].strip()
+            and _GFM_TABLE_LINE_RE.match(out_lines[-1]) is None
+        ):
+            out_lines.append("")
+
+        normalized = normalize_latex_outside_code(line)
+        if _GFM_TABLE_LINE_RE.match(normalized) is not None:
+            normalized = _escape_pipes_in_table_math(normalized)
+        out_lines.append(normalized)
+    return "\n".join(out_lines)
 
 def make_wide_single_line_bar(text: str) -> str:
     """Formats a single-line status/header bar padded with non-breaking spaces."""
@@ -344,6 +395,18 @@ def _extract_sent_message_from_updates(
     return None
 
 
+def _build_reply_header(
+    reply_to: int | None, top_msg_id: int | None
+) -> types.InputReplyToMessage | None:
+    if reply_to is None:
+        return None
+    if top_msg_id is not None and top_msg_id != reply_to:
+        return types.InputReplyToMessage(
+            reply_to_msg_id=reply_to, top_msg_id=top_msg_id
+        )
+    return types.InputReplyToMessage(reply_to_msg_id=reply_to)
+
+
 async def send_rich_or_standard_message(
     client: TelegramClient,
     chat_id: int,
@@ -351,6 +414,7 @@ async def send_rich_or_standard_message(
     fallback_text: str,
     fallback_entities: list[TypeMessageEntity] | None,
     reply_to: int | None,
+    top_msg_id: int | None,
     silent: bool,
     buttons: ButtonLayout,
 ) -> Message:
@@ -360,11 +424,7 @@ async def send_rich_or_standard_message(
         prepared_md = prepare_rich_markdown(markdown_text)
         peer = await client.get_input_entity(chat_id)
         markup = client.build_reply_markup(buttons) if buttons is not None else None
-        reply_hdr = (
-            types.InputReplyToMessage(reply_to_msg_id=reply_to)
-            if reply_to is not None
-            else None
-        )
+        reply_hdr = _build_reply_header(reply_to, top_msg_id)
         req = functions.messages.SendMessageRequest(
             peer=peer,
             message=fallback_text[:4000],
@@ -432,6 +492,7 @@ async def send_rich_html_or_standard_message(
     fallback_text: str,
     fallback_entities: list[TypeMessageEntity] | None,
     reply_to: int | None,
+    top_msg_id: int | None,
     silent: bool,
     buttons: ButtonLayout,
 ) -> Message:
@@ -440,11 +501,7 @@ async def send_rich_html_or_standard_message(
         html_cls = getattr(types, "InputRichMessageHTML")
         peer = await client.get_input_entity(chat_id)
         markup = client.build_reply_markup(buttons) if buttons is not None else None
-        reply_hdr = (
-            types.InputReplyToMessage(reply_to_msg_id=reply_to)
-            if reply_to is not None
-            else None
-        )
+        reply_hdr = _build_reply_header(reply_to, top_msg_id)
         req = functions.messages.SendMessageRequest(
             peer=peer,
             message=fallback_text[:4000],

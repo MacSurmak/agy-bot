@@ -48,7 +48,11 @@ _AGY_CMD_EXIT_ZERO_RE = re.compile(
     r"^Command exited with code 0\.\s*(?:Command output:\s*)?",
     re.IGNORECASE,
 )
-_AGY_CMD_EXIT_NONZERO_RE = re.compile(
+_AGY_TIMESTAMP_LINES_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:Created|Completed) At:[^\n]*\n?",
+    re.MULTILINE,
+)
+_AGY_CMD_EXIT_NONZERO_RE: Final[re.Pattern[str]] = re.compile(
     r"^Command exited with code (\d+)\.\s*(?:Command output:\s*)?",
     re.IGNORECASE,
 )
@@ -62,13 +66,14 @@ _REMOTES_PATH_RE: re.Pattern[str] = re.compile(
     r"/home/[^/\s'\"]+/[^/\s'\"]+/runtime_data/remotes/"
 )
 _HOME_PATH_RE: re.Pattern[str] = re.compile(r"(?<![A-Za-z0-9_/-])/home/[^/\s'\"]+/")
-_SINGLE_PARAM_PREFIX_RE = re.compile(
+_SINGLE_PARAM_PREFIX_RE: Final[re.Pattern[str]] = re.compile(
     r"^(?:CommandLine|Path|TargetFile|AbsolutePath|DirectoryPath|SearchPath|file_path):\s*"
 )
-_MAX_SINGLE_BLOCK_CHARS: int = 1800
-_MAX_TOOL_OUTPUT_CHARS: int = 480
-_MAX_TOOL_OUTPUT_HEAD_LINES: int = 6
-_MAX_TOOL_OUTPUT_TAIL_LINES: int = 4
+_MAX_SINGLE_BLOCK_CHARS: Final[int] = 1800
+_MAX_TOOL_OUTPUT_CHARS: Final[int] = 2000
+_MAX_TOOL_OUTPUT_HEAD_LINES: Final[int] = 15
+_MAX_TOOL_OUTPUT_TAIL_LINES: Final[int] = 12
+_MAX_RICH_HTML_PAGE_CHARS: Final[int] = 6800
 _MAX_PAGE_UTF16_LEN: int = 3750
 _MAX_BLOCKS_PER_PAGE: int = 25
 _WIDE_BUBBLE_TARGET_COLS: int = 92
@@ -214,14 +219,19 @@ def render_new_session_divider(lex: UiLexicon, topic: ForumTopic) -> str:
     return raw_div
 
 
-def _compact_tool_output_head_tail(raw_output: str, lex: UiLexicon) -> str:
+def _compact_tool_output_head_tail(
+    raw_output: str, lex: UiLexicon
+) -> tuple[str, bool]:
+    """Strips agy metadata timestamps, detects explicit exit status, and compacts long output."""
     cleaned = _clean_binary_noise(raw_output)
+    cleaned = _AGY_TIMESTAMP_LINES_RE.sub("", cleaned).strip()
     cleaned = _AGY_TRUNCATION_NOTICE_RE.sub("", cleaned).strip()
+    exited_zero = _AGY_CMD_EXIT_ZERO_RE.match(cleaned) is not None
     cleaned = _AGY_CMD_EXIT_ZERO_RE.sub("", cleaned).strip()
     cleaned = _AGY_CMD_EXIT_NONZERO_RE.sub(r"[exit \1] ", cleaned).strip()
 
     if cleaned in ("", "No output from the command."):
-        return ""
+        return "", exited_zero
 
     lines = [ln for ln in cleaned.splitlines() if ln.strip()]
     max_lines = _MAX_TOOL_OUTPUT_HEAD_LINES + _MAX_TOOL_OUTPUT_TAIL_LINES + 1
@@ -243,10 +253,12 @@ def _compact_tool_output_head_tail(raw_output: str, lex: UiLexicon) -> str:
         c_marker = lex.trace_hidden_chars_marker.format(count=hidden_chars)
         cleaned = f"{cleaned[:half].rstrip()}\n{c_marker}\n{cleaned[-half:].lstrip()}"
 
-    return cleaned
+    return cleaned, exited_zero
 
 
-def _is_tool_output_error(cleaned_output: str) -> bool:
+def _is_tool_output_error(cleaned_output: str, exited_zero: bool) -> bool:
+    if exited_zero:
+        return False
     if not cleaned_output:
         return False
     if cleaned_output.startswith(("[exit ", "Error executing tool", "Error:")):
@@ -257,15 +269,15 @@ def _is_tool_output_error(cleaned_output: str) -> bool:
 def _format_tool_blocks_untruncated(
     lex: UiLexicon,
     tool: ToolCallSummary,
-    is_superseded_or_final: bool = False,
+    is_superseded_or_final: bool,
 ) -> list[str]:
     """Formats each tool call into a compact single collapsible quote block without duplicate commands."""
-    o_clean = (
+    o_clean, exited_zero = (
         _compact_tool_output_head_tail(tool.output_text, lex)
         if tool.output_text
-        else ""
+        else ("", False)
     )
-    has_err = _is_tool_output_error(o_clean) or (
+    has_err = _is_tool_output_error(o_clean, exited_zero) or (
         tool.state == StepState.ACTIVE and is_superseded_or_final
     )
 
@@ -383,12 +395,10 @@ def _build_all_untruncated_blocks(
             )
         quote_blocks.append("\n".join(sub_lines))
 
-    max_step_idx = max((t.step_index for t in tools), default=0)
     for tool in tools:
-        superseded = is_final or (tool.step_index < max_step_idx)
         quote_blocks.extend(
             _format_tool_blocks_untruncated(
-                lex, tool, is_superseded_or_final=superseded
+                lex, tool, is_superseded_or_final=is_final
             )
         )
 
@@ -516,19 +526,24 @@ def pad_rich_width(line: str, target_cols: int) -> str:
     return line + ("\u00a0" * pad_count) + "\u2060"
 
 
-def _format_trace_blocks_as_html(
-    header_line: str,
-    blocks: list[str],
-    max_html_chars: int,
-) -> str:
-    """Renders an Execution Trace header and list of collapsible <details> blocks in Telegram Rich HTML."""
+def _render_html_header(header_line: str) -> str:
     raw_clean = header_line.replace("**", "").replace("`", "").strip()
     pad_count = max(0, _UNIFORM_BUBBLE_COLS - len(raw_clean))
     pad_suffix = ("\u00a0" * pad_count) + "\u2060" if pad_count > 0 else ""
-    clean_header = html.escape(raw_clean)
-    html_parts: list[str] = [f"<p><b>{clean_header}</b>{pad_suffix}</p>"]
-    curr_len = len(html_parts[0])
+    return f"<p><b>{html.escape(raw_clean)}</b>{pad_suffix}</p>"
 
+
+def _format_trace_blocks_as_html_pages(
+    lex: UiLexicon,
+    header_line: str,
+    blocks: list[str],
+    max_html_chars: int,
+) -> list[str]:
+    """Paginates collapsible <details> trace blocks into Rich HTML messages below Telegram Show More cutoff."""
+    if not blocks:
+        return [_render_html_header(header_line)]
+
+    pieces: list[str] = []
     for block in blocks:
         lines = block.splitlines()
         summary_raw = lines[0].strip() if lines else "Step"
@@ -540,22 +555,47 @@ def _format_trace_blocks_as_html(
             )
         else:
             piece = f"<p>{html.escape(summary_raw)}</p>"
-        if curr_len + len(piece) > max_html_chars:
-            break
-        html_parts.append(piece)
-        curr_len += len(piece)
+        pieces.append(piece)
 
-    return "\n".join(html_parts)
+    raw_pages: list[list[str]] = []
+    current_page: list[str] = []
+    header_budget = len(_render_html_header(header_line)) + 32
+    curr_len = header_budget
+
+    for piece in pieces:
+        piece_len = len(piece) + 1
+        if current_page and (curr_len + piece_len) > max_html_chars:
+            raw_pages.append(current_page)
+            current_page = [piece]
+            curr_len = header_budget + piece_len
+        else:
+            current_page.append(piece)
+            curr_len += piece_len
+
+    if current_page:
+        raw_pages.append(current_page)
+
+    total_pages = len(raw_pages)
+    rendered: list[str] = []
+    for idx, page_pieces in enumerate(raw_pages, start=1):
+        if total_pages == 1:
+            hdr_text = header_line
+        else:
+            hdr_text = lex.trace_active_page_suffix.format(
+                header=header_line, page_num=idx
+            )
+        rendered.append("\n".join([_render_html_header(hdr_text), *page_pieces]))
+    return rendered
 
 
-def build_live_progress_rich_html(
+def build_live_progress_rich_html_pages(
     lex: UiLexicon,
     limits: LimitsStaticConfig,
     event: TurnProgressEvent,
     elapsed_sec: float,
     model_slug: str,
     account_slug: str,
-) -> str:
+) -> list[str]:
     header = lex.live_progress_header.format(
         model_slug=model_slug,
         account_slug=account_slug,
@@ -570,18 +610,20 @@ def build_live_progress_rich_html(
         draft_text=event.text_accumulated,
         is_final=False,
     )
-    return _format_trace_blocks_as_html(header, all_blocks, 30000)
+    return _format_trace_blocks_as_html_pages(
+        lex, header, all_blocks, _MAX_RICH_HTML_PAGE_CHARS
+    )
 
 
-def build_final_trace_rich_html(
+def build_final_trace_rich_html_pages(
     lex: UiLexicon,
     limits: LimitsStaticConfig,
     result: TurnResult,
     model_slug: str,
     account_slug: str,
-) -> str:
+) -> list[str]:
     if not result.thinking_text and not result.tool_calls and not result.subagents:
-        return ""
+        return []
     header = lex.trace_completed_header.format(
         model_slug=model_slug,
         account_slug=account_slug,
@@ -597,7 +639,24 @@ def build_final_trace_rich_html(
         draft_text=None,
         is_final=True,
     )
-    return _format_trace_blocks_as_html(header, all_blocks, 30000)
+    return _format_trace_blocks_as_html_pages(
+        lex, header, all_blocks, _MAX_RICH_HTML_PAGE_CHARS
+    )
+
+
+def split_rich_markdown_chunks(
+    body_markdown: str,
+    footer_bar_text: str,
+    max_chars: int,
+) -> list[str]:
+    """Splits native RichMessage Markdown below Telegram Show More cutoff without stripping GFM/LaTeX."""
+    footer_block = f"\n\n---\n*{footer_bar_text.strip()}*"
+    budget = max(1000, max_chars - len(footer_block) - 120)
+    chunks = split_markdown_preserving_blocks(body_markdown, budget)
+    if not chunks:
+        return [footer_block.lstrip()]
+    chunks[-1] = f"{chunks[-1]}{footer_block}"
+    return chunks
 
 
 def render_turn_footer(
@@ -1196,7 +1255,6 @@ def render_control_panel_dashboard(
         lex.dashboard_settings_summary.format(
             ui_language=settings.ui_language,
             default_model=settings.default_model,
-            default_effort=settings.default_effort,
             default_execution_mode=settings.default_execution_mode.value,
             worker_idle_ttl_sec=settings.worker_idle_ttl_sec,
             debounce_window_sec=settings.debounce_window_sec,

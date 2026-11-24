@@ -13,14 +13,13 @@ from antigravity_core.config.constants import (
     TURN_TIMEOUT_SEC,
     WORKER_IDLE_TTL_SEC,
 )
-from antigravity_core.domain.enums import EffortLevel, ExecutionMode
+from antigravity_core.domain.enums import ExecutionMode
 from antigravity_core.domain.exceptions import ConfigurationError
 from antigravity_core.lexicon import SUPPORTED_LANGUAGES
 
 MANDATORY_SYSTEM_SETTING_KEYS: tuple[str, ...] = (
     "ui_language",
     "default_model",
-    "default_effort",
     "default_execution_mode",
 )
 
@@ -30,7 +29,6 @@ class DynamicSettings(BaseModel):
 
     ui_language: str
     default_model: str
-    default_effort: EffortLevel | None
     default_execution_mode: ExecutionMode
 
     @field_validator("ui_language")

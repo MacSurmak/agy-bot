@@ -181,6 +181,7 @@ class MediaService:
                 file=str(resolved),
                 caption=caption,
                 reply_to=topic_id,
+                silent=True,
                 force_document=True,
                 progress_callback=_progress_cb,
             )

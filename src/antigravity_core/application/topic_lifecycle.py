@@ -5,11 +5,8 @@ from uuid import UUID
 from loguru import logger
 
 from antigravity_core.config.static_config import StaticConfig
-from antigravity_core.domain.enums import EffortLevel, ExecutionMode, TopicKind
+from antigravity_core.domain.enums import ExecutionMode, TopicKind
 from antigravity_core.domain.models import ForumTopic, ForumTopicGateway
-from antigravity_core.infrastructure.agy_runtime.worker import (
-    is_effort_supported_for_model,
-)
 from antigravity_core.infrastructure.agy_runtime.worker_pool import AgyWorkerPool
 from antigravity_core.infrastructure.database.repositories import (
     AccountRepository,
@@ -58,15 +55,6 @@ class TopicLifecycleService:
             if execution_mode is not None
             else settings.default_execution_mode
         )
-        effective_effort = (
-            settings.default_effort
-            if is_effort_supported_for_model(
-                settings.default_model,
-                self._cfg.runtime.effort_supported_prefixes,
-            )
-            else None
-        )
-
         topic = await self._topic_repo.create_topic(
             topic_id=topic_id,
             title=title,
@@ -74,7 +62,6 @@ class TopicLifecycleService:
             workspace_path=resolved_workspace,
             additional_dirs=(),
             model_slug=settings.default_model,
-            effort_level=effective_effort,
             execution_mode=effective_mode,
             assigned_account_id=default_account.id,
             pinned_card_msg_id=None,
@@ -113,21 +100,10 @@ class TopicLifecycleService:
     async def set_sudo_carte_blanche(self, topic_id: int, enabled: bool) -> ForumTopic:
         return await self._topic_repo.set_sudo_carte_blanche(topic_id, enabled)
 
-    async def change_model(
-        self, topic_id: int, model_slug: str, effort_level: EffortLevel | None
-    ) -> ForumTopic:
-        effective_effort = (
-            effort_level
-            if is_effort_supported_for_model(
-                model_slug,
-                self._cfg.runtime.effort_supported_prefixes,
-            )
-            else None
-        )
-        updated = await self._topic_repo.update_model_and_effort(
+    async def change_model(self, topic_id: int, model_slug: str) -> ForumTopic:
+        updated = await self._topic_repo.update_model(
             topic_id=topic_id,
             model_slug=model_slug,
-            effort_level=effective_effort,
         )
         await self._pool.evict_topic_worker(topic_id)
         return updated

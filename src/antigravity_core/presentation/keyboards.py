@@ -228,6 +228,61 @@ def build_setting_options_keyboard(
     return rows
 
 
+def build_default_model_groups_keyboard(
+    lex: UiLexicon,
+    limits: LimitsStaticConfig,
+    models: list[str],
+    current_model: str,
+) -> list[list[Button]]:
+    groups = group_models_by_family(models[: limits.models_menu_display_limit])
+    rows: list[list[Button]] = []
+    for idx, (family_label, variants) in enumerate(groups):
+        if len(variants) == 1:
+            slug = variants[0]
+            mark = "✅ " if slug == current_model else ""
+            rows.append(
+                [
+                    Button.inline(
+                        f"{mark}{slug}",
+                        f"cp:set_val:default_model:{slug}".encode("ascii"),
+                    )
+                ]
+            )
+        else:
+            has_curr = current_model in variants
+            mark = "✅ " if has_curr else "📂 "
+            rows.append(
+                [
+                    Button.inline(
+                        f"{mark}{family_label} ({len(variants)})",
+                        f"cp:def_mgrp:{idx}".encode("ascii"),
+                    )
+                ]
+            )
+    rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:settings_menu")])
+    return rows
+
+
+def build_default_model_variants_keyboard(
+    lex: UiLexicon,
+    variants: list[str],
+    current_model: str,
+) -> list[list[Button]]:
+    rows: list[list[Button]] = []
+    for slug in variants:
+        mark = "✅ " if slug == current_model else ""
+        rows.append(
+            [
+                Button.inline(
+                    f"{mark}{slug}",
+                    f"cp:set_val:default_model:{slug}".encode("ascii"),
+                )
+            ]
+        )
+    rows.append([Button.inline(lex.btn_ws_back_to_model_groups, b"cp:edit_set:default_model")])
+    return rows
+
+
 def build_new_topic_folder_confirm_keyboard(
     lex: UiLexicon, topic_id: int
 ) -> list[list[Button]]:

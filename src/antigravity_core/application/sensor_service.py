@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import os
 import re
 import signal
+from typing import TypeAlias
 from uuid import UUID, uuid4
 
 from loguru import logger
@@ -26,8 +27,8 @@ from antigravity_core.infrastructure.database.repositories import (
 )
 from antigravity_core.lexicon import get_lexicon
 
-SensorWakeAgentCallback = Callable[[int, str, str, UUID | None], Awaitable[None]]
-SensorReflexDeliverCallback = Callable[[int, str, str], Awaitable[None]]
+SensorWakeAgentCallback: TypeAlias = Callable[[int, str, str, UUID | None, int | None], Awaitable[None]]
+SensorReflexDeliverCallback: TypeAlias = Callable[[int, str, str, int | None], Awaitable[None]]
 
 
 class EventSensorService:
@@ -67,6 +68,7 @@ class EventSensorService:
         self,
         topic_id: int,
         conversation_id: UUID | None,
+        reply_to_message_id: int | None,
         name: str,
         sensor_kind: SensorKind,
         command: str,
@@ -108,6 +110,7 @@ class EventSensorService:
             sensor_id=sensor_id,
             topic_id=topic_id,
             conversation_id=conversation_id,
+            reply_to_message_id=reply_to_message_id,
             name=name.strip() or f"Sensor #{str(sensor_id)[:6]}",
             sensor_kind=sensor_kind,
             command=clean_cmd,
@@ -245,13 +248,13 @@ class EventSensorService:
                 await asyncio.sleep(float(sensor.poll_interval_sec))
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            logger.error(
+        except (OSError, RuntimeError) as exc:
+            logger.opt(exception=True).error(
                 "Poll sensor loop crashed",
                 sensor_id=str(sensor_id),
                 error=str(exc),
-                exc_info=True,
             )
+            raise
         finally:
             self._tasks.pop(sensor_id, None)
             self._procs.pop(sensor_id, None)
@@ -323,13 +326,13 @@ class EventSensorService:
                 await asyncio.sleep(5.0)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            logger.error(
+        except (OSError, RuntimeError) as exc:
+            logger.opt(exception=True).error(
                 "Stream sensor loop crashed",
                 sensor_id=str(sensor_id),
                 error=str(exc),
-                exc_info=True,
             )
+            raise
         finally:
             self._tasks.pop(sensor_id, None)
             proc = self._procs.pop(sensor_id, None)
@@ -412,7 +415,10 @@ class EventSensorService:
                     if action_output:
                         reflex_summary.append(f"```\n{action_output[:2000]}\n```")
                 await self._deliver_reflex_cb(
-                    sensor.topic_id, sensor.name, "\n".join(reflex_summary)
+                    sensor.topic_id,
+                    sensor.name,
+                    "\n".join(reflex_summary),
+                    sensor.reply_to_message_id,
                 )
             return
 
@@ -435,7 +441,10 @@ class EventSensorService:
                 if action_output:
                     msg_lines.append(f"```\n{action_output[:1500]}\n```")
                 await self._deliver_reflex_cb(
-                    sensor.topic_id, sensor.name, "\n".join(msg_lines)
+                    sensor.topic_id,
+                    sensor.name,
+                    "\n".join(msg_lines),
+                    sensor.reply_to_message_id,
                 )
             return
 
@@ -471,4 +480,5 @@ class EventSensorService:
             sensor.name,
             wake_prompt,
             sensor.conversation_id,
+            sensor.reply_to_message_id,
         )

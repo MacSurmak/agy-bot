@@ -16,7 +16,7 @@ from telethon.tl.types import TypeMessageEntity
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
 from antigravity_core.application.turn_orchestrator import TurnOrchestrator
 from antigravity_core.config.static_config import StaticConfig
-from antigravity_core.domain.enums import EffortLevel, TopicKind
+from antigravity_core.domain.enums import StepState, TopicKind
 from antigravity_core.domain.exceptions import AgyProcessError
 from antigravity_core.domain.models import ForumTopic, TurnProgressEvent
 from antigravity_core.infrastructure.agy_runtime.cli_inspector import (
@@ -32,12 +32,12 @@ from antigravity_core.infrastructure.database.repositories import (
     TopicRepository,
 )
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
-from antigravity_core.lexicon import get_lexicon
+from antigravity_core.lexicon import UiLexicon, get_lexicon
 from antigravity_core.presentation.formatters import (
     build_final_execution_trace_pages,
-    build_final_trace_rich_html,
+    build_final_trace_rich_html_pages,
     build_live_progress_pages,
-    build_live_progress_rich_html,
+    build_live_progress_rich_html_pages,
     format_account_quota_lines,
     format_wide_header_block,
     list_workspace_directories,
@@ -45,6 +45,7 @@ from antigravity_core.presentation.formatters import (
     render_new_session_divider,
     render_topic_header_card,
     render_turn_footer,
+    split_rich_markdown_chunks,
 )
 from antigravity_core.presentation.tg_renderer import (
     edit_rich_html_or_standard_message,
@@ -71,7 +72,89 @@ from antigravity_core.presentation.keyboards import (
 _CMD_WITH_ARG_PARTS: Final[int] = 2
 _SUDO_CB_MIN_PARTS: Final[int] = 4
 _TITLE_SYNC_ATTEMPTS: Final[int] = 4
-_MAX_RICH_OUTPUT_CHARS: Final[int] = 30000
+_MAX_RICH_OUTPUT_CHARS: Final[int] = 6800
+
+
+class _LiveTraceFlusher:
+    """Coalescing per-turn progress flusher with immediate ACTIVE-tool visibility and elapsed ticker."""
+
+    def __init__(
+        self,
+        flush_fn: Callable[[TurnProgressEvent, float], Awaitable[None]],
+        sync_lock: asyncio.Lock,
+        throttle_sec: float,
+        start_ts: float,
+    ) -> None:
+        self._flush_fn = flush_fn
+        self._sync_lock = sync_lock
+        self._throttle_sec = throttle_sec
+        self._start_ts = start_ts
+        self._latest: TurnProgressEvent | None = None
+        self._seen_active_steps: set[int] = set()
+        self._dirty = False
+        self._immediate = False
+        self._finalized = False
+        self._wake_event = asyncio.Event()
+        self._last_flush_ts = 0.0
+        self._task: asyncio.Task[None] = asyncio.create_task(self._loop())
+
+    def submit(self, progress: TurnProgressEvent) -> None:
+        if self._finalized:
+            return
+        self._latest = progress
+        self._dirty = True
+        for tool in progress.active_tools:
+            if (
+                tool.state == StepState.ACTIVE
+                and tool.step_index not in self._seen_active_steps
+            ):
+                self._seen_active_steps.add(tool.step_index)
+                self._immediate = True
+        self._wake_event.set()
+
+    def _has_active_tool(self) -> bool:
+        if self._latest is None:
+            return False
+        return any(t.state == StepState.ACTIVE for t in self._latest.active_tools)
+
+    async def _loop(self) -> None:
+        while not self._finalized:
+            if self._has_active_tool():
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        self._wake_event.wait(), timeout=self._throttle_sec
+                    )
+            else:
+                await self._wake_event.wait()
+            self._wake_event.clear()
+            if self._finalized or self._latest is None:
+                continue
+
+            now = time.monotonic()
+            since_last = now - self._last_flush_ts
+            if not self._immediate and since_last < self._throttle_sec:
+                if self._dirty:
+                    await asyncio.sleep(self._throttle_sec - since_last)
+                else:
+                    continue
+            if self._finalized or self._latest is None:
+                continue
+
+            snapshot = self._latest
+            self._dirty = False
+            self._immediate = False
+            async with self._sync_lock:
+                if self._finalized:
+                    return
+                self._last_flush_ts = time.monotonic()
+                await self._flush_fn(snapshot, self._last_flush_ts - self._start_ts)
+
+    async def stop(self) -> None:
+        self._finalized = True
+        self._wake_event.set()
+        self._task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._task
 
 
 class WorkspaceTopicUI:
@@ -112,6 +195,7 @@ class WorkspaceTopicUI:
         self._staged_media_msg_ids: dict[int, int] = {}
         self._flush_staged_cb: Callable[[int, str], Awaitable[bool]] | None = None
         self._clear_staged_cb: Callable[[int], Awaitable[int]] | None = None
+        self._active_turn_msg_cb: Callable[[int, int | None], None] | None = None
 
     def _get_topic_lock(self, topic_id: int) -> asyncio.Lock:
         if topic_id not in self._topic_locks:
@@ -125,6 +209,11 @@ class WorkspaceTopicUI:
     ) -> None:
         self._flush_staged_cb = flush_cb
         self._clear_staged_cb = clear_cb
+
+    def bind_active_turn_message_callback(
+        self, cb: Callable[[int, int | None], None]
+    ) -> None:
+        self._active_turn_msg_cb = cb
 
     async def _clear_staged_media_card(self, topic_id: int) -> None:
         if topic_id in self._staged_media_msg_ids:
@@ -227,7 +316,6 @@ class WorkspaceTopicUI:
             workspace_path=str(default_dir.resolve()),
             additional_dirs=(),
             model_slug=settings.default_model,
-            effort_level=settings.default_effort,
             execution_mode=settings.default_execution_mode,
             assigned_account_id=default_account.id,
             pinned_card_msg_id=None,
@@ -280,7 +368,8 @@ class WorkspaceTopicUI:
             fallback_text=card_text,
             fallback_entities=None,
             reply_to=topic_id,
-            silent=False,
+            top_msg_id=topic_id,
+            silent=True,
             buttons=buttons,
         )
         await self._topic_repo.set_pinned_card_msg_id(topic_id, sent.id)
@@ -298,10 +387,16 @@ class WorkspaceTopicUI:
         if cmd in ("/new", "/clear"):
             topic = await self._lifecycle.reset_topic_session(topic_id)
             await self.refresh_pinned_card(topic_id)
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=render_new_session_divider(lex, topic),
+            await send_rich_or_standard_message(
+                client=self._client,
+                chat_id=self._cfg.telegram.forum_chat_id,
+                markdown_text=render_new_session_divider(lex, topic),
+                fallback_text=render_new_session_divider(lex, topic),
+                fallback_entities=None,
                 reply_to=topic_id,
+                top_msg_id=topic_id,
+                silent=True,
+                buttons=None,
             )
             return True
 
@@ -313,6 +408,7 @@ class WorkspaceTopicUI:
                 entity=self._cfg.telegram.forum_chat_id,
                 message=msg,
                 reply_to=topic_id,
+                silent=True,
             )
             return True
 
@@ -327,6 +423,7 @@ class WorkspaceTopicUI:
                 entity=self._cfg.telegram.forum_chat_id,
                 message=f"📊 {lex.cp_toast_probing_quotas}",
                 reply_to=topic_id,
+                silent=True,
             )
             try:
                 q_info = await self._inspector.fetch_account_quota(account)
@@ -348,7 +445,15 @@ class WorkspaceTopicUI:
                     body = f"{hdr_q}\n" + lex.ws_quota_fallback_body.format(
                         min_pct=min_p
                     )
-                await wait_msg.edit(body)
+                await edit_rich_or_standard_message(
+                    client=self._client,
+                    chat_id=self._cfg.telegram.forum_chat_id,
+                    message_id=wait_msg.id,
+                    markdown_text=body,
+                    fallback_text=body,
+                    fallback_entities=None,
+                    buttons=None,
+                )
             except AgyProcessError as exc:
                 max_err = self._cfg.limits.error_summary_max_chars
                 await wait_msg.edit(
@@ -368,6 +473,7 @@ class WorkspaceTopicUI:
                     entity=self._cfg.telegram.forum_chat_id,
                     message=lex.ws_turn_error_msg.format(error=exc),
                     reply_to=topic_id,
+                    silent=True,
                 )
                 raise
 
@@ -386,26 +492,32 @@ class WorkspaceTopicUI:
                             available_models=formatted_list,
                         ),
                         reply_to=topic_id,
+                        silent=True,
                     )
                     return True
 
-                await self._lifecycle.change_model(
-                    topic_id, matched_slug, topic.effort_level
-                )
+                await self._lifecycle.change_model(topic_id, matched_slug)
                 await self.refresh_pinned_card(topic_id)
                 await self._client.send_message(
                     entity=self._cfg.telegram.forum_chat_id,
                     message=lex.ws_model_updated_msg.format(model_slug=matched_slug),
                     reply_to=topic_id,
+                    silent=True,
                 )
                 return True
 
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=lex.ws_select_model_group_prompt.format(
-                    current_model=topic.model_slug
-                ),
+            prompt_text = format_wide_header_block(
+                lex.ws_select_model_group_prompt.format(current_model=topic.model_slug)
+            )
+            await send_rich_or_standard_message(
+                client=self._client,
+                chat_id=self._cfg.telegram.forum_chat_id,
+                markdown_text=prompt_text,
+                fallback_text=prompt_text,
+                fallback_entities=None,
                 reply_to=topic_id,
+                top_msg_id=topic_id,
+                silent=True,
                 buttons=build_model_picker_keyboard(
                     lex,
                     self._cfg.limits,
@@ -436,7 +548,7 @@ class WorkspaceTopicUI:
         trace_msgs: list[Message],
         rendered_page_state: dict[int, tuple[str, bool]],
         pages: list[tuple[str, list[TypeMessageEntity]]],
-        rich_html: str,
+        rich_html_pages: list[str],
         is_final: bool,
     ) -> None:
         settings = await self._settings_repo.load_settings()
@@ -454,38 +566,49 @@ class WorkspaceTopicUI:
             trace_msgs.clear()
             rendered_page_state.clear()
 
-        if supports_native_rich_html() and rich_html and pages:
-            fb_text, fb_ents = pages[0]
-            kb = None if is_final else build_live_progress_keyboard(lex, topic_id)
-            desired_html = (rich_html, not is_final)
-            if trace_msgs:
-                if 0 in rendered_page_state and rendered_page_state[0] == desired_html:
-                    return
-                with contextlib.suppress(MessageNotModifiedError, RPCError):
-                    await edit_rich_html_or_standard_message(
-                        client=self._client,
-                        chat_id=self._cfg.telegram.forum_chat_id,
-                        message_id=trace_msgs[0].id,
-                        html_text=rich_html,
-                        fallback_text=fb_text,
-                        fallback_entities=fb_ents,
-                        buttons=kb,
-                    )
-                    rendered_page_state[0] = desired_html
-            else:
-                with contextlib.suppress(RPCError):
-                    sent_html = await send_rich_html_or_standard_message(
-                        client=self._client,
-                        chat_id=self._cfg.telegram.forum_chat_id,
-                        html_text=rich_html,
-                        fallback_text=fb_text,
-                        fallback_entities=fb_ents,
-                        reply_to=topic_id,
-                        silent=True,
-                        buttons=kb,
-                    )
-                    trace_msgs.append(sent_html)
-                    rendered_page_state[0] = desired_html
+        if supports_native_rich_html() and rich_html_pages and pages:
+            total_html = len(rich_html_pages)
+            for idx, html_page in enumerate(rich_html_pages):
+                fb_text, fb_ents = pages[min(idx, len(pages) - 1)]
+                has_cancel_btn = (not is_final) and (idx == total_html - 1)
+                kb = (
+                    build_live_progress_keyboard(lex, topic_id)
+                    if has_cancel_btn
+                    else None
+                )
+                desired_html = (html_page, has_cancel_btn)
+                if idx < len(trace_msgs):
+                    if (
+                        idx in rendered_page_state
+                        and rendered_page_state[idx] == desired_html
+                    ):
+                        continue
+                    with contextlib.suppress(MessageNotModifiedError, RPCError):
+                        await edit_rich_html_or_standard_message(
+                            client=self._client,
+                            chat_id=self._cfg.telegram.forum_chat_id,
+                            message_id=trace_msgs[idx].id,
+                            html_text=html_page,
+                            fallback_text=fb_text,
+                            fallback_entities=fb_ents,
+                            buttons=kb,
+                        )
+                        rendered_page_state[idx] = desired_html
+                else:
+                    with contextlib.suppress(RPCError):
+                        sent_html = await send_rich_html_or_standard_message(
+                            client=self._client,
+                            chat_id=self._cfg.telegram.forum_chat_id,
+                            html_text=html_page,
+                            fallback_text=fb_text,
+                            fallback_entities=fb_ents,
+                            reply_to=topic_id,
+                            top_msg_id=topic_id,
+                            silent=True,
+                            buttons=kb,
+                        )
+                        trace_msgs.append(sent_html)
+                        rendered_page_state[idx] = desired_html
             return
 
         total_pages = len(pages)
@@ -531,19 +654,31 @@ class WorkspaceTopicUI:
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
         if supports_native_rich_output():
-            rich_md = f"{body_text}\n\n---\n*{footer_bar.strip()}*"
-            if len(rich_md) <= _MAX_RICH_OUTPUT_CHARS:
+            rich_chunks = split_rich_markdown_chunks(
+                body_markdown=body_text,
+                footer_bar_text=footer_bar,
+                max_chars=_MAX_RICH_OUTPUT_CHARS,
+            )
+            total_rich = len(rich_chunks)
+            for idx, rich_md in enumerate(rich_chunks):
+                is_first = idx == 0
+                is_last = idx == total_rich - 1
                 await send_rich_or_standard_message(
                     client=self._client,
                     chat_id=self._cfg.telegram.forum_chat_id,
                     markdown_text=rich_md,
-                    fallback_text=body_text[:4000],
+                    fallback_text=rich_md[:4000],
                     fallback_entities=None,
-                    reply_to=reply_to_msg_id,
-                    silent=False,
-                    buttons=build_turn_response_keyboard(lex, updated_topic),
+                    reply_to=reply_to_msg_id if is_first else topic_id,
+                    top_msg_id=topic_id,
+                    silent=not is_first,
+                    buttons=(
+                        build_turn_response_keyboard(lex, updated_topic)
+                        if is_last
+                        else None
+                    ),
                 )
-                return
+            return
 
         formatted_chunks = render_Formatted_response_chunks(
             body_markdown=body_text,
@@ -562,6 +697,7 @@ class WorkspaceTopicUI:
                 fallback_text=chunk_text,
                 fallback_entities=chunk_entities,
                 reply_to=reply_to_msg_id if is_first else topic_id,
+                top_msg_id=topic_id,
                 silent=not is_first,
                 buttons=(
                     build_turn_response_keyboard(lex, updated_topic)
@@ -577,7 +713,7 @@ class WorkspaceTopicUI:
         rendered_page_state: dict[int, tuple[str, bool]],
         sync_lock: asyncio.Lock,
         final_pages: list[tuple[str, list[TypeMessageEntity]]],
-        final_rich_html: str,
+        final_rich_html_pages: list[str],
     ) -> None:
         if final_pages:
             async with sync_lock:
@@ -586,12 +722,17 @@ class WorkspaceTopicUI:
                     trace_msgs,
                     rendered_page_state,
                     final_pages,
-                    final_rich_html,
+                    final_rich_html_pages,
                     True,
                 )
-            if len(trace_msgs) > len(final_pages):
-                extra_ids = [m.id for m in trace_msgs[len(final_pages) :]]
-                del trace_msgs[len(final_pages) :]
+            expected_count = (
+                len(final_rich_html_pages)
+                if supports_native_rich_html() and final_rich_html_pages
+                else len(final_pages)
+            )
+            if len(trace_msgs) > expected_count:
+                extra_ids = [m.id for m in trace_msgs[expected_count:]]
+                del trace_msgs[expected_count:]
                 if extra_ids:
                     with contextlib.suppress(RPCError):
                         await self._client.delete_messages(
@@ -654,8 +795,6 @@ class WorkspaceTopicUI:
         )
         await self._clear_staged_media_card(topic_id)
         start_ts = time.monotonic()
-        last_edit_ts: list[float] = [start_ts]
-
         acc_display = account.display_email
         status_msg: Message = await self._client.send_message(
             entity=self._cfg.telegram.forum_chat_id,
@@ -670,26 +809,9 @@ class WorkspaceTopicUI:
         rendered_page_state: dict[int, tuple[str, bool]] = {}
         sync_lock = asyncio.Lock()
 
-        async def _bg_sync_pages(
-            pages: list[tuple[str, list[TypeMessageEntity]]],
-            rich_html: str,
-        ) -> None:
-            if sync_lock.locked() or not self._client.is_connected():
-                return
-            async with sync_lock:
-                if self._client.is_connected():
-                    await self._sync_single_trace_page_list(
-                        topic_id, trace_msgs, rendered_page_state, pages, rich_html, False
-                    )
-
-        async def _on_progress(progress: TurnProgressEvent) -> None:
-            now = time.monotonic()
-            if (now - last_edit_ts[0]) < settings.tg_edit_throttle_sec:
-                return
-            last_edit_ts[0] = now
+        async def _flush_progress(progress: TurnProgressEvent, elapsed: float) -> None:
             if not self._client.is_connected():
                 return
-            elapsed = now - start_ts
             pages = build_live_progress_pages(
                 lex=lex,
                 limits=self._cfg.limits,
@@ -698,7 +820,7 @@ class WorkspaceTopicUI:
                 model_slug=topic.model_slug,
                 account_slug=acc_display,
             )
-            rich_html = build_live_progress_rich_html(
+            rich_html_pages = build_live_progress_rich_html_pages(
                 lex=lex,
                 limits=self._cfg.limits,
                 event=progress,
@@ -706,9 +828,28 @@ class WorkspaceTopicUI:
                 model_slug=topic.model_slug,
                 account_slug=acc_display,
             )
-            asyncio.create_task(_bg_sync_pages(pages, rich_html))
+            await self._sync_single_trace_page_list(
+                topic_id,
+                trace_msgs,
+                rendered_page_state,
+                pages,
+                rich_html_pages,
+                False,
+            )
+
+        flusher = _LiveTraceFlusher(
+            flush_fn=_flush_progress,
+            sync_lock=sync_lock,
+            throttle_sec=settings.tg_edit_throttle_sec,
+            start_ts=start_ts,
+        )
+
+        async def _on_progress(progress: TurnProgressEvent) -> None:
+            flusher.submit(progress)
 
         self._mount_mgr.cancel_topic_prompts(topic_id)
+        if self._active_turn_msg_cb is not None:
+            self._active_turn_msg_cb(topic_id, reply_to_msg_id)
         try:
             result = await self._orchestrator.execute_topic_turn(
                 topic_id=topic_id,
@@ -716,6 +857,7 @@ class WorkspaceTopicUI:
                 on_progress=_on_progress,
             )
         except Exception as exc:
+            await flusher.stop()
             max_err = self._cfg.limits.error_summary_max_chars
             err_short = str(exc)[:max_err]
             logger.error("Turn execution failed: topic_id={} error={}", topic_id, err_short)
@@ -729,6 +871,9 @@ class WorkspaceTopicUI:
                 )
             raise
         finally:
+            await flusher.stop()
+            if self._active_turn_msg_cb is not None:
+                self._active_turn_msg_cb(topic_id, None)
             self._mount_mgr.cleanup_topic_staged_files(topic_id)
 
         updated_topic = await self._topic_repo.get_topic_strict(topic_id)
@@ -744,7 +889,7 @@ class WorkspaceTopicUI:
             model_slug=updated_topic.model_slug,
             account_slug=upd_acc_display,
         )
-        final_html = build_final_trace_rich_html(
+        final_html_pages = build_final_trace_rich_html_pages(
             lex=lex,
             limits=self._cfg.limits,
             result=result,
@@ -752,7 +897,12 @@ class WorkspaceTopicUI:
             account_slug=upd_acc_display,
         )
         await self._finalize_trace_messages(
-            topic_id, trace_msgs, rendered_page_state, sync_lock, final_pages, final_html
+            topic_id,
+            trace_msgs,
+            rendered_page_state,
+            sync_lock,
+            final_pages,
+            final_html_pages,
         )
 
         footer_bar = render_turn_footer(
@@ -810,6 +960,7 @@ class WorkspaceTopicUI:
         wake_prompt: str,
         badge_prefix: str,
         conversation_id: UUID | None,
+        reply_to_message_id: int | None,
     ) -> None:
         """Executes an automated wake-up turn serialized per topic with full live tool trace."""
         async with self._get_topic_lock(topic_id):
@@ -818,6 +969,7 @@ class WorkspaceTopicUI:
                 wake_prompt=wake_prompt,
                 badge_prefix=badge_prefix,
                 conversation_id=conversation_id,
+                reply_to_message_id=reply_to_message_id,
             )
 
     async def _run_interactive_wake_turn_locked(
@@ -826,6 +978,7 @@ class WorkspaceTopicUI:
         wake_prompt: str,
         badge_prefix: str,
         conversation_id: UUID | None,
+        reply_to_message_id: int | None,
     ) -> None:
         existing_topic = await self._topic_repo.get_topic(topic_id)
         if existing_topic is None or existing_topic.status.value == "ARCHIVED":
@@ -841,7 +994,6 @@ class WorkspaceTopicUI:
         lex = get_lexicon(settings.ui_language)
 
         start_ts = time.monotonic()
-        last_edit_ts: list[float] = [start_ts]
         acc_display = account.display_email
 
         status_msg = await self._client.send_message(
@@ -858,26 +1010,9 @@ class WorkspaceTopicUI:
         rendered_page_state: dict[int, tuple[str, bool]] = {}
         sync_lock = asyncio.Lock()
 
-        async def _bg_sync_pages(
-            pages: list[tuple[str, list[TypeMessageEntity]]],
-            rich_html: str,
-        ) -> None:
-            if sync_lock.locked() or not self._client.is_connected():
-                return
-            async with sync_lock:
-                if self._client.is_connected():
-                    await self._sync_single_trace_page_list(
-                        topic_id, trace_msgs, rendered_page_state, pages, rich_html, False
-                    )
-
-        async def _on_progress(progress: TurnProgressEvent) -> None:
-            now = time.monotonic()
-            if (now - last_edit_ts[0]) < settings.tg_edit_throttle_sec:
-                return
-            last_edit_ts[0] = now
+        async def _flush_progress(progress: TurnProgressEvent, elapsed: float) -> None:
             if not self._client.is_connected():
                 return
-            elapsed = now - start_ts
             pages = build_live_progress_pages(
                 lex=lex,
                 limits=self._cfg.limits,
@@ -886,7 +1021,7 @@ class WorkspaceTopicUI:
                 model_slug=topic.model_slug,
                 account_slug=f"{badge_prefix} │ {acc_display}",
             )
-            rich_html = build_live_progress_rich_html(
+            rich_html_pages = build_live_progress_rich_html_pages(
                 lex=lex,
                 limits=self._cfg.limits,
                 event=progress,
@@ -894,7 +1029,24 @@ class WorkspaceTopicUI:
                 model_slug=topic.model_slug,
                 account_slug=f"{badge_prefix} │ {acc_display}",
             )
-            asyncio.create_task(_bg_sync_pages(pages, rich_html))
+            await self._sync_single_trace_page_list(
+                topic_id,
+                trace_msgs,
+                rendered_page_state,
+                pages,
+                rich_html_pages,
+                False,
+            )
+
+        flusher = _LiveTraceFlusher(
+            flush_fn=_flush_progress,
+            sync_lock=sync_lock,
+            throttle_sec=settings.tg_edit_throttle_sec,
+            start_ts=start_ts,
+        )
+
+        async def _on_progress(progress: TurnProgressEvent) -> None:
+            flusher.submit(progress)
 
         try:
             result = await self._orchestrator.execute_scheduled_turn(
@@ -904,6 +1056,7 @@ class WorkspaceTopicUI:
                 on_progress=_on_progress,
             )
         except Exception as exc:
+            await flusher.stop()
             max_err = self._cfg.limits.error_summary_max_chars
             last_mid = trace_msgs[-1].id
             with contextlib.suppress(RPCError):
@@ -915,6 +1068,7 @@ class WorkspaceTopicUI:
                 )
             raise
         finally:
+            await flusher.stop()
             self._mount_mgr.cleanup_topic_staged_files(topic_id)
 
         cleaned_resp = result.response_text.strip()
@@ -931,7 +1085,7 @@ class WorkspaceTopicUI:
             model_slug=updated_topic.model_slug,
             account_slug=f"{badge_prefix} │ {upd_acc_display}",
         )
-        final_html = build_final_trace_rich_html(
+        final_html_pages = build_final_trace_rich_html_pages(
             lex=lex,
             limits=self._cfg.limits,
             result=result,
@@ -939,7 +1093,12 @@ class WorkspaceTopicUI:
             account_slug=f"{badge_prefix} │ {upd_acc_display}",
         )
         await self._finalize_trace_messages(
-            topic_id, trace_msgs, rendered_page_state, sync_lock, final_pages, final_html
+            topic_id,
+            trace_msgs,
+            rendered_page_state,
+            sync_lock,
+            final_pages,
+            final_html_pages,
         )
 
         footer_bar = f"{badge_prefix}  │  " + render_turn_footer(
@@ -954,13 +1113,20 @@ class WorkspaceTopicUI:
             if cleaned_resp
             else lex.ws_empty_response_fallback.format(status=result.status.value)
         )
+        effective_reply = (
+            reply_to_message_id if reply_to_message_id is not None else topic_id
+        )
         await self._deliver_formatted_turn_output(
-            topic_id, topic_id, body_text, footer_bar, updated_topic
+            topic_id, effective_reply, body_text, footer_bar, updated_topic
         )
         await self.refresh_pinned_card(topic_id)
 
     async def execute_scheduled_wake_turn(
-        self, topic_id: int, wake_prompt: str, conversation_id: UUID | None
+        self,
+        topic_id: int,
+        wake_prompt: str,
+        conversation_id: UUID | None,
+        reply_to_message_id: int | None,
     ) -> None:
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
@@ -969,6 +1135,7 @@ class WorkspaceTopicUI:
             wake_prompt=wake_prompt,
             badge_prefix=lex.wake_badge_timer,
             conversation_id=conversation_id,
+            reply_to_message_id=reply_to_message_id,
         )
 
     async def execute_sensor_wake_turn(
@@ -977,6 +1144,7 @@ class WorkspaceTopicUI:
         sensor_name: str,
         wake_prompt: str,
         conversation_id: UUID | None,
+        reply_to_message_id: int | None,
     ) -> None:
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
@@ -985,10 +1153,15 @@ class WorkspaceTopicUI:
             wake_prompt=wake_prompt,
             badge_prefix=lex.wake_badge_sensor.format(sensor_name=sensor_name),
             conversation_id=conversation_id,
+            reply_to_message_id=reply_to_message_id,
         )
 
     async def deliver_sensor_reflex_report(
-        self, topic_id: int, sensor_name: str, reflex_report_text: str
+        self,
+        topic_id: int,
+        sensor_name: str,
+        reflex_report_text: str,
+        reply_to_message_id: int | None,
     ) -> None:
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
@@ -1000,19 +1173,44 @@ class WorkspaceTopicUI:
             model_slug=topic.model_slug,
             account_slug=account.display_email,
         )
-        formatted_chunks = render_Formatted_response_chunks(
-            body_markdown=reflex_report_text,
-            footer_bar_text=sensor_bar,
-            max_chars=settings.tg_max_message_chars,
-            lex=lex,
+        effective_reply = (
+            reply_to_message_id if reply_to_message_id is not None else topic_id
         )
-        for chunk_text, chunk_entities in formatted_chunks:
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=chunk_text,
-                formatting_entities=chunk_entities,
-                reply_to=topic_id,
+        if supports_native_rich_output():
+            rich_chunks = split_rich_markdown_chunks(
+                body_markdown=reflex_report_text,
+                footer_bar_text=sensor_bar,
+                max_chars=_MAX_RICH_OUTPUT_CHARS,
             )
+            for idx, rich_md in enumerate(rich_chunks):
+                is_first = idx == 0
+                await send_rich_or_standard_message(
+                    client=self._client,
+                    chat_id=self._cfg.telegram.forum_chat_id,
+                    markdown_text=rich_md,
+                    fallback_text=rich_md[:4000],
+                    fallback_entities=None,
+                    reply_to=effective_reply if is_first else topic_id,
+                    top_msg_id=topic_id,
+                    silent=not is_first,
+                    buttons=None,
+                )
+        else:
+            formatted_chunks = render_Formatted_response_chunks(
+                body_markdown=reflex_report_text,
+                footer_bar_text=sensor_bar,
+                max_chars=settings.tg_max_message_chars,
+                lex=lex,
+            )
+            for idx, (chunk_text, chunk_entities) in enumerate(formatted_chunks):
+                is_first = idx == 0
+                await self._client.send_message(
+                    entity=self._cfg.telegram.forum_chat_id,
+                    message=chunk_text,
+                    formatting_entities=chunk_entities,
+                    reply_to=effective_reply if is_first else topic_id,
+                    silent=not is_first,
+                )
         await self.refresh_pinned_card(topic_id)
 
     async def handle_callback(
@@ -1025,14 +1223,25 @@ class WorkspaceTopicUI:
         action = parts[1]
         topic_id = int(parts[2])
 
+        if await self._handle_quick_callback(event, lex, action, topic_id):
+            return
+        if await self._handle_sudo_callback(event, lex, action, topic_id, parts):
+            return
+        await self._handle_menu_callback(event, lex, action, topic_id, parts)
+
+    async def _handle_quick_callback(
+        self,
+        event: events.CallbackQuery.Event,
+        lex: UiLexicon,
+        action: str,
+        topic_id: int,
+    ) -> bool:
         if action == "close_sub":
             await event.delete()
-            return
-
+            return True
         if action == "back_card":
             await self._edit_event_to_topic_passport(event, topic_id)
-            return
-
+            return True
         if action == "flush_files":
             self._staged_media_msg_ids.pop(topic_id, None)
             await event.delete()
@@ -1040,16 +1249,14 @@ class WorkspaceTopicUI:
                 await self._flush_staged_cb(
                     topic_id, lex.ws_staged_media_default_prompt
                 )
-            return
-
+            return True
         if action == "clear_files":
             self._staged_media_msg_ids.pop(topic_id, None)
             if self._clear_staged_cb is not None:
                 await self._clear_staged_cb(topic_id)
             await event.answer(lex.ws_toast_staged_media_cleared)
             await event.delete()
-            return
-
+            return True
         if action == "confirm_dir":
             topic = await self._topic_repo.get_topic_strict(topic_id)
             Path(topic.workspace_path).mkdir(parents=True, exist_ok=True)
@@ -1057,32 +1264,54 @@ class WorkspaceTopicUI:
                 lex.ws_dir_confirmed_msg.format(workspace_path=topic.workspace_path),
                 buttons=None,
             )
-            return
-
+            return True
         if action == "custom_dir":
             self._awaiting_custom_dir_topics.add(topic_id)
             await event.edit(lex.ws_custom_dir_prompt, buttons=None)
-            return
-
+            return True
         if action == "new":
             topic = await self._lifecycle.reset_topic_session(topic_id)
             await self.refresh_pinned_card(topic_id)
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=render_new_session_divider(lex, topic),
+            divider_md = render_new_session_divider(lex, topic)
+            await send_rich_or_standard_message(
+                client=self._client,
+                chat_id=self._cfg.telegram.forum_chat_id,
+                markdown_text=divider_md,
+                fallback_text=divider_md,
+                fallback_entities=None,
                 reply_to=topic_id,
+                top_msg_id=topic_id,
+                silent=True,
+                buttons=None,
             )
             await event.answer(lex.ws_toast_new_session)
-            return
-
+            return True
         if action == "toggle_mode":
             updated = await self._lifecycle.toggle_execution_mode(topic_id)
             await self.refresh_pinned_card(topic_id)
             await event.answer(
                 lex.ws_toast_mode_switched.format(mode=updated.execution_mode.value)
             )
-            return
+            return True
+        if action == "cancel":
+            self._mount_mgr.cancel_topic_prompts(topic_id)
+            await self._pool.cancel_active_turn(topic_id)
+            await event.answer(lex.ws_toast_turn_canceled)
+            return True
+        if action == "archive":
+            await self._lifecycle.archive_topic(topic_id)
+            await event.answer(lex.ws_toast_topic_archived)
+            return True
+        return False
 
+    async def _handle_sudo_callback(
+        self,
+        event: events.CallbackQuery.Event,
+        lex: UiLexicon,
+        action: str,
+        topic_id: int,
+        parts: list[str],
+    ) -> bool:
         if action == "toggle_sudo":
             updated = await self._lifecycle.toggle_sudo_carte_blanche(topic_id)
             await self.refresh_pinned_card(topic_id)
@@ -1092,7 +1321,7 @@ class WorkspaceTopicUI:
                 else lex.ws_toast_sudo_cb_off
             )
             await event.answer(toast_msg)
-            return
+            return True
 
         if action in ("sudo_ok", "sudo_cb", "sudo_no") and len(parts) >= _SUDO_CB_MIN_PARTS:
             req_id = parts[3]
@@ -1101,8 +1330,7 @@ class WorkspaceTopicUI:
                 "sudo_cb": "carte_blanche",
                 "sudo_no": "deny",
             }
-            decision = decision_map[action]
-            self._mount_mgr.resolve_sudo_approval(req_id, decision)
+            self._mount_mgr.resolve_sudo_approval(req_id, decision_map[action])
             meta = (
                 self._sudo_prompt_meta.pop(req_id)
                 if req_id in self._sudo_prompt_meta
@@ -1124,27 +1352,31 @@ class WorkspaceTopicUI:
                     action_summary=summary_lbl, target=target_lbl
                 )
             await event.edit(status_text, buttons=None)
-            return
+            return True
+        return False
 
-        if action == "cancel":
-            self._mount_mgr.cancel_topic_prompts(topic_id)
-            await self._pool.cancel_active_turn(topic_id)
-            await event.answer(lex.ws_toast_turn_canceled)
-            return
-
-        if action == "archive":
-            await self._lifecycle.archive_topic(topic_id)
-            await event.answer(lex.ws_toast_topic_archived)
-            return
-
+    async def _handle_menu_callback(
+        self,
+        event: events.CallbackQuery.Event,
+        lex: UiLexicon,
+        action: str,
+        topic_id: int,
+        parts: list[str],
+    ) -> None:
         if action == "history":
             topic = await self._topic_repo.get_topic_strict(topic_id)
             sessions = await self._session_repo.list_topic_sessions(
                 topic_id,
                 limit=self._cfg.limits.sessions_history_display_limit,
             )
-            await event.edit(
-                format_wide_header_block(lex.ws_select_past_session_prompt),
+            hdr = format_wide_header_block(lex.ws_select_past_session_prompt)
+            await edit_rich_or_standard_message(
+                client=self._client,
+                chat_id=self._cfg.telegram.forum_chat_id,
+                message_id=event.message_id,
+                markdown_text=hdr,
+                fallback_text=hdr,
+                fallback_entities=None,
                 buttons=build_session_history_keyboard(
                     lex,
                     self._cfg.limits,
@@ -1153,6 +1385,7 @@ class WorkspaceTopicUI:
                     topic.active_conversation_id,
                 ),
             )
+            await event.answer()
             return
 
         if action == "resume":
@@ -1168,12 +1401,16 @@ class WorkspaceTopicUI:
             topic = await self._topic_repo.get_topic_strict(topic_id)
             account = await self._account_repo.get_by_id(topic.assigned_account_id)
             models = await self._inspector.list_available_models(account)
-            await event.edit(
-                format_wide_header_block(
-                    lex.ws_select_model_group_prompt.format(
-                        current_model=topic.model_slug
-                    )
-                ),
+            hdr = format_wide_header_block(
+                lex.ws_select_model_group_prompt.format(current_model=topic.model_slug)
+            )
+            await edit_rich_or_standard_message(
+                client=self._client,
+                chat_id=self._cfg.telegram.forum_chat_id,
+                message_id=event.message_id,
+                markdown_text=hdr,
+                fallback_text=hdr,
+                fallback_entities=None,
                 buttons=build_model_picker_keyboard(
                     lex,
                     self._cfg.limits,
@@ -1182,6 +1419,7 @@ class WorkspaceTopicUI:
                     topic.model_slug,
                 ),
             )
+            await event.answer()
             return
 
         if action == "mgrp":
@@ -1192,10 +1430,16 @@ class WorkspaceTopicUI:
             groups = group_models_by_family(models)
             if 0 <= grp_idx < len(groups):
                 family_label, variants = groups[grp_idx]
-                await event.edit(
-                    format_wide_header_block(
-                        lex.ws_select_model_variant_prompt.format(family=family_label)
-                    ),
+                hdr = format_wide_header_block(
+                    lex.ws_select_model_variant_prompt.format(family=family_label)
+                )
+                await edit_rich_or_standard_message(
+                    client=self._client,
+                    chat_id=self._cfg.telegram.forum_chat_id,
+                    message_id=event.message_id,
+                    markdown_text=hdr,
+                    fallback_text=hdr,
+                    fallback_entities=None,
                     buttons=build_model_variants_keyboard(
                         lex,
                         topic_id,
@@ -1203,24 +1447,14 @@ class WorkspaceTopicUI:
                         topic.model_slug,
                     ),
                 )
+            await event.answer()
             return
 
         if action == "set_model":
             model_slug = parts[3]
-            topic = await self._topic_repo.get_topic_strict(topic_id)
-            await self._lifecycle.change_model(topic_id, model_slug, topic.effort_level)
+            await self._lifecycle.change_model(topic_id, model_slug)
             await event.answer(
                 lex.ws_model_updated_msg.format(model_slug=model_slug)
-            )
-            await self._edit_event_to_topic_passport(event, topic_id)
-            return
-
-        if action == "set_effort":
-            effort = EffortLevel(parts[3])
-            topic = await self._topic_repo.get_topic_strict(topic_id)
-            await self._lifecycle.change_model(topic_id, topic.model_slug, effort)
-            await event.answer(
-                lex.ws_effort_updated_msg.format(effort=effort.value)
             )
             await self._edit_event_to_topic_passport(event, topic_id)
             return
@@ -1228,12 +1462,19 @@ class WorkspaceTopicUI:
         if action == "accounts":
             topic = await self._topic_repo.get_topic_strict(topic_id)
             accounts = await self._account_repo.list_enabled_accounts()
-            await event.edit(
-                format_wide_header_block(lex.ws_select_account_prompt),
+            hdr = format_wide_header_block(lex.ws_select_account_prompt)
+            await edit_rich_or_standard_message(
+                client=self._client,
+                chat_id=self._cfg.telegram.forum_chat_id,
+                message_id=event.message_id,
+                markdown_text=hdr,
+                fallback_text=hdr,
+                fallback_entities=None,
                 buttons=build_topic_account_picker_keyboard(
                     lex, topic_id, accounts, topic.assigned_account_id
                 ),
             )
+            await event.answer()
             return
 
         if action == "set_acc":
@@ -1250,10 +1491,17 @@ class WorkspaceTopicUI:
                 self._cfg.paths.workspaces_root_dir,
                 self._cfg.paths.remotes_mount_dir,
             )
-            await event.edit(
-                format_wide_header_block(lex.ws_select_workspace_prompt),
+            hdr = format_wide_header_block(lex.ws_select_workspace_prompt)
+            await edit_rich_or_standard_message(
+                client=self._client,
+                chat_id=self._cfg.telegram.forum_chat_id,
+                message_id=event.message_id,
+                markdown_text=hdr,
+                fallback_text=hdr,
+                fallback_entities=None,
                 buttons=build_workspace_dir_picker_keyboard(lex, topic_id, choices),
             )
+            await event.answer()
             return
 
         if action == "set_dir":

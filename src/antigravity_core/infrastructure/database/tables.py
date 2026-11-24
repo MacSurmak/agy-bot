@@ -154,6 +154,7 @@ class ScheduledTaskRow(Base):
     conversation_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), nullable=True
     )
+    reply_to_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     schedule_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     trigger_spec: Mapped[str] = mapped_column(String(255), nullable=False)
     instruction_prompt: Mapped[str] = mapped_column(Text, nullable=False)
@@ -212,6 +213,7 @@ class EventSensorRow(Base):
     conversation_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), nullable=True
     )
+    reply_to_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     sensor_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     command: Mapped[str] = mapped_column(Text, nullable=False)

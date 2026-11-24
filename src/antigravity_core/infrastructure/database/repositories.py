@@ -11,7 +11,6 @@ from antigravity_core.config.dynamic_settings import (
     parse_dynamic_settings,
 )
 from antigravity_core.domain.enums import (
-    EffortLevel,
     ExecutionMode,
     NotifyPolicy,
     ScheduleKind,
@@ -109,9 +108,6 @@ def _map_topic(row: ForumTopicRow) -> ForumTopic:
         workspace_path=row.workspace_path,
         additional_dirs=tuple(str(item) for item in row.additional_dirs_json),
         model_slug=row.model_slug,
-        effort_level=(
-            EffortLevel(row.effort_level) if row.effort_level is not None else None
-        ),
         execution_mode=ExecutionMode(row.execution_mode),
         assigned_account_id=row.assigned_account_id,
         active_conversation_id=row.active_conversation_id,
@@ -141,6 +137,7 @@ def _map_scheduled_task(row: ScheduledTaskRow) -> ScheduledTask:
         id=row.id,
         topic_id=row.topic_id,
         conversation_id=row.conversation_id,
+        reply_to_message_id=row.reply_to_message_id,
         schedule_kind=ScheduleKind(row.schedule_kind),
         trigger_spec=row.trigger_spec,
         instruction_prompt=row.instruction_prompt,
@@ -660,7 +657,6 @@ class TopicRepository:
         workspace_path: str,
         additional_dirs: tuple[str, ...],
         model_slug: str,
-        effort_level: EffortLevel | None,
         execution_mode: ExecutionMode,
         assigned_account_id: int,
         pinned_card_msg_id: int | None,
@@ -675,7 +671,7 @@ class TopicRepository:
                 workspace_path=workspace_path,
                 additional_dirs_json=list(additional_dirs),
                 model_slug=model_slug,
-                effort_level=effort_level.value if effort_level is not None else None,
+                effort_level=None,
                 execution_mode=execution_mode.value,
                 assigned_account_id=assigned_account_id,
                 active_conversation_id=None,
@@ -741,17 +737,17 @@ class TopicRepository:
             await session.flush()
             return _map_topic(row)
 
-    async def update_model_and_effort(
-        self, topic_id: int, model_slug: str, effort_level: EffortLevel | None
-    ) -> ForumTopic:
+    async def update_model(self, topic_id: int, model_slug: str) -> ForumTopic:
         async with self._db.session() as session:
-            row = await session.get(ForumTopicRow, topic_id)
+            row = await session.scalar(
+                select(ForumTopicRow).where(ForumTopicRow.topic_id == topic_id)
+            )
             if row is None:
                 raise DatabaseIntegrityError(
                     f"ForumTopic topic_id={topic_id} does not exist."
                 )
             row.model_slug = model_slug
-            row.effort_level = effort_level.value if effort_level is not None else None
+            row.effort_level = None
             row.updated_at = datetime.now(tz=UTC)
             await session.flush()
             return _map_topic(row)
@@ -894,6 +890,7 @@ class ScheduleRepository:
         task_id: UUID,
         topic_id: int,
         conversation_id: UUID | None,
+        reply_to_message_id: int | None,
         schedule_kind: ScheduleKind,
         trigger_spec: str,
         instruction_prompt: str,
@@ -905,6 +902,7 @@ class ScheduleRepository:
                 id=task_id,
                 topic_id=topic_id,
                 conversation_id=conversation_id,
+                reply_to_message_id=reply_to_message_id,
                 schedule_kind=schedule_kind.value,
                 trigger_spec=trigger_spec,
                 instruction_prompt=instruction_prompt,
@@ -1055,6 +1053,7 @@ def _map_event_sensor(row: EventSensorRow) -> EventSensor:
         id=row.id,
         topic_id=row.topic_id,
         conversation_id=row.conversation_id,
+        reply_to_message_id=row.reply_to_message_id,
         name=row.name,
         sensor_kind=SensorKind(row.sensor_kind),
         command=row.command,
@@ -1083,6 +1082,7 @@ class SensorRepository:
         sensor_id: UUID,
         topic_id: int,
         conversation_id: UUID | None,
+        reply_to_message_id: int | None,
         name: str,
         sensor_kind: SensorKind,
         command: str,
@@ -1102,6 +1102,7 @@ class SensorRepository:
                 id=sensor_id,
                 topic_id=topic_id,
                 conversation_id=conversation_id,
+                reply_to_message_id=reply_to_message_id,
                 name=name,
                 sensor_kind=sensor_kind.value,
                 command=command,

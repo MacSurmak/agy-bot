@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import re
+import time
 from typing import Final
 
 from antigravity_core.config.static_config import StaticConfig
@@ -32,6 +33,7 @@ _COLUMN_SPLIT_RE: Final[re.Pattern[str]] = re.compile(r"\t+|\s{2,}")
 _VALID_MODEL_ID_RE: Final[re.Pattern[str]] = re.compile(
     r"^(?:[A-Za-z0-9]+(?:-[A-Za-z0-9.]+)+|Orchestrator\s*\([A-Za-z0-9_.-]+\))$"
 )
+_MODELS_CACHE_TTL_SEC: Final[float] = 300.0
 _IGNORED_HEADER_WORDS: Final[frozenset[str]] = frozenset(
     {
         "model",
@@ -63,13 +65,15 @@ class AgyCliInspector:
     ) -> None:
         self._cfg = static_config
         self._keyring_mgr = keyring_mgr
-        self._models_cache: dict[int, list[str]] = {}
+        self._models_cache: dict[int, tuple[float, list[str]]] = {}
 
     async def list_available_models(
         self, account: GoogleAccount
     ) -> list[str]:
         if account.id in self._models_cache:
-            return list(self._models_cache[account.id])
+            cached_ts, cached_models = self._models_cache[account.id]
+            if (time.monotonic() - cached_ts) < _MODELS_CACHE_TTL_SEC:
+                return list(cached_models)
 
         env = await self._keyring_mgr.ensure_account_bus(account)
         workspace_cwd = str(self._cfg.paths.workspaces_root_dir)
@@ -101,7 +105,7 @@ class AgyCliInspector:
 
         raw_output = stdout_bytes.decode("utf-8", errors="replace").strip()
         parsed = self._parse_models_output(raw_output)
-        self._models_cache[account.id] = parsed
+        self._models_cache[account.id] = (time.monotonic(), parsed)
         return list(parsed)
 
     @staticmethod

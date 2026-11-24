@@ -1,6 +1,7 @@
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 import re
+from typing import Final, TypeAlias
 from uuid import UUID, uuid4
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -14,9 +15,9 @@ from antigravity_core.domain.exceptions import ConfigurationError
 from antigravity_core.domain.models import ScheduledTask
 from antigravity_core.infrastructure.database.repositories import ScheduleRepository
 
-ScheduledWakeAgentCallback = Callable[[int, str, UUID | None], Awaitable[None]]
+ScheduledWakeAgentCallback: TypeAlias = Callable[[int, str, UUID | None, int | None], Awaitable[None]]
 
-_RELATIVE_TIME_RE = re.compile(r"^\+?\s*(\d+)\s*([smhd])$", re.IGNORECASE)
+_RELATIVE_TIME_RE: Final[re.Pattern[str]] = re.compile(r"^\+?\s*(\d+)\s*([smhd])$", re.IGNORECASE)
 
 
 class TemporalSchedulerService:
@@ -63,6 +64,7 @@ class TemporalSchedulerService:
         self,
         topic_id: int,
         conversation_id: UUID | None,
+        reply_to_message_id: int | None,
         schedule_kind: ScheduleKind,
         trigger_spec: str,
         instruction_prompt: str,
@@ -81,6 +83,7 @@ class TemporalSchedulerService:
             task_id=task_id,
             topic_id=topic_id,
             conversation_id=conversation_id,
+            reply_to_message_id=reply_to_message_id,
             schedule_kind=schedule_kind,
             trigger_spec=trigger_spec,
             instruction_prompt=instruction_prompt,
@@ -181,4 +184,5 @@ class TemporalSchedulerService:
             task.topic_id,
             wake_prompt,
             task.conversation_id,
+            task.reply_to_message_id,
         )

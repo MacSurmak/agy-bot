@@ -17,13 +17,6 @@ class ExecutionMode(StrEnum):
     READ_ONLY = "READ_ONLY"
 
 
-class EffortLevel(StrEnum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    MAX = "max"
-
-
 class ScheduleKind(StrEnum):
     ONE_SHOT = "ONE_SHOT"
     CRON = "CRON"

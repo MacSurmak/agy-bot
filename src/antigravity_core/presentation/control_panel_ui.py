@@ -47,11 +47,14 @@ from antigravity_core.presentation.tg_renderer import (
 from antigravity_core.presentation.keyboards import (
     build_control_panel_keyboard,
     build_default_account_picker_keyboard,
+    build_default_model_groups_keyboard,
+    build_default_model_variants_keyboard,
     build_oauth_url_keyboard,
     build_paginated_accounts_keyboard,
     build_setting_options_keyboard,
     build_single_account_manage_keyboard,
     build_tasks_management_keyboard,
+    group_models_by_family,
 )
 from antigravity_core.presentation.workspace_topic_ui import WorkspaceTopicUI
 
@@ -162,7 +165,8 @@ class ControlPanelUI:
             fallback_text=text,
             fallback_entities=None,
             reply_to=cp_topic_id,
-            silent=False,
+            top_msg_id=cp_topic_id,
+            silent=True,
             buttons=buttons,
         )
         self._last_cp_msg_id = max(self._last_cp_msg_id, msg.id)
@@ -241,10 +245,15 @@ class ControlPanelUI:
                     message_ids=[stored_msg_id],
                 )
 
-        msg = await self._client.send_message(
-            entity=self._cfg.telegram.forum_chat_id,
-            message=text,
+        msg = await send_rich_or_standard_message(
+            client=self._client,
+            chat_id=self._cfg.telegram.forum_chat_id,
+            markdown_text=text,
+            fallback_text=text,
+            fallback_entities=None,
             reply_to=cp_topic_id,
+            top_msg_id=cp_topic_id,
+            silent=True,
             buttons=buttons,
         )
         self._last_cp_msg_id = max(self._last_cp_msg_id, msg.id)
@@ -475,8 +484,27 @@ class ControlPanelUI:
             await self._open_setting_selector(event, lex, key)
             return
 
+        if data_str.startswith("cp:def_mgrp:"):
+            grp_idx = int(data_str.split(":", 2)[2])
+            await self._open_default_model_group(event, lex, grp_idx)
+            return
+
         if data_str.startswith("cp:set_val:"):
             _, _, key, raw_val = data_str.split(":", 3)
+            if key == "default_model":
+                default_acc = await self._account_repo.get_default_account()
+                available_models = await self._inspector.list_available_models(
+                    default_acc
+                )
+                if raw_val not in available_models:
+                    await event.answer(
+                        lex.ws_model_unknown_msg.format(
+                            model_slug=raw_val,
+                            available_models=", ".join(available_models[:6]),
+                        )[:180],
+                        alert=True,
+                    )
+                    return
             updated_settings = await self._settings_repo.update_setting(key, raw_val)
             new_lex = get_lexicon(updated_settings.ui_language)
             await event.answer(
@@ -695,13 +723,14 @@ class ControlPanelUI:
                     title=final_title, topic_id=topic.topic_id
                 )
             )
-        except Exception as exc:
+        except (RPCError, OSError) as exc:
             max_err = self._cfg.limits.error_summary_max_chars
             err_detail = f"{type(exc).__name__}: {exc}"[:max_err]
-            logger.error(
-                "Failed to create forum topic", error=err_detail, exc_info=True
+            logger.opt(exception=True).error(
+                "Failed to create forum topic", error=err_detail
             )
             await event.respond(lex.cp_new_topic_failed.format(error=err_detail))
+            raise
 
     async def _workspace_ui_init_new_topic(
         self, topic_id: int, assigned_dir: str
@@ -907,22 +936,17 @@ class ControlPanelUI:
             return
 
         if key == "default_model":
-            try:
-                default_acc = await self._account_repo.get_default_account()
-                models = await self._inspector.list_available_models(default_acc)
-            except Exception as exc:
-                max_err = self._cfg.limits.error_summary_max_chars
-                err_short = str(exc)[:max_err]
-                await event.answer(err_short, alert=True)
-                return
-            options = [
-                (m, m) for m in models[: self._cfg.limits.models_menu_display_limit]
-            ]
+            default_acc = await self._account_repo.get_default_account()
+            models = await self._inspector.list_available_models(default_acc)
             await self._safe_edit_event(
                 event,
-                format_wide_header_block(lex.ws_select_model_prompt),
-                build_setting_options_keyboard(
-                    lex, key, options, settings.default_model
+                format_wide_header_block(
+                    lex.ws_select_model_group_prompt.format(
+                        current_model=settings.default_model
+                    )
+                ),
+                build_default_model_groups_keyboard(
+                    lex, self._cfg.limits, models, settings.default_model
                 ),
             )
             return
@@ -940,3 +964,25 @@ class ControlPanelUI:
                 ),
             )
             return
+
+    async def _open_default_model_group(
+        self, event: events.CallbackQuery.Event, lex: UiLexicon, grp_idx: int
+    ) -> None:
+        settings = await self._settings_repo.load_settings()
+        default_acc = await self._account_repo.get_default_account()
+        models = await self._inspector.list_available_models(default_acc)
+        groups = group_models_by_family(
+            models[: self._cfg.limits.models_menu_display_limit]
+        )
+        if 0 <= grp_idx < len(groups):
+            family_label, variants = groups[grp_idx]
+            await self._safe_edit_event(
+                event,
+                format_wide_header_block(
+                    lex.ws_select_model_variant_prompt.format(family=family_label)
+                ),
+                build_default_model_variants_keyboard(
+                    lex, variants, settings.default_model
+                ),
+            )
+        await event.answer()

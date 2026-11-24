@@ -43,12 +43,48 @@ _QUOTA_ERROR_MARKERS: tuple[str, ...] = (
 )
 
 
-def is_effort_supported_for_model(
-    model_slug: str, supported_prefixes: tuple[str, ...]
-) -> bool:
-    """Checks whether --effort is supported by matching model_slug against configured prefixes."""
-    normalized = model_slug.strip().lower()
-    return any(normalized.startswith(prefix) for prefix in supported_prefixes)
+def _split_final_steps_and_response(
+    status: TurnStatus,
+    raw_response: str,
+    tools_by_step: dict[int, ToolCallSummary],
+    text_by_step: dict[int, str],
+) -> tuple[tuple[ToolCallSummary, ...], str]:
+    """Separates intermediate agent commentary into trace notes and prevents gluing or stale draft leaks."""
+    max_tool_step = max(tools_by_step.keys(), default=-1)
+    final_tools_and_notes: dict[int, ToolCallSummary] = dict(tools_by_step)
+    non_empty_steps = sorted(
+        s_idx for s_idx, s_txt in text_by_step.items() if s_txt.strip()
+    )
+
+    chosen_final_step: int | None = None
+    if status == TurnStatus.SUCCESS and non_empty_steps:
+        last_step = non_empty_steps[-1]
+        if last_step > max_tool_step or not raw_response.strip():
+            chosen_final_step = last_step
+
+    for s_idx in non_empty_steps:
+        if s_idx == chosen_final_step:
+            continue
+        cleaned_s_txt = text_by_step[s_idx].strip()
+        first_line = cleaned_s_txt.splitlines()[0][:100]
+        final_tools_and_notes[s_idx] = ToolCallSummary(
+            step_index=s_idx,
+            tool_name="💬 agent_note",
+            state=StepState.DONE,
+            duration_seconds=None,
+            target_hint=first_line,
+            parameters_text=None,
+            output_text=cleaned_s_txt,
+        )
+
+    ordered_final_steps = tuple(
+        final_tools_and_notes[k] for k in sorted(final_tools_and_notes.keys())
+    )
+    if status != TurnStatus.SUCCESS:
+        return ordered_final_steps, ""
+    if chosen_final_step is not None:
+        return ordered_final_steps, text_by_step[chosen_final_step].strip()
+    return ordered_final_steps, raw_response.strip()
 
 
 def _contains_quota_exhaustion(text: str) -> bool:
@@ -170,9 +206,9 @@ class TopicWorker:
         # Note: agy model slugs already encode reasoning effort (e.g. gemini-3.8-flash-low/medium/high);
         # passing a separate --effort flag causes mismatch errors when switching model variants.
 
-        # Reference #1 Section 5: Deterministic execution profiles
+        # Reference #1 Section 5: Deterministic execution profiles (honors settings.json Deny & PreToolUse hooks)
         if self._signature.execution_mode == ExecutionMode.FULL_ACCESS:
-            cmd.extend(["--mode", "accept-edits", "--dangerously-skip-permissions"])
+            cmd.extend(["--mode", "accept-edits"])
         else:
             cmd.extend(["--mode", "plan"])
 
@@ -438,45 +474,13 @@ class TopicWorker:
                             cached_tokens=event.cumulative_usage.cache_read_tokens,
                             tools_used=len(tools_by_step),
                         )
-                        max_tool_step = max(tools_by_step.keys(), default=-1)
-                        final_tools_and_notes: dict[int, ToolCallSummary] = dict(
-                            tools_by_step
-                        )
-                        final_trailing_parts: list[str] = []
-                        for s_idx, s_txt in sorted(text_by_step.items()):
-                            cleaned_s_txt = s_txt.strip()
-                            if not cleaned_s_txt:
-                                continue
-                            if s_idx < max_tool_step:
-                                first_line = cleaned_s_txt.splitlines()[0][:100]
-                                final_tools_and_notes[s_idx] = ToolCallSummary(
-                                    step_index=s_idx,
-                                    tool_name="💬 agent_note",
-                                    state=StepState.DONE,
-                                    duration_seconds=None,
-                                    target_hint=first_line,
-                                    parameters_text=None,
-                                    output_text=cleaned_s_txt,
-                                )
-                            else:
-                                final_trailing_parts.append(cleaned_s_txt)
-
-                        if not final_trailing_parts and not event.response_text.strip() and text_by_step:
-                            last_text_step = max(text_by_step.keys())
-                            recovered_text = text_by_step[last_text_step].strip()
-                            if recovered_text:
-                                if last_text_step in final_tools_and_notes:
-                                    del final_tools_and_notes[last_text_step]
-                                final_trailing_parts.append(recovered_text)
-
-                        ordered_final_steps = tuple(
-                            final_tools_and_notes[k]
-                            for k in sorted(final_tools_and_notes.keys())
-                        )
-                        final_clean_response = (
-                            "\n\n".join(final_trailing_parts).strip()
-                            if final_trailing_parts
-                            else event.response_text
+                        ordered_final_steps, final_clean_response = (
+                            _split_final_steps_and_response(
+                                status=event.status,
+                                raw_response=event.response_text,
+                                tools_by_step=tools_by_step,
+                                text_by_step=text_by_step,
+                            )
                         )
 
                         return replace(

@@ -216,6 +216,9 @@ async def run_service(static_config: StaticConfig) -> None:
         host_repo=host_repo,
         mount_mgr=mount_mgr,
     )
+    workspace_ui.bind_active_turn_message_callback(
+        ipc_server.set_active_user_message_id
+    )
 
     control_panel_ui = ControlPanelUI(
         client=client,

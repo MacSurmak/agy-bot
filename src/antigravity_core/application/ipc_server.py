@@ -57,6 +57,15 @@ class CoreIpcServer:
         self._host_repo = host_repo
         self._mount_mgr = mount_mgr
         self._server: asyncio.AbstractServer | None = None
+        self._active_user_msg_id_by_topic: dict[int, int] = {}
+
+    def set_active_user_message_id(
+        self, topic_id: int, message_id: int | None
+    ) -> None:
+        if message_id is None:
+            self._active_user_msg_id_by_topic.pop(topic_id, None)
+        else:
+            self._active_user_msg_id_by_topic[topic_id] = message_id
 
     async def start(self) -> None:
         sock_path = self._cfg.paths.ipc_socket_path
@@ -255,9 +264,15 @@ class CoreIpcServer:
                 if "ALERT" in raw_policy
                 else NotifyPolicy.ALWAYS
             )
+            origin_msg_id = (
+                self._active_user_msg_id_by_topic[topic_id]
+                if topic_id in self._active_user_msg_id_by_topic
+                else None
+            )
             task = await self._scheduler.schedule_new_task(
                 topic_id=topic_id,
                 conversation_id=conv_id,
+                reply_to_message_id=origin_msg_id,
                 schedule_kind=kind,
                 trigger_spec=str(params["trigger_spec"]),
                 instruction_prompt=str(params["instruction_prompt"]),
@@ -339,10 +354,16 @@ class CoreIpcServer:
             else:
                 w_mode = SensorWakeMode.ALWAYS
 
+            origin_msg_id = (
+                self._active_user_msg_id_by_topic[topic_id]
+                if topic_id in self._active_user_msg_id_by_topic
+                else None
+            )
             sensor = await self._sensors.create_new_sensor(
                 topic_id=topic_id,
                 conversation_id=conv_id,
-                name=str(params.get("name", "Event Sensor")),
+                reply_to_message_id=origin_msg_id,
+                name=str(params["name"]) if "name" in params else "Event Sensor",
                 sensor_kind=s_kind,
                 command=str(params["command"]),
                 trigger_condition=t_cond,

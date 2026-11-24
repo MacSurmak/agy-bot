@@ -4,7 +4,6 @@ from typing import Protocol
 from uuid import UUID
 
 from antigravity_core.domain.enums import (
-    EffortLevel,
     ExecutionMode,
     NotifyPolicy,
     ScheduleKind,
@@ -78,7 +77,6 @@ class ForumTopic:
     workspace_path: str
     additional_dirs: tuple[str, ...]
     model_slug: str
-    effort_level: EffortLevel | None
     execution_mode: ExecutionMode
     assigned_account_id: int
     active_conversation_id: UUID | None
@@ -106,6 +104,7 @@ class ScheduledTask:
     id: UUID
     topic_id: int
     conversation_id: UUID | None
+    reply_to_message_id: int | None
     schedule_kind: ScheduleKind
     trigger_spec: str
     instruction_prompt: str
@@ -120,6 +119,7 @@ class EventSensor:
     id: UUID
     topic_id: int
     conversation_id: UUID | None
+    reply_to_message_id: int | None
     name: str
     sensor_kind: SensorKind
     command: str
@@ -163,7 +163,6 @@ class InviteToken:
 class WorkerSignature:
     conversation_id: UUID | None
     model_slug: str
-    effort_level: EffortLevel | None
     execution_mode: ExecutionMode
     account_id: int
     account_slug: str
