@@ -162,10 +162,7 @@ class _LiveTraceFlusher:
         self._latest = progress
         self._dirty = True
         for tool in progress.active_tools:
-            if (
-                tool.state == StepState.ACTIVE
-                and tool.step_index not in self._seen_active_steps
-            ):
+            if tool.step_index not in self._seen_active_steps:
                 self._seen_active_steps.add(tool.step_index)
                 self._immediate = True
         self._wake_event.set()

@@ -548,18 +548,16 @@ def _format_trace_blocks_as_html_pages(
         lines = block.splitlines()
         summary_raw = lines[0].strip() if lines else "Step"
         body_raw = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
-        if body_raw and summary_raw.startswith("⏳"):
-            piece = (
-                f"<p><b>{html.escape(summary_raw)}</b></p>"
-                f"<pre><code>{html.escape(body_raw)}</code></pre>"
-            )
-        elif body_raw:
-            piece = (
-                f"<details><summary>{html.escape(summary_raw)}</summary>"
-                f"<pre><code>{html.escape(body_raw)}</code></pre></details>"
-            )
+        if body_raw:
+            display_body = body_raw
+        elif summary_raw.startswith("⏳"):
+            display_body = "..."
         else:
-            piece = f"<p>{html.escape(summary_raw)}</p>"
+            display_body = "—"
+        piece = (
+            f"<details><summary>{html.escape(summary_raw)}</summary>"
+            f"<pre><code>{html.escape(display_body)}</code></pre></details>"
+        )
         pieces.append(piece)
 
     raw_pages: list[list[str]] = []

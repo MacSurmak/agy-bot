@@ -396,6 +396,9 @@ class TopicWorker:
                             active_subagents[sub.conversation_id] = sub
 
                         max_tool_step = max(tools_by_step.keys(), default=-1)
+                        has_active_tool = any(
+                            t.state == StepState.ACTIVE for t in tools_by_step.values()
+                        )
                         merged_tools_and_notes: dict[int, ToolCallSummary] = dict(
                             tools_by_step
                         )
@@ -404,7 +407,7 @@ class TopicWorker:
                             cleaned_s_txt = s_txt.strip()
                             if not cleaned_s_txt:
                                 continue
-                            if s_idx < max_tool_step:
+                            if s_idx < max_tool_step or has_active_tool:
                                 first_line = cleaned_s_txt.splitlines()[0][:100]
                                 merged_tools_and_notes[s_idx] = ToolCallSummary(
                                     step_index=s_idx,
