@@ -29,6 +29,7 @@ from antigravity_core.infrastructure.database.repositories import (
     TopicRepository,
 )
 from antigravity_core.infrastructure.media.mtproto_media import MediaService
+from antigravity_core.infrastructure.process_ownership import chown_path
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
 
 
@@ -78,6 +79,7 @@ class CoreIpcServer:
             path=str(sock_path),
         )
         os.chmod(sock_path, 0o600)
+        chown_path(sock_path, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
         logger.info(
             "Started local UNIX IPC server for MCP stdio_proxy", socket=str(sock_path)
         )
@@ -450,10 +452,7 @@ class CoreIpcServer:
             local_mount = f"{ssh_user}@{alias}:{remote_root_path}"
             rule_file = str(
                 (
-                    self._cfg.paths.agy_home_dir
-                    / "config"
-                    / "rules"
-                    / f"infra-{alias}.md"
+                    self._cfg.paths.hosts_passports_dir / f"infra-{alias}.md"
                 ).resolve()
             )
             host = await self._host_repo.upsert_host(

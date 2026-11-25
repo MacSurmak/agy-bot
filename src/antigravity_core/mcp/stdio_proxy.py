@@ -15,7 +15,7 @@ _SERVER_INSTRUCTIONS: Final[str] = (
     "Native control plane for Antigravity Telegram Core. "
     "On the first turn of a new conversation, call rename_current_topic with a concise 3-5 word title in the user's language. "
     "Use register_remote_host to onboard SSH servers (with jump_host for internal cluster nodes), "
-    "update_host_knowledge to record infrastructure notes in ~/.gemini/config/rules/infra-<host>.md, "
+    "update_host_knowledge to record infrastructure notes in ~/.gemini/config/hosts/infra-<host>.md, "
     "send_file_to_telegram to deliver local or remote TRAMP (/ssh:user@alias:/abs/path) files to Telegram, "
     "schedule_task for persistent timers/cron jobs, and create_sensor for zero-token background event watchers."
 )
@@ -105,7 +105,7 @@ async def update_host_knowledge(
     notes_markdown: Annotated[
         str,
         Field(
-            description="Markdown architectural notes, cluster topology, GPU specs, or key directories to store in ~/.gemini/config/rules/infra-<host>.md."
+            description="Markdown architectural notes, cluster topology, GPU specs, or key directories to store in ~/.gemini/config/hosts/infra-<host>.md."
         ),
     ],
     append: Annotated[
@@ -115,7 +115,7 @@ async def update_host_knowledge(
         ),
     ],
 ) -> IpcPayload:
-    """Save architectural notes, project paths, database locations, or operational insights into the permanent passport ~/.gemini/config/rules/infra-<host>.md."""
+    """Save architectural notes, project paths, database locations, or operational insights into the on-demand passport ~/.gemini/config/hosts/infra-<host>.md."""
     return await _call_bot_ipc(
         "update_host_knowledge",
         {
@@ -345,7 +345,7 @@ async def register_remote_host(
         ),
     ],
 ) -> IpcPayload:
-    """Register a remote SSH host (with optional jump_host ProxyJump for internal LAN nodes), provision the SSH key, and generate its infrastructure passport ~/.gemini/config/rules/infra-<alias>.md."""
+    """Register a remote SSH host (with optional jump_host ProxyJump for internal LAN nodes), provision the SSH key, and generate its on-demand passport ~/.gemini/config/hosts/infra-<alias>.md."""
     return await _call_bot_ipc(
         "register_remote_host",
         {

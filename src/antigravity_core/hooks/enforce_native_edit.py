@@ -57,14 +57,16 @@ _FORBIDDEN_BOT_INTERNAL_PATHS: Final[tuple[str, ...]] = (
     "/srv/antigravity/app/runtime_data/run",
 )
 
+_AGENT_HOME: Final[Path] = Path.home().resolve()
+
 _ALLOWED_LOCAL_WRITE_ROOTS: Final[tuple[Path, ...]] = (
     (_RUNTIME_DATA_DIR / "workspaces").resolve(),
     (_RUNTIME_DATA_DIR / "inbox").resolve(),
     Path("/srv/antigravity/app/runtime_data/workspaces"),
     Path("/srv/antigravity/app/runtime_data/inbox"),
-    Path("/etc/systemd/system"),
-    Path("/root/.gemini/config/rules"),
-    Path("/root/.gemini/config/skills"),
+    (_AGENT_HOME / "projects").resolve(),
+    (_AGENT_HOME / ".gemini" / "config" / "hosts").resolve(),
+    (_AGENT_HOME / ".gemini" / "config" / "skills").resolve(),
     Path("/tmp"),
 )
 
@@ -72,11 +74,11 @@ _ALLOWED_LOCAL_READ_ONLY_SEGMENTS: Final[tuple[str, ...]] = (
     "/.gemini/antigravity-cli/mcp/",
     "/.system_generated/tasks/",
     "/.system_generated/steps/",
-    "/.gemini/config/rules/",
+    "/.gemini/config/hosts/",
     "/.gemini/config/skills/",
     "/.gemini/config/plugins/",
     "/.gemini/AGENTS.md",
-    "/etc/systemd/system",
+    "/projects/",
 )
 
 _SAFE_FD_REDIRECT_RE: Final[re.Pattern[str]] = re.compile(
@@ -86,7 +88,7 @@ _FORBIDDEN_INPLACE_EDIT_RE: Final[re.Pattern[str]] = re.compile(
     r"\b(?:sed\s+(?:-[a-zA-Z]*i|--in-place)|awk\s+-i\s+inplace|perl\s+-[a-zA-Z]*p[a-zA-Z]*i)\b"
 )
 _TOPIC_DIR_RE: Final[re.Pattern[str]] = re.compile(r"\btopic_(\d+)\b")
-_HOOK_LOG_PATH: Final[Path] = _RUNTIME_DATA_DIR / "logs" / "agy_hooks.log"
+_HOOK_LOG_PATH: Final[Path] = _RUNTIME_DATA_DIR / "agent_logs" / "agy_hooks.log"
 
 
 def _log_hook_decision(tool_name: str, decision: str, detail: str) -> None:
@@ -401,9 +403,9 @@ def _handle_pre_file_tool(tool_name: str, str_args: dict[str, str]) -> None:
                 {
                     "decision": "deny",
                     "reason": (
-                        f"LOCAL LXC SANDBOX RESTRICTION: Access to '{resolved_local}' inside the LXC brain container is forbidden. "
+                        f"LOCAL LXC SANDBOX RESTRICTION: Access to '{resolved_local}' inside the LXC workstation is forbidden. "
                         "You may only access your topic workspace (/srv/antigravity/app/runtime_data/workspaces/...), "
-                        "inbox (/srv/antigravity/app/runtime_data/inbox/...), /etc/systemd/system, host passports (/root/.gemini/config/rules/...), or /tmp. "
+                        "inbox (/srv/antigravity/app/runtime_data/inbox/...), ~/projects/..., host passports (~/.gemini/config/hosts/...), or /tmp. "
                         "To access files on a remote machine, use '/ssh:user@<alias>:/abs/path'."
                     ),
                 }

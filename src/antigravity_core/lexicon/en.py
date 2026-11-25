@@ -192,8 +192,8 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
         "or register a new isolated D-Bus/Keyring profile:"
     ),
     cp_register_new_acc_prompt=(
-        "➕ **Register New Google Account Profile**\n"
-        "Reply in this topic with `<slug> <email_label>` (for example: `acc_2 backup@gmail.com`)."
+        "➕ **Add Google Account**\n"
+        "Click **➕ Add Account** to sign in via Google OAuth."
     ),
     cp_toast_launching_oauth="Launching agy login (Remote SSH OAuth Flow)...",
     cp_oauth_start_failed="❌ Failed to start OAuth flow for `{slug}`:\n`{error}`",
@@ -227,7 +227,7 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
         "`/redeem {token}`"
     ),
     cp_toast_invite_generated="Invite generated.",
-    cp_new_acc_invalid_format="❌ Format must be `<slug> <email_label>` (e.g. `acc_1 user@gmail.com`).",
+    cp_new_acc_invalid_format="❌ Provide a valid Google account email.",
     cp_new_acc_created=(
         "✅ Registered and unlocked isolated D-Bus/Keyring profile `{slug}`.\n"
         "Now open **[🔑 Add / Auth Account]** to complete Google OAuth sign-in."

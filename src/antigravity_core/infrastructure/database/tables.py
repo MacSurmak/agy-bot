@@ -37,7 +37,7 @@ class GoogleAccountRow(Base):
     __tablename__ = "google_accounts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    slug: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     email_label: Mapped[str] = mapped_column(String(255), nullable=False)
     xdg_data_dir: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     dbus_socket_path: Mapped[str] = mapped_column(Text, unique=True, nullable=False)

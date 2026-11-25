@@ -8,6 +8,7 @@ from typing import Final
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import AgyProcessError
 from antigravity_core.domain.models import GoogleAccount, QuotaJsonValue
+from antigravity_core.infrastructure.process_ownership import agent_exec_identity
 from antigravity_core.infrastructure.keyring.dbus_profile_mgr import (
     KeyringProfileManager,
 )
@@ -78,6 +79,7 @@ class AgyCliInspector:
         env = await self._keyring_mgr.ensure_account_bus(account)
         workspace_cwd = str(self._cfg.paths.workspaces_root_dir)
         self._cfg.paths.workspaces_root_dir.mkdir(parents=True, exist_ok=True)
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
 
         proc = await asyncio.create_subprocess_exec(
             str(self._cfg.paths.agy_binary_path),
@@ -87,6 +89,8 @@ class AgyCliInspector:
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace_cwd,
             env=env,
+            user=agent_uid,
+            group=agent_gid,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -200,6 +204,7 @@ class AgyCliInspector:
         env = await self._keyring_mgr.ensure_account_bus(account)
         workspace_cwd = str(self._cfg.paths.workspaces_root_dir)
         self._cfg.paths.workspaces_root_dir.mkdir(parents=True, exist_ok=True)
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
 
         proc = await asyncio.create_subprocess_exec(
             str(self._cfg.paths.agy_binary_path),
@@ -213,6 +218,8 @@ class AgyCliInspector:
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace_cwd,
             env=env,
+            user=agent_uid,
+            group=agent_gid,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(

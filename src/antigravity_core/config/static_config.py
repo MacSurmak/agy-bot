@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import getpass
 import os
 from pathlib import Path
+import pwd
 import shutil
 import sys
 from typing import Any
@@ -10,6 +11,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from antigravity_core.config.constants import (
+    AGY_AGENT_USER,
     CONTROL_PANEL_TOPIC_ID,
     DB_MAX_OVERFLOW,
     DB_POOL_SIZE,
@@ -92,9 +94,18 @@ class DatabaseStaticConfig:
 
 @dataclass(frozen=True, slots=True)
 class PathsStaticConfig:
+    project_root_dir: Path
     venv_python_path: Path
     agy_binary_path: Path
+    rtk_binary_path: Path | None
     agy_home_dir: Path
+    hosts_passports_dir: Path
+    projects_dir: Path
+    agent_user: str
+    agent_uid: int
+    agent_gid: int
+    agent_home_dir: Path
+    agent_log_dir: Path
     system_path_env: str
     system_user: str
     system_logname: str
@@ -212,21 +223,56 @@ def _resolve_agy_binary() -> Path:
     )
 
 
+def _resolve_rtk_binary() -> Path | None:
+    found = shutil.which("rtk")
+    if found:
+        return Path(found).resolve()
+    for candidate in (Path("/usr/local/bin/rtk"), Path("/usr/bin/rtk")):
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
+def _resolve_agent_identity() -> tuple[str, int, int, Path]:
+    if os.geteuid() == 0:
+        try:
+            pw = pwd.getpwnam(AGY_AGENT_USER)
+        except KeyError as exc:
+            raise StartupValidationError(
+                f"Dedicated non-root agent user '{AGY_AGENT_USER}' does not exist. "
+                "Run 'sudo bash scripts/bootstrap_lxc.sh' first."
+            ) from exc
+        return pw.pw_name, pw.pw_uid, pw.pw_gid, Path(pw.pw_dir).resolve()
+    pw = pwd.getpwuid(os.geteuid())
+    return pw.pw_name, pw.pw_uid, pw.pw_gid, Path(pw.pw_dir).resolve()
+
+
 def _resolve_paths_config(project_root: Path) -> PathsStaticConfig:
     runtime_root = (project_root / "runtime_data").resolve()
-    home_dir = Path.home().resolve()
     current_user = getpass.getuser()
-    current_path = os.environ.get("PATH", "").strip() or DEFAULT_SYSTEM_PATH
+    raw_path = os.environ["PATH"].strip() if "PATH" in os.environ else ""
+    current_path = raw_path if raw_path else DEFAULT_SYSTEM_PATH
+    agent_user, agent_uid, agent_gid, agent_home = _resolve_agent_identity()
+    agy_home = agent_home / ".gemini"
 
     return PathsStaticConfig(
+        project_root_dir=project_root.resolve(),
         venv_python_path=Path(sys.executable),
         agy_binary_path=_resolve_agy_binary(),
-        agy_home_dir=home_dir / ".gemini",
+        rtk_binary_path=_resolve_rtk_binary(),
+        agy_home_dir=agy_home,
+        hosts_passports_dir=agy_home / "config" / "hosts",
+        projects_dir=agent_home / "projects",
+        agent_user=agent_user,
+        agent_uid=agent_uid,
+        agent_gid=agent_gid,
+        agent_home_dir=agent_home,
+        agent_log_dir=runtime_root / "agent_logs",
         system_path_env=current_path,
         system_user=current_user,
         system_logname=current_user,
-        ssh_config_dir=home_dir / ".ssh" / "config.d",
-        ssh_sockets_dir=home_dir / ".ssh" / "sockets",
+        ssh_config_dir=agent_home / ".ssh" / "config.d",
+        ssh_sockets_dir=agent_home / ".ssh" / "sockets",
         runtime_bin_dir=runtime_root / "bin",
         workspaces_root_dir=runtime_root / "workspaces",
         remotes_mount_dir=runtime_root / "remotes",

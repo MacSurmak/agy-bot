@@ -418,7 +418,19 @@ class AccountRepository:
                 raise DatabaseIntegrityError(
                     f"GoogleAccount id={account_id} does not exist."
                 )
-            row.email_label = email_label.strip()
+            cleaned = email_label.strip().lower()
+            row.email_label = cleaned
+            if "@" in cleaned and row.slug != cleaned:
+                conflict = (
+                    await session.scalars(
+                        select(GoogleAccountRow).where(
+                            GoogleAccountRow.slug == cleaned,
+                            GoogleAccountRow.id != account_id,
+                        )
+                    )
+                ).first()
+                if conflict is None:
+                    row.slug = cleaned
             await session.flush()
             return _map_account(row)
 
@@ -506,6 +518,20 @@ class RemoteHostRepository:
                 jump_host=jump_host,
             )
             session.add(row)
+            await session.flush()
+            return _map_remote_host(row)
+
+    async def update_rule_file_path(
+        self, alias: str, new_rule_file_path: str
+    ) -> RemoteHost:
+        async with self._db.session() as session:
+            stmt = select(RemoteHostRow).where(RemoteHostRow.alias == alias)
+            row = (await session.scalars(stmt)).first()
+            if row is None:
+                raise DatabaseIntegrityError(
+                    f"RemoteHost alias='{alias}' does not exist."
+                )
+            row.rule_file_path = new_rule_file_path
             await session.flush()
             return _map_remote_host(row)
 

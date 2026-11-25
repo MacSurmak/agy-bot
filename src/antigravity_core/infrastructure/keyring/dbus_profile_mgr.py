@@ -23,6 +23,11 @@ from antigravity_core.domain.exceptions import (
 from antigravity_core.domain.models import GoogleAccount
 from antigravity_core.infrastructure.crypto.fernet_vault import FernetVault
 from antigravity_core.infrastructure.database.repositories import AccountRepository
+from antigravity_core.infrastructure.process_ownership import (
+    agent_exec_identity,
+    chown_path,
+    chown_tree,
+)
 
 _ANSI_ESCAPE_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\].*?\x07")
 _TUI_NOISE_RE: re.Pattern[str] = re.compile(r"[─━═│┃┌┐└┘├┤┬┴┼\ufffd]+")
@@ -193,6 +198,10 @@ class KeyringProfileManager:
 
         socket_path = Path(account.dbus_socket_path)
         socket_path.parent.mkdir(parents=True, exist_ok=True)
+        uid = self._cfg.paths.agent_uid
+        gid = self._cfg.paths.agent_gid
+        chown_tree(xdg_dir, uid, gid)
+        chown_path(socket_path.parent, uid, gid)
 
         dbus_pid: int | None = None
         if not await self._is_unix_socket_alive(socket_path):
@@ -211,8 +220,8 @@ class KeyringProfileManager:
             **inherited_env,
             "PATH": self._cfg.paths.system_path_env,
             "HOME": str(acc_home),
-            "USER": self._cfg.paths.system_user,
-            "LOGNAME": self._cfg.paths.system_logname,
+            "USER": self._cfg.paths.agent_user,
+            "LOGNAME": self._cfg.paths.agent_user,
             "XDG_DATA_HOME": str(xdg_dir),
             "XDG_RUNTIME_DIR": str(acc_runtime_dir),
             "DBUS_SESSION_BUS_ADDRESS": f"unix:path={socket_path}",
@@ -241,11 +250,13 @@ class KeyringProfileManager:
                             )
                         )
                         os.chmod(token_file, 0o600)
+                        chown_path(token_file, uid, gid)
                     if "jetski_b64" in bundle and bundle["jetski_b64"]:
                         jetski_file.write_bytes(
                             base64.b64decode(str(bundle["jetski_b64"]).encode("ascii"))
                         )
                         os.chmod(jetski_file, 0o600)
+                        chown_path(jetski_file, uid, gid)
                     logger.info(
                         "Restored antigravity-oauth-token bundle from Fernet backup",
                         account_slug=account.slug,
@@ -265,6 +276,7 @@ class KeyringProfileManager:
         return dict(profile_env)
 
     async def _start_dbus_daemon(self, socket_path: Path) -> int:
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
             "dbus-daemon",
             "--session",
@@ -273,6 +285,8 @@ class KeyringProfileManager:
             "--nopidfile",
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
+            user=agent_uid,
+            group=agent_gid,
             start_new_session=True,
         )
         for _ in range(self._cfg.runtime.dbus_socket_poll_attempts):
@@ -293,6 +307,7 @@ class KeyringProfileManager:
     async def _run_keyring_login_phase(
         self, env: dict[str, str], raw_password: str
     ) -> dict[str, str]:
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
             "gnome-keyring-daemon",
             "--daemonize",
@@ -301,6 +316,8 @@ class KeyringProfileManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            user=agent_uid,
+            group=agent_gid,
             start_new_session=True,
         )
         if proc.stdin is None or proc.stdout is None or proc.stderr is None:
@@ -335,6 +352,7 @@ class KeyringProfileManager:
         )
 
     async def _run_keyring_start_phase(self, env: dict[str, str]) -> dict[str, str]:
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
             "gnome-keyring-daemon",
             "--daemonize",
@@ -344,6 +362,8 @@ class KeyringProfileManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             env=env,
+            user=agent_uid,
+            group=agent_gid,
             start_new_session=True,
         )
         try:
@@ -382,6 +402,7 @@ class KeyringProfileManager:
         return parsed
 
     async def _verify_secret_service(self, env: dict[str, str]) -> bool:
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
             "secret-tool",
             "lookup",
@@ -393,6 +414,8 @@ class KeyringProfileManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            user=agent_uid,
+            group=agent_gid,
         )
         try:
             _, stderr_bytes = await asyncio.wait_for(
@@ -419,6 +442,7 @@ class KeyringProfileManager:
         return secret is not None and len(secret) > 0
 
     async def _lookup_gemini_secret(self, env: dict[str, str]) -> str | None:
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
             "secret-tool",
             "lookup",
@@ -430,6 +454,8 @@ class KeyringProfileManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            user=agent_uid,
+            group=agent_gid,
         )
         stdout_bytes, _ = await asyncio.wait_for(
             proc.communicate(),
@@ -443,6 +469,7 @@ class KeyringProfileManager:
     async def _store_gemini_secret(
         self, env: dict[str, str], secret_value: str
     ) -> None:
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
             "secret-tool",
             "store",
@@ -455,6 +482,8 @@ class KeyringProfileManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            user=agent_uid,
+            group=agent_gid,
         )
         if proc.stdin is None:
             raise KeyringInitializationError(
@@ -475,6 +504,7 @@ class KeyringProfileManager:
             )
 
     async def _clear_gemini_secret(self, env: dict[str, str]) -> None:
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
             "secret-tool",
             "clear",
@@ -486,6 +516,8 @@ class KeyringProfileManager:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
             env=env,
+            user=agent_uid,
+            group=agent_gid,
         )
         await asyncio.wait_for(
             proc.wait(),
@@ -681,6 +713,7 @@ class KeyringProfileManager:
         )
 
         master_fd, slave_fd = self._spawn_agy_pty_process()
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
             str(self._cfg.paths.agy_binary_path),
             stdin=slave_fd,
@@ -688,6 +721,8 @@ class KeyringProfileManager:
             stderr=slave_fd,
             cwd=workspace_cwd,
             env=oauth_env,
+            user=agent_uid,
+            group=agent_gid,
             start_new_session=True,
         )
         os.close(slave_fd)

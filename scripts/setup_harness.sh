@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # ==============================================================================
-# Antigravity Telegram Core — Idempotent Agent Harness Provisioner
-# - Installs Node.js 24 LTS (required by context-mode >= 24.15.0)
-# - Removes legacy symlinked skills from runtime_data/external_repos and rtk
-# - Installs official plugins strictly via `agy plugin install`
+# Antigravity Telegram Core — Declarative Agent Harness Reconciler
+# Declares the exact desired state for agy-agent:
+#   1. Native RTK binary (/usr/local/bin/rtk) for PreToolUse output compression
+#   2. Exact set of desired Antigravity CLI plugins (reconciled declaratively)
 # ==============================================================================
 
 if [[ "${EUID}" -ne 0 ]]; then
@@ -13,64 +13,52 @@ if [[ "${EUID}" -ne 0 ]]; then
     exit 1
 fi
 
-export DEBIAN_FRONTEND=noninteractive
-export PATH="/usr/local/bin:/root/.local/bin:${PATH}"
-
-echo "==> [1/4] Ensuring Node.js 24 LTS is installed..."
-NEED_NODE=1
-if command -v node >/dev/null 2>&1; then
-    NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-    if [[ "${NODE_MAJOR}" -ge 24 ]]; then
-        NEED_NODE=0
-    fi
+AGENT_USER="agy-agent"
+if ! id -u "${AGENT_USER}" >/dev/null 2>&1; then
+    echo "ERROR: System user '${AGENT_USER}' not found. Run scripts/bootstrap_lxc.sh first." >&2
+    exit 1
 fi
 
-if [[ "${NEED_NODE}" -eq 1 ]]; then
-    curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
-    apt-get install -y nodejs
-fi
-echo "    Node.js version: $(node --version)"
-
-echo "==> [2/4] Cleaning legacy external_repos symlinks and unused rtk binary..."
-SKILLS_DIR="/root/.gemini/config/skills"
-EXT_REPOS_DIR="/srv/antigravity/app/runtime_data/external_repos"
-
-if [[ -d "${SKILLS_DIR}" ]]; then
-    for entry in "${SKILLS_DIR}"/*; do
-        if [[ -L "${entry}" ]]; then
-            target="$(readlink -f "${entry}" || true)"
-            if [[ "${target}" == "${EXT_REPOS_DIR}"* ]] || [[ ! -e "${entry}" ]]; then
-                rm -f "${entry}"
-            fi
-        fi
-    done
-fi
-
-rm -rf "${EXT_REPOS_DIR}"
-rm -f /usr/local/bin/rtk /root/.local/bin/rtk
-
-echo "==> [3/4] Installing context-mode CLI/MCP package globally..."
-npm install -g context-mode
-
-echo "==> [4/4] Installing official Antigravity CLI plugins..."
 AGY_BIN="$(command -v agy || echo /usr/local/bin/agy)"
 if [[ ! -x "${AGY_BIN}" ]]; then
     echo "ERROR: 'agy' binary not found in PATH or /usr/local/bin/agy." >&2
     exit 1
 fi
 
-install_agy_plugin() {
-    local repo_url="$1"
-    echo "    Installing plugin: ${repo_url}"
-    "${AGY_BIN}" plugin install "${repo_url}"
-}
+echo "==> [1/2] Ensuring native RTK binary (/usr/local/bin/rtk) is installed..."
+if [[ ! -x /usr/local/bin/rtk ]]; then
+    curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+    if [[ -x /root/.local/bin/rtk ]]; then
+        install -m 0755 /root/.local/bin/rtk /usr/local/bin/rtk
+    elif [[ -x /root/.cargo/bin/rtk ]]; then
+        install -m 0755 /root/.cargo/bin/rtk /usr/local/bin/rtk
+    fi
+fi
+echo "    rtk: $(/usr/local/bin/rtk --version 2>/dev/null || echo 'installed')"
 
-install_agy_plugin "https://github.com/addyosmani/agent-skills.git"
-install_agy_plugin "https://github.com/DietrichGebert/ponytail"
-install_agy_plugin "https://github.com/obra/superpowers"
-install_agy_plugin "https://github.com/mksglu/context-mode"
+echo "==> [2/2] Reconciling desired Antigravity CLI plugins for ${AGENT_USER}..."
+declare -A DESIRED_PLUGINS=(
+    ["superpowers"]="https://github.com/obra/superpowers"
+    ["ponytail"]="https://github.com/DietrichGebert/ponytail"
+)
 
-echo "==> Harness verification:"
-echo "    node: $(node --version)"
-echo "    context-mode: $(command -v context-mode || echo 'not found')"
-"${AGY_BIN}" plugin list
+INSTALLED_LIST="$(su -s /bin/bash - "${AGENT_USER}" -c "${AGY_BIN} plugin list" 2>/dev/null || true)"
+while IFS= read -r line; do
+    if [[ "${line}" =~ ^-\ ([a-zA-Z0-9._-]+)\ \( ]]; then
+        pname="${BASH_REMATCH[1]}"
+        if [[ -z "${DESIRED_PLUGINS[${pname}]+x}" ]]; then
+            echo "    Removing undeclared plugin: ${pname}"
+            su -s /bin/bash - "${AGENT_USER}" -c "${AGY_BIN} plugin uninstall ${pname}" \
+                || su -s /bin/bash - "${AGENT_USER}" -c "${AGY_BIN} plugin disable ${pname}"
+        fi
+    fi
+done <<< "${INSTALLED_LIST}"
+
+for pname in "${!DESIRED_PLUGINS[@]}"; do
+    repo_url="${DESIRED_PLUGINS[${pname}]}"
+    echo "    Ensuring plugin '${pname}' (${repo_url})..."
+    su -s /bin/bash - "${AGENT_USER}" -c "${AGY_BIN} plugin install ${repo_url}"
+done
+
+echo "==> Final harness state (${AGENT_USER}):"
+su -s /bin/bash - "${AGENT_USER}" -c "${AGY_BIN} plugin list"

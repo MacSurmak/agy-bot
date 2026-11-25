@@ -537,53 +537,6 @@ class ControlPanelUI:
             await event.respond(lex.cp_invite_generated_msg.format(token=token))
             await event.answer(lex.cp_toast_invite_generated)
 
-    async def _process_new_account_input(self, raw_text: str) -> None:
-        lex = await self._load_lexicon()
-        parts = raw_text.split(maxsplit=1)
-        if len(parts) < 2:
-            await self._client.send_message(
-                entity=self._cfg.telegram.forum_chat_id,
-                message=lex.cp_new_acc_invalid_format,
-                reply_to=self._cfg.telegram.control_panel_topic_id,
-            )
-            return
-
-        slug = parts[0].strip()
-        email_label = parts[1].strip()
-        existing_acc = await self._account_repo.get_by_slug(slug)
-        if existing_acc is not None:
-            await self._account_repo.update_email_label(existing_acc.id, email_label)
-            await self.render_and_pin_dashboard(recreate_at_bottom=True)
-            return
-
-        existing = await self._account_repo.list_accounts()
-        is_first = len(existing) == 0
-        priority = len(existing) + 1
-
-        xdg_dir = str((self._cfg.paths.profiles_data_dir / slug).resolve())
-        dbus_sock = str((self._cfg.paths.runtime_dir / f"bus_{slug}.sock").resolve())
-        keyring_password = secrets.token_urlsafe(
-            self._cfg.runtime.keyring_password_bytes
-        )
-        encrypted_pass = self._vault.encrypt_text(keyring_password)
-
-        account = await self._account_repo.create_account(
-            slug=slug,
-            email_label=email_label,
-            xdg_data_dir=xdg_dir,
-            dbus_socket_path=dbus_sock,
-            encrypted_keyring_pass=encrypted_pass,
-            is_default=is_first,
-            priority=priority,
-        )
-        await self._keyring_mgr.ensure_account_bus(account)
-        await self._client.send_message(
-            entity=self._cfg.telegram.forum_chat_id,
-            message=lex.cp_new_acc_created.format(slug=account.slug),
-            reply_to=self._cfg.telegram.control_panel_topic_id,
-        )
-        await self.render_and_pin_dashboard(recreate_at_bottom=True)
-
     async def _discard_staged_account(self, account: GoogleAccount) -> None:
         await self._keyring_mgr.logout_account(account)
         await self._account_repo.delete_account(account.id)
@@ -593,31 +546,25 @@ class ControlPanelUI:
         self, event: events.CallbackQuery.Event, lex: UiLexicon
     ) -> None:
         existing = await self._account_repo.list_accounts()
-        used_nums = {
-            int(a.slug.split("_")[1])
-            for a in existing
-            if a.slug.startswith("acc_") and a.slug.split("_")[1].isdigit()
-        }
-        next_idx = 1
-        while next_idx in used_nums:
-            next_idx += 1
-        slug = f"acc_{next_idx}"
-        email_label = f"Google Account #{next_idx}"
-        xdg_dir = str((self._cfg.paths.profiles_data_dir / slug).resolve())
-        dbus_sock = str((self._cfg.paths.runtime_dir / f"bus_{slug}.sock").resolve())
+        staging_token = f"oauth_{secrets.token_hex(4)}"
+        email_label = "Pending Google Sign-In"
+        xdg_dir = str((self._cfg.paths.profiles_data_dir / staging_token).resolve())
+        dbus_sock = str(
+            (self._cfg.paths.runtime_dir / f"bus_{staging_token}.sock").resolve()
+        )
         keyring_password = secrets.token_urlsafe(
             self._cfg.runtime.keyring_password_bytes
         )
         encrypted_pass = self._vault.encrypt_text(keyring_password)
 
         staged_acc = await self._account_repo.create_account(
-            slug=slug,
+            slug=staging_token,
             email_label=email_label,
             xdg_data_dir=xdg_dir,
             dbus_socket_path=dbus_sock,
             encrypted_keyring_pass=encrypted_pass,
             is_default=(len(existing) == 0),
-            priority=next_idx,
+            priority=len(existing) + 1,
         )
         await self._start_oauth_for_account(event, lex, staged_acc, True)
 
@@ -631,7 +578,7 @@ class ControlPanelUI:
         await event.answer(lex.cp_toast_launching_oauth)
         await self._update_or_recreate_panel(
             event,
-            lex.cp_oauth_preparing_card.format(slug=account.slug),
+            lex.cp_oauth_preparing_card.format(slug=account.display_email),
             [[Button.inline(lex.btn_cp_cancel_short, b"cp:auth_menu")]],
         )
         pending, err_msg = await self._keyring_mgr.try_start_remote_oauth_flow(account)
@@ -657,8 +604,8 @@ class ControlPanelUI:
         await self._update_or_recreate_panel(
             event,
             lex.cp_oauth_instructions.format(
-                slug=account.slug,
-                email_label=account.email_label,
+                slug=account.display_email,
+                email_label=account.display_email,
                 auth_url=pending.auth_url,
             ),
             build_oauth_url_keyboard(lex, pending.auth_url),
@@ -783,10 +730,10 @@ class ControlPanelUI:
         )
         lines = [
             format_wide_header_block(
-                lex.cp_acc_card_header.format(email_label=acc.email_label)
+                lex.cp_acc_card_header.format(email_label=acc.display_email)
             ),
             lex.cp_acc_card_profile_line.format(
-                slug=acc.slug, role_label=role_label
+                slug=acc.display_email, role_label=role_label
             ),
             lex.cp_acc_card_status_line.format(
                 status_label=status_label, quota_line=quota_line

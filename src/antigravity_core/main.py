@@ -1,5 +1,7 @@
 import asyncio
 import contextlib
+from pathlib import Path
+import shutil
 import signal
 import sys
 from typing import Final
@@ -116,19 +118,35 @@ async def run_service(static_config: StaticConfig) -> None:
         username_label="owner",
     )
 
-    # Step 3: Initialize isolated D-Bus & gnome-keyring-daemon buses (Errata Patch #5)
+    # Step 3: Normalize account slugs to email and initialize isolated D-Bus & gnome-keyring buses
     keyring_mgr = KeyringProfileManager(static_config, vault, account_repo)
     enabled_accounts = await account_repo.list_enabled_accounts()
     for acc in enabled_accounts:
+        if "@" in acc.email_label and acc.slug != acc.email_label.strip().lower():
+            acc = await account_repo.update_email_label(acc.id, acc.email_label)
         await keyring_mgr.ensure_account_bus(acc)
 
-    # Step 4: Ensure local SSH keypair, install native SSH/PTY wrappers, and sync AGENTS.md host map
+    # Step 4: Ensure local SSH keypair, install native SSH/PTY wrappers, and sync on-demand host passports
     mount_mgr = RemoteMountManager(static_config)
     mount_mgr.install_runtime_wrappers()
     await mount_mgr.ensure_local_ssh_keypair()
     hosts = await host_repo.list_hosts()
-    bootstrapper.sync_global_agents_md_host_map(hosts)
+    synced_hosts = []
     for host in hosts:
+        target_passport = (
+            static_config.paths.hosts_passports_dir / f"infra-{host.alias}.md"
+        ).resolve()
+        old_passport = Path(host.rule_file_path)
+        if old_passport.resolve() != target_passport:
+            if old_passport.is_file() and not target_passport.exists():
+                target_passport.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(old_passport), str(target_passport))
+            host = await host_repo.update_rule_file_path(
+                host.alias, str(target_passport)
+            )
+        synced_hosts.append(host)
+    bootstrapper.sync_global_agents_md_host_map(synced_hosts)
+    for host in synced_hosts:
         mount_mgr.write_ssh_config_entry(host)
         mount_mgr.ensure_rule_skeleton(host)
 

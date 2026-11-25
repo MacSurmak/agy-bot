@@ -21,6 +21,10 @@ from antigravity_core.domain.models import (
     TurnResult,
     WorkerSignature,
 )
+from antigravity_core.infrastructure.process_ownership import (
+    agent_exec_identity,
+    chown_path,
+)
 from antigravity_core.infrastructure.agy_runtime.stream_protocol import (
     ParsedInitEvent,
     ParsedStepUpdateEvent,
@@ -136,6 +140,9 @@ class TopicWorker:
 
         workspace_dir = Path(self._signature.workspace_path)
         workspace_dir.mkdir(parents=True, exist_ok=True)
+        chown_path(
+            workspace_dir, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid
+        )
 
         cmd = self._build_command_args(settings)
         base_path = (
@@ -155,6 +162,7 @@ class TopicWorker:
         self._stderr_tail.clear()
         self._cumulative_tokens = self._initial_cumulative_tokens
         self._cumulative_duration_sec = 0.0
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
 
         try:
             self._process = await asyncio.create_subprocess_exec(
@@ -164,6 +172,8 @@ class TopicWorker:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(workspace_dir),
                 env=worker_env,
+                user=agent_uid,
+                group=agent_gid,
                 limit=settings.stdout_buffer_limit_bytes,
                 start_new_session=True,
             )
@@ -187,7 +197,7 @@ class TopicWorker:
 
     def _build_command_args(self, settings: DynamicSettings) -> list[str]:
         log_file = (
-            self._cfg.paths.log_file_path.parent / f"agy_topic_{self._topic_id}.log"
+            self._cfg.paths.agent_log_dir / f"agy_topic_{self._topic_id}.log"
         )
         cmd: list[str] = [
             str(self._cfg.paths.agy_binary_path),

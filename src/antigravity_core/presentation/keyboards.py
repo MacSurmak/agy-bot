@@ -59,11 +59,7 @@ def build_paginated_accounts_keyboard(
 
     for acc in page_items:
         star = "⭐ " if acc.is_default else "👤 "
-        label = (
-            f"{star}{acc.email_label}"
-            if "@" in acc.email_label
-            else f"{star}{acc.email_label} ({acc.slug})"
-        )
+        label = f"{star}{acc.display_email}"
         rows.append(
             [
                 Button.inline(
@@ -143,7 +139,9 @@ def build_default_account_picker_keyboard(
             [
                 Button.inline(
                     lex.btn_cp_default_acc_item.format(
-                        mark=mark, slug=acc.slug, email_label=acc.email_label
+                        mark=mark,
+                        slug=acc.display_email,
+                        email_label=acc.display_email,
                     ),
                     f"cp:set_def_acc:{acc.id}".encode("ascii"),
                 )

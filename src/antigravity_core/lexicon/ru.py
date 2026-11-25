@@ -199,8 +199,8 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
         "или создайте новый изолированный D-Bus/Keyring профиль:"
     ),
     cp_register_new_acc_prompt=(
-        "➕ **Регистрация нового профиля Google-аккаунта**\n"
-        "Ответьте сообщением в формате `<slug> <email_label>` (например: `acc_2 backup@gmail.com`)."
+        "➕ **Добавление Google-аккаунта**\n"
+        "Нажмите **➕ Добавить аккаунт**, чтобы пройти OAuth-авторизацию по email."
     ),
     cp_toast_launching_oauth="Запускаю agy login (Remote SSH OAuth Flow)...",
     cp_oauth_start_failed="❌ Не удалось запустить OAuth-авторизацию для `{slug}`:\n`{error}`",
@@ -234,7 +234,7 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
         "`/redeem {token}`"
     ),
     cp_toast_invite_generated="Инвайт-токен создан.",
-    cp_new_acc_invalid_format="❌ Неверный формат. Укажите `<slug> <email_label>` (например: `acc_1 user@gmail.com`).",
+    cp_new_acc_invalid_format="❌ Укажите корректный email Google-аккаунта.",
     cp_new_acc_created=(
         "✅ Изолированный профиль D-Bus/Keyring `{slug}` создан и разблокирован.\n"
         "Теперь откройте **[🔑 Авторизовать / Добавить аккаунт]** для входа в Google."

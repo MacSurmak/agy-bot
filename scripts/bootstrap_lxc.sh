@@ -87,17 +87,52 @@ if ! command -v agy >/dev/null 2>&1 && [[ ! -x /usr/local/bin/agy ]]; then
     fi
 fi
 
-echo "==> [5/6] Provisioning native agy plugins and context-mode harness..."
+echo "==> [5/6] Provisioning dedicated non-root agy-agent user and directories..."
+if ! id -u agy-agent >/dev/null 2>&1; then
+    useradd -m -s /bin/bash -d /home/agy-agent agy-agent
+fi
+
+mkdir -p \
+    /home/agy-agent/projects \
+    /home/agy-agent/.gemini/config/hosts \
+    /home/agy-agent/.gemini/config/skills \
+    /home/agy-agent/.ssh/config.d \
+    /home/agy-agent/.ssh/sockets \
+    /srv/antigravity/app/runtime_data/workspaces \
+    /srv/antigravity/app/runtime_data/inbox \
+    /srv/antigravity/app/runtime_data/profiles \
+    /srv/antigravity/app/runtime_data/run \
+    /srv/antigravity/app/runtime_data/agent_logs \
+    /srv/antigravity/app/runtime_data/logs \
+    /srv/antigravity/app/runtime_data/data \
+    /run/agy
+
+chown -R agy-agent:agy-agent \
+    /home/agy-agent \
+    /srv/antigravity/app/runtime_data/workspaces \
+    /srv/antigravity/app/runtime_data/inbox \
+    /srv/antigravity/app/runtime_data/profiles \
+    /srv/antigravity/app/runtime_data/run \
+    /srv/antigravity/app/runtime_data/agent_logs
+
+chown -R root:root \
+    /srv/antigravity/app/src \
+    /srv/antigravity/app/migrations \
+    /srv/antigravity/app/runtime_data/logs \
+    /srv/antigravity/app/runtime_data/data
+
+chmod 0700 /run/agy /home/agy-agent/.ssh /srv/antigravity/app/runtime_data/logs /srv/antigravity/app/runtime_data/data
+if [[ -f /srv/antigravity/app/.env ]]; then
+    chown root:root /srv/antigravity/app/.env
+    chmod 0600 /srv/antigravity/app/.env
+fi
+if [[ -f /srv/antigravity/app/config.yaml ]]; then
+    chown root:root /srv/antigravity/app/config.yaml
+    chmod 0600 /srv/antigravity/app/config.yaml
+fi
+
+echo "==> [6/6] Reconciling declarative agy harness (RTK + plugins)..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bash "${SCRIPT_DIR}/setup_harness.sh"
-
-echo "==> [6/6] Preparing runtime directories..."
-mkdir -p \
-    /srv/antigravity/app/runtime_data \
-    /run/agy \
-    /root/.gemini \
-    /root/.ssh/config.d
-
-chmod 0700 /run/agy /root/.ssh
 
 echo "==> Provisioning complete! Python version in venv: $(/srv/antigravity/venv/bin/python --version)"

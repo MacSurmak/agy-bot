@@ -35,6 +35,9 @@ SSHFS_MOUNT_GRACE_SEC: int = 10
 SSH_CONTROL_PERSIST_SEC: int = 600
 INTERACTIVE_APPROVAL_TIMEOUT_SEC: float = 900.0
 
+# Privilege separation identity for agy workers, D-Bus, keyring, and SSH
+AGY_AGENT_USER: str = "agy-agent"
+
 # Subprocess, D-Bus, PTY, and Scheduler runtime constants
 AGY_SQLITE_BUSY_TIMEOUT_MS: int = 5000
 MCP_STDIO_TIMEOUT_SEC: int = 960

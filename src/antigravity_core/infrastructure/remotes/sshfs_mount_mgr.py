@@ -25,6 +25,12 @@ from antigravity_core.infrastructure.database.repositories import (
     SshCredentialRepository,
     TopicRepository,
 )
+from antigravity_core.infrastructure.process_ownership import (
+    agent_exec_identity,
+    chown_parents_up_to,
+    chown_path,
+    chown_tree,
+)
 
 _AI_NOTES_MARKER: Final[str] = "<!-- AI_NOTES_START -->"
 MAX_REMOTE_STAGE_FILE_BYTES: Final[int] = 2_097_152
@@ -234,6 +240,9 @@ class RemoteMountManager:
         )
         main_ssh_config.write_text(updated_text, encoding="utf-8")
         os.chmod(main_ssh_config, 0o600)
+        chown_tree(
+            ssh_dir.parent, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid
+        )
 
     async def ensure_local_ssh_keypair(self) -> str:
         """Auto-generates ~/.ssh/id_ed25519 if absent and returns the public key string."""
@@ -268,6 +277,7 @@ class RemoteMountManager:
                 path=str(pub_key),
             )
 
+        chown_tree(ssh_root, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
         if pub_key.is_file():
             return pub_key.read_text(encoding="utf-8").strip()
         raise RemoteMountError(
@@ -307,6 +317,7 @@ class RemoteMountManager:
         )
         config_file.write_text(content, encoding="utf-8")
         os.chmod(config_file, 0o600)
+        chown_path(config_file, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
         return config_file
 
     def remove_host_config(self, alias: str) -> None:
@@ -372,7 +383,13 @@ class RemoteMountManager:
         await proc.communicate()
 
     def _internal_ssh_env(self) -> dict[str, str]:
-        return {**os.environ, "AGY_INTERNAL_SSH": "1"}
+        return {
+            **os.environ,
+            "HOME": str(self._cfg.paths.agent_home_dir),
+            "USER": self._cfg.paths.agent_user,
+            "LOGNAME": self._cfg.paths.agent_user,
+            "AGY_INTERNAL_SSH": "1",
+        }
 
     async def _resolve_ssh_target_details(
         self, raw_target: str, explicit_port: int
@@ -407,6 +424,7 @@ class RemoteMountManager:
                 )
                 return eff_user, reg.alias, eff_port, cred_key, candidates
 
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
             "/usr/bin/ssh",
             "-G",
@@ -415,6 +433,8 @@ class RemoteMountManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._internal_ssh_env(),
+            user=agent_uid,
+            group=agent_gid,
         )
         stdout_bytes, _ = await proc.communicate()
         parsed_user = user_part if user_part else self._cfg.paths.system_user
@@ -435,6 +455,7 @@ class RemoteMountManager:
         self, resolved_target: str, port: int, jump_host: str
     ) -> tuple[bool, str]:
         jump_args = ["-J", jump_host] if jump_host else []
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
             "/usr/bin/ssh",
             *jump_args,
@@ -452,6 +473,8 @@ class RemoteMountManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._internal_ssh_env(),
+            user=agent_uid,
+            group=agent_gid,
         )
         _, stderr_bytes = await proc.communicate()
         stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
@@ -468,6 +491,7 @@ class RemoteMountManager:
         script_body = f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(password)}\n"
         askpass_script.write_text(script_body, encoding="utf-8")
         os.chmod(askpass_script, 0o700)
+        chown_path(askpass_script, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
 
         env = {
             **self._internal_ssh_env(),
@@ -483,6 +507,7 @@ class RemoteMountManager:
             "chmod 600 ~/.ssh/authorized_keys"
         )
         jump_args = ["-J", jump_host] if jump_host else []
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         try:
             proc = await asyncio.create_subprocess_exec(
                 "/usr/bin/ssh",
@@ -511,6 +536,8 @@ class RemoteMountManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                user=agent_uid,
+                group=agent_gid,
                 start_new_session=True,
             )
             await proc.communicate()
@@ -878,6 +905,7 @@ class RemoteMountManager:
         tmp_dir.mkdir(parents=True, exist_ok=True)
         dest_file = tmp_dir / Path(spec.remote_path).name
 
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         with dest_file.open("wb") as out_fh:
             proc = await asyncio.create_subprocess_exec(
                 "/usr/bin/ssh",
@@ -890,6 +918,8 @@ class RemoteMountManager:
                 stdout=out_fh,
                 stderr=asyncio.subprocess.PIPE,
                 env=self._internal_ssh_env(),
+                user=agent_uid,
+                group=agent_gid,
             )
             _, stderr_bytes = await proc.communicate()
 
@@ -942,6 +972,7 @@ class RemoteMountManager:
             f'  if [ -w "$check_dir" ]; then echo AGY_MISSING_RW; else echo AGY_MISSING_SUDO; fi; '
             f"fi"
         )
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
             "/usr/bin/ssh",
             *jump_args,
@@ -953,6 +984,8 @@ class RemoteMountManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._internal_ssh_env(),
+            user=agent_uid,
+            group=agent_gid,
         )
         stage_timeout = float(self._cfg.remotes.ssh_connect_timeout_sec * 3)
         try:
@@ -1000,6 +1033,11 @@ class RemoteMountManager:
                             entry_path.mkdir(parents=True, exist_ok=True)
                         else:
                             entry_path.write_bytes(b"")
+            chown_tree(
+                spec.stage_root_dir,
+                self._cfg.paths.agent_uid,
+                self._cfg.paths.agent_gid,
+            )
             async with lock:
                 self._stage_refcounts[stage_key] = (
                     self._stage_refcounts[stage_key] + 1
@@ -1034,6 +1072,8 @@ class RemoteMountManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=self._internal_ssh_env(),
+                user=agent_uid,
+                group=agent_gid,
             )
             stdin_payload = (sudo_pass + "\n").encode("utf-8") if not is_root else b""
             try:
@@ -1072,6 +1112,12 @@ class RemoteMountManager:
             spec.local_stage_path.write_bytes(body_bytes)
         else:
             spec.local_stage_path.unlink(missing_ok=True)
+        chown_parents_up_to(
+            spec.local_stage_path if existed else spec.local_stage_path.parent,
+            spec.stage_root_dir,
+            self._cfg.paths.agent_uid,
+            self._cfg.paths.agent_gid,
+        )
 
         self._staged_baselines[(topic_id, str(spec.local_stage_path))] = (
             _StagedFileBaseline(
@@ -1135,6 +1181,7 @@ class RemoteMountManager:
                     f'tmp_f="{qpath}.agy_tmp_$$" && '
                     f'cat > "$tmp_f" && mv -f "$tmp_f" {qpath}'
                 )
+                agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
                 w_proc = await asyncio.create_subprocess_exec(
                     "/usr/bin/ssh",
                     *jump_args,
@@ -1146,6 +1193,8 @@ class RemoteMountManager:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=self._internal_ssh_env(),
+                    user=agent_uid,
+                    group=agent_gid,
                 )
                 await w_proc.communicate(input=new_bytes)
                 if w_proc.returncode == 0:
@@ -1186,6 +1235,7 @@ class RemoteMountManager:
                 'cat > "$tmp_stage" && printf \'%s\' "$tmp_stage"'
             )
             commit_timeout = float(self._cfg.remotes.ssh_connect_timeout_sec * 3)
+            agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
             up_proc = await asyncio.create_subprocess_exec(
                 "/usr/bin/ssh",
                 *jump_args,
@@ -1197,6 +1247,8 @@ class RemoteMountManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=self._internal_ssh_env(),
+                user=agent_uid,
+                group=agent_gid,
             )
             try:
                 up_out, up_err = await asyncio.wait_for(
@@ -1234,6 +1286,8 @@ class RemoteMountManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=self._internal_ssh_env(),
+                user=agent_uid,
+                group=agent_gid,
             )
             stdin_pass = (sudo_pass + "\n").encode("utf-8") if not is_root else b""
             try:
@@ -1348,6 +1402,7 @@ class RemoteMountManager:
             f"echo '=== KEY DIRECTORIES ({host.remote_root_path}) ==='; ls -1 {host.remote_root_path} 2>/dev/null | head -n 30; "
             "if [ -d /shared ]; then echo '=== /shared ==='; ls -1 /shared 2>/dev/null | head -n 25; fi"
         )
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
             "/usr/bin/ssh",
             "-o",
@@ -1360,6 +1415,8 @@ class RemoteMountManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._internal_ssh_env(),
+            user=agent_uid,
+            group=agent_gid,
         )
         now_str = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
         probe_timeout = float(self._cfg.remotes.ssh_connect_timeout_sec * 3)
@@ -1388,6 +1445,7 @@ class RemoteMountManager:
         existing_notes = self._extract_existing_ai_notes(rule_path)
         full_doc = self._render_two_tier_passport(host, auto_section, existing_notes)
         rule_path.write_text(full_doc, encoding="utf-8")
+        chown_path(rule_path, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
         return rule_path
 
     def update_host_ai_notes(
@@ -1417,6 +1475,7 @@ class RemoteMountManager:
 
         full_doc = self._render_two_tier_passport(host, auto_telemetry, updated_notes)
         rule_path.write_text(full_doc, encoding="utf-8")
+        chown_path(rule_path, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
         return rule_path
 
     async def execute_remote_ssh(

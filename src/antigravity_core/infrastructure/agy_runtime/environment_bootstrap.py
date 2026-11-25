@@ -1,4 +1,5 @@
 import json
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -7,10 +8,11 @@ from loguru import logger
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import StartupValidationError
 from antigravity_core.domain.models import RemoteHost
+from antigravity_core.infrastructure.process_ownership import chown_path, chown_tree
 
 
 class AgyEnvironmentBootstrapper:
-    """Validates and synchronizes ~/.gemini/ configuration, hooks, MCP stdio_proxy, and SQLite WAL mode."""
+    """Validates and synchronizes ~/.gemini/ configuration, SSOT skills, hooks, MCP stdio_proxy, and SQLite WAL mode."""
 
     def __init__(self, static_config: StaticConfig) -> None:
         self._cfg = static_config
@@ -28,22 +30,30 @@ class AgyEnvironmentBootstrapper:
         agy_home = self._cfg.paths.agy_home_dir
         cli_dir = agy_home / "antigravity-cli"
         config_dir = agy_home / "config"
-        rules_dir = config_dir / "rules"
-        skills_dir = config_dir / "skills" / "host-onboarding"
+        hosts_dir = self._cfg.paths.hosts_passports_dir
+        skills_dir = config_dir / "skills"
 
-        for directory in (
+        agent_owned_dirs = (
+            self._cfg.paths.agent_home_dir,
+            agy_home,
             cli_dir,
             config_dir,
-            rules_dir,
+            hosts_dir,
             skills_dir,
+            self._cfg.paths.projects_dir,
             self._cfg.paths.workspaces_root_dir,
             self._cfg.paths.remotes_mount_dir,
             self._cfg.paths.inbox_dir,
             self._cfg.paths.profiles_data_dir,
             self._cfg.paths.runtime_dir,
-            self._cfg.paths.runtime_bin_dir,
+            self._cfg.paths.agent_log_dir,
+            self._cfg.paths.ssh_config_dir.parent,
             self._cfg.paths.ssh_config_dir,
             self._cfg.paths.ssh_sockets_dir,
+        )
+        for directory in (
+            *agent_owned_dirs,
+            self._cfg.paths.runtime_bin_dir,
             self._cfg.paths.log_file_path.parent,
         ):
             directory.mkdir(parents=True, exist_ok=True)
@@ -52,76 +62,77 @@ class AgyEnvironmentBootstrapper:
         self._write_settings_json(cli_dir / "settings.json")
         self._write_hooks_json(config_dir / "hooks.json")
         self._write_mcp_config_json(config_dir / "mcp_config.json")
-        self._write_onboarding_skill(skills_dir / "SKILL.md")
+        self._sync_custom_skills_from_repo(skills_dir)
         self._configure_agy_internal_sqlite_wal(cli_dir / "conversation_summaries.db")
+
+        uid = self._cfg.paths.agent_uid
+        gid = self._cfg.paths.agent_gid
+        for directory in agent_owned_dirs:
+            chown_path(directory, uid, gid)
+        chown_tree(agy_home, uid, gid)
 
     def sync_global_agents_md_host_map(self, hosts: list[RemoteHost]) -> None:
         agy_home = self._cfg.paths.agy_home_dir
         root_agents = agy_home / "AGENTS.md"
         config_agents = agy_home / "config" / "AGENTS.md"
-        rules_dir = agy_home / "config" / "rules"
+        hosts_dir = self._cfg.paths.hosts_passports_dir
+        projects_dir = self._cfg.paths.projects_dir
 
         if hosts:
             table_lines = [
-                "| SSH Host Alias (`alias`) | Address & Route | Native File Tool TRAMP Prefix | Detailed Host Passport |",
+                "| Alias | Route | TRAMP Prefix | On-Demand Passport |",
                 "| :--- | :--- | :--- | :--- |",
             ]
             for h in hosts:
                 route_note = f" (via `{h.jump_host}`)" if h.jump_host else ""
                 table_lines.append(
-                    f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}`{route_note} | `/ssh:{h.ssh_user}@{h.alias}:{h.remote_root_path}` | `{h.rule_file_path}` |"
+                    f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}`{route_note} "
+                    f"| `/ssh:{h.ssh_user}@{h.alias}:{h.remote_root_path}` | `{h.rule_file_path}` |"
                 )
             hosts_table_md = "\n".join(table_lines)
         else:
-            hosts_table_md = "*(No hosts registered yet. Call `mcp:telegram-core:register_remote_host` first when connecting to a new server!)*"
+            hosts_table_md = "*(No hosts registered yet. Call `mcp_telegram-core_register_remote_host` first.)*"
 
         content = (
-            "# Antigravity Telegram Core — LXC Brain Constitution & Live Infrastructure Map\n\n"
-            "You live inside an isolated **LXC Brain Container** (`Antigravity Telegram Core`).\n"
-            "**There are NO user projects inside this LXC container!** Your current working directory (`workspaces/topic_<id>`) "
-            "is strictly your private scratchpad for temporary files and generating charts.\n\n"
-            "## 1. Live Registered Infrastructure Map\n\n"
+            "# Antigravity Telegram Core — Agent Constitution & Infrastructure Index\n\n"
+            "You operate as non-root user `agy-agent` inside the central **Antigravity Telegram Core** LXC workstation.\n"
+            f"- **Topic scratchpad (`cwd`):** temporary files and charts for the current Telegram topic.\n"
+            f"- **Local GitHub workstation (`{projects_dir}/<repo>`):** clone and edit Git repositories natively here (`view_file`, `replace_file_content`, `rg`, `devtool check`, `git push`).\n\n"
+            "## 1. Registered Remote Hosts (On-Demand Passports)\n\n"
             f"{hosts_table_md}\n\n"
-            "## 2. Two-Stage Workflow for Remote Computers\n\n"
-            "1. **STAGE 1 — CHECK & ONBOARD NEW HOSTS FIRST (`mcp_telegram-core_register_remote_host`):**\n"
-            "   - Before working on a server, check if it is in the **Live Registered Infrastructure Map** above.\n"
-            "   - If the host is NOT in the table yet (e.g. a new server IP or an internal LAN/Slurm node discovered behind a gateway), "
-            "**IMMEDIATELY call `mcp_telegram-core_register_remote_host`**!\n"
-            '   - If the node is behind a gateway, pass `jump_host="user@<gateway_alias>"`. Never manually scrape `/root/.ssh/id_*`, never run interactive `srun` jobs to copy keys, and never inspect local `~/.ssh/config`.\n'
-            "2. **STAGE 2 — WORK DIRECTLY BY ALIAS (`/ssh:user@<alias>:/abs/path` & `ssh user@<alias>`):**\n"
-            "   - Once a host is registered, **ALWAYS address it directly by its `<alias>`** (OpenSSH handles `ProxyJump` automatically; never use manual `-J` or `|ssh:` pipes):\n"
-            "   - Native file tools (`read_file`, `write_file`, `edit_file`): "
-            "`/ssh:user@<alias>:/abs/path` (always use full absolute paths like `/home/user/...`, never use `~`).\n"
-            "   - If `read_file` returns `REMOTE FILE DOES NOT EXIST`, it simply means the file does not exist on the remote host yet — call `write_file` on `/ssh:user@<alias>:/abs/path` to create it.\n"
-            "   - Never edit files via `sed -i`, `awk`, or `perl -pi` in shell commands.\n"
-            '   - Shell commands (`run_command`): `ssh user@<alias> "command"` (write plain `sudo` inside the command when root privileges are needed).\n'
-            "   - You may manage local `/etc/systemd/system` services when asked, but NEVER inspect or touch the bot's own source code (`/srv/antigravity/app/src`), configuration (`config.yaml`, `.env`), logs, or other topics' folders.\n"
-            "   - For multi-line scripts over SSH, never nest quotes in `ssh user@<alias> \"python3 -c '...'\"`; always use `ssh user@<alias> \"python3 - << 'PYEOF'\\n...\\nPYEOF\"`.\n"
-            "   - When using `pkill -f` over SSH, bracket the first character (`pkill -f '[p]attern'`) so the SSH subshell does not kill itself.\n"
-            "   - **ASYNCHRONOUS LONG-COMMAND LAW (> 30-60s):** NEVER block `run_command` waiting for multi-minute jobs (`prep`, `md-setup`, `ORCA`, `nextflow`, long test suites). Launch them detached on the remote host with an exit-code marker:\n"
-            '     `ssh user@<alias> "setsid bash -c \'<cmd>; echo \\$? > /path/run.exit\' > /path/run.log 2>&1 < /dev/null & echo \\$! > /path/run.pid"`\n'
-            "     Then create a dual-condition sensor via `mcp_telegram-core_create_sensor` checking `test -s /path/run.exit || ! kill -0 $(cat /path/run.pid) 2>/dev/null` and IMMEDIATELY finish your turn to unblock the chat.\n"
-            "   - **EMPIRICAL VERIFICATION & NO ARBITRARY HEURISTICS:** Before reporting a bug in an audit or proposing a fix, verify flags/behavior via `--help`, documentation, or an isolated test run. Never invent arbitrary thresholds or heuristics without user confirmation. Terminate or clean up finished subagents.\n"
-            "   - **REMOTE CODE INTELLIGENCE:** If a host passport lists `code-review-graph` as installed, prefer `code-review-graph` (`detect-changes`, `query`, `impact`) over blind `grep`/`read_file` loops when auditing repositories or reviewing commits.\n"
-            "3. **DIRECT REMOTE FILE SENDING TO TELEGRAM:**\n"
-            "   - Pass TRAMP paths (`/ssh:user@<alias>:/path/to/file.png`) directly into `mcp_telegram-core_send_file_to_telegram` — never run manual `scp`.\n"
-            "4. **SELF-UPDATING INFRASTRUCTURE MEMORY (MANDATORY):**\n"
-            f"   - Each known host has a passport in `{rules_dir}/infra-<alias>.md`.\n"
-            "   - Whenever you discover a host invariant (canonical Python/conda path, container mount restriction like `/shared/`, CLI flag quirk, database, or service), IMMEDIATELY persist it via `mcp_telegram-core_update_host_knowledge` in the same turn.\n\n"
+            f"- Full host passports live on demand in `{hosts_dir}/infra-<alias>.md`. Read a host's passport with `view_file` only when working on that host.\n"
+            "- Whenever you discover a durable host invariant (Python/conda path, `/shared/` mount rule, service, or CLI quirk), immediately persist it via `mcp_telegram-core_update_host_knowledge`.\n\n"
+            "## 2. Remote SSH & TRAMP Law\n\n"
+            "1. **Onboard unknown hosts first:** If a server is not in the table above, call `mcp_telegram-core_register_remote_host` (pass `jump_host=\"user@<gateway_alias>\"` for internal LAN/cluster nodes).\n"
+            "2. **Address registered hosts by alias only:**\n"
+            "   - Native file tools (`view_file`, `write_to_file`, `replace_file_content`): `/ssh:user@<alias>:/abs/path` (always full absolute paths, never `~`).\n"
+            "   - If `view_file` reports `REMOTE FILE DOES NOT EXIST`, call `write_to_file` on `/ssh:user@<alias>:/abs/path` to create it.\n"
+            "   - Never edit files with `sed -i`, `awk -i`, or `perl -pi`.\n"
+            '   - Shell commands (`run_command`): `ssh user@<alias> "command"`.\n'
+            "   - **Sudo rule:** Write plain `sudo <cmd>` (the PTY gateway requests Telegram approval). NEVER use `sudo -n`.\n"
+            "   - **Proxmox containers:** On `proxmox`, always invoke `sudo pct exec <ctid> -- <cmd>`.\n"
+            "   - **Multi-line remote scripts:** Always use single-quoted heredoc `ssh user@<alias> \"python3 - << 'PYEOF'\\n...\\nPYEOF\"`.\n"
+            "   - **Safe `pkill`:** Bracket the first character (`pkill -f '[p]attern'`) so SSH does not kill itself.\n"
+            "3. **Asynchronous Long-Command Law (> 30-60s):** Never block `run_command` on multi-minute jobs. Launch detached with an exit-code marker:\n"
+            '   `ssh user@<alias> "setsid bash -c \'<cmd>; echo \\$? > /path/run.exit\' > /path/run.log 2>&1 < /dev/null & echo \\$! > /path/run.pid"`\n'
+            "   Then create a dual-condition sensor via `mcp_telegram-core_create_sensor` checking `test -s /path/run.exit || ! kill -0 $(cat /path/run.pid) 2>/dev/null` and finish your turn. Never claim a sensor is active unless `create_sensor` returned a real `sensor_id`.\n"
+            "4. **Code exploration & empirical verification:** When `devtool` is available in a repository, run `devtool tree --stdout` before blind file reads. Verify CLI flags and behavior empirically (`--help` or isolated test) before reporting bugs.\n"
+            "5. **Deliver files to Telegram:** Pass local or TRAMP paths (`/ssh:user@<alias>:/abs/path`) directly to `mcp_telegram-core_send_file_to_telegram`.\n"
+            "6. **Sandbox boundary:** Never inspect or touch `/srv/antigravity/app/src`, `config.yaml`, `.env`, bot logs/data, or other topics' directories.\n\n"
             "## 3. Native Eager MCP Tools (`telegram-core`)\n\n"
-            'All tools from MCP server `telegram-core` are pre-registered with `"eager": true` in your native tool declarations (`mcp_telegram-core_<tool>`). '
-            "Call them directly in a single step without reading schema files from `~/.gemini/antigravity-cli/mcp/telegram-core/`:\n"
-            "- `mcp_telegram-core_register_remote_host`\n"
-            "- `mcp_telegram-core_update_host_knowledge`\n"
-            "- `mcp_telegram-core_send_file_to_telegram`\n"
-            "- `mcp_telegram-core_schedule_task` / `mcp_telegram-core_list_scheduled_tasks` / `mcp_telegram-core_cancel_scheduled_task`\n"
-            "- `mcp_telegram-core_create_sensor` / `mcp_telegram-core_list_sensors` / `mcp_telegram-core_cancel_sensor`\n"
-            "- `mcp_telegram-core_create_workspace_topic`\n"
-            "- `mcp_telegram-core_rename_current_topic` (call on the first turn of a new topic to set a concise 3-5 word title summarizing the task in the user's language, or when asked to rename)\n"
-            "- `mcp_telegram-core_get_bot_ssh_public_key`\n"
+            "Call `mcp_telegram-core_<tool>` directly without reading schema files:\n"
+            "- `register_remote_host`, `update_host_knowledge`, `get_bot_ssh_public_key`\n"
+            "- `send_file_to_telegram`\n"
+            "- `schedule_task`, `list_scheduled_tasks`, `cancel_scheduled_task`\n"
+            "- `create_sensor`, `list_sensors`, `cancel_sensor`\n"
+            "- `create_workspace_topic`, `rename_current_topic` (call on turn 1 of a new topic with a concise 3-5 word title in the user's language)\n"
         )
         root_agents.write_text(content, encoding="utf-8")
         config_agents.write_text(content, encoding="utf-8")
+        uid = self._cfg.paths.agent_uid
+        gid = self._cfg.paths.agent_gid
+        chown_path(root_agents, uid, gid)
+        chown_path(config_agents, uid, gid)
 
     def _write_settings_json(self, settings_path: Path) -> None:
         workspaces_dir = str(self._cfg.paths.workspaces_root_dir)
@@ -152,7 +163,11 @@ class AgyEnvironmentBootstrapper:
             "showFeedbackSurvey": False,
             "notifications": False,
             "historySize": -1,
-            "trustedWorkspaces": [workspaces_dir, inbox_dir],
+            "trustedWorkspaces": [
+                workspaces_dir,
+                inbox_dir,
+                str(self._cfg.paths.projects_dir),
+            ],
             "permissions": {
                 "allow": [
                     "read_file(*)",
@@ -186,7 +201,7 @@ class AgyEnvironmentBootstrapper:
             "read_file|write_file|edit_file|view_file|write_to_file|"
             "replace_file_content|multi_replace_file_content"
         )
-        payload = {
+        payload: dict[str, dict[str, bool | list[dict[str, str | list[dict[str, str | int]]]]]] = {
             "enforce-native-file-tools": {
                 "enabled": True,
                 "PreToolUse": [
@@ -215,6 +230,22 @@ class AgyEnvironmentBootstrapper:
                 ],
             }
         }
+        if self._cfg.paths.rtk_binary_path is not None:
+            payload["rtk-output-compression"] = {
+                "enabled": True,
+                "PreToolUse": [
+                    {
+                        "matcher": "run_command",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": f"{self._cfg.paths.rtk_binary_path} hook antigravity",
+                                "timeout": 10,
+                            }
+                        ],
+                    }
+                ],
+            }
         hooks_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     def _write_mcp_config_json(self, mcp_config_path: Path) -> None:
@@ -253,22 +284,39 @@ class AgyEnvironmentBootstrapper:
             json.dumps(payload, indent=2) + "\n", encoding="utf-8"
         )
 
-    def _write_onboarding_skill(self, skill_path: Path) -> None:
-        rules_dir = self._cfg.paths.agy_home_dir / "config" / "rules"
-        content = (
-            "---\n"
-            "name: host-onboarding\n"
-            'description: "Onboard a new remote SSH host via mcp_telegram-core_register_remote_host, '
-            'inspect its system profile, and update ~/.gemini/config/rules/infra-<alias>.md."\n'
-            "---\n\n"
-            "# Host Onboarding Procedure\n\n"
-            "1. Call `mcp_telegram-core_register_remote_host` with `alias`, `hostname_or_ip`, "
-            "`ssh_user`, `ssh_port`, `remote_root_path`, and `jump_host` (if behind a gateway).\n"
-            "2. Probe the server via `run_command`: "
-            '`ssh <alias> "uname -a && free -h && df -hT && docker ps 2>/dev/null"`.\n'
-            f"3. Call `mcp_telegram-core_update_host_knowledge` to save architectural notes into `{rules_dir}/infra-<alias>.md`.\n"
+    def _sync_custom_skills_from_repo(self, dest_skills_dir: Path) -> None:
+        """Mirrors canonical skills from agy_customizations/skills/ into ~/.gemini/config/skills/ (SSOT)."""
+        src_skills_dir = self._cfg.paths.project_root_dir / "agy_customizations" / "skills"
+        if not src_skills_dir.is_dir():
+            raise StartupValidationError(
+                f"Canonical skills directory not found at {src_skills_dir}"
+            )
+
+        desired_names: set[str] = set()
+        for entry in sorted(src_skills_dir.iterdir()):
+            if not entry.is_dir() or not (entry / "SKILL.md").is_file():
+                continue
+            desired_names.add(entry.name)
+            target_dir = dest_skills_dir / entry.name
+            if target_dir.exists() or target_dir.is_symlink():
+                if target_dir.is_symlink() or target_dir.is_file():
+                    target_dir.unlink()
+                else:
+                    shutil.rmtree(target_dir)
+            shutil.copytree(entry, target_dir)
+
+        for existing in list(dest_skills_dir.iterdir()):
+            if existing.name not in desired_names:
+                if existing.is_symlink() or existing.is_file():
+                    existing.unlink()
+                else:
+                    shutil.rmtree(existing)
+
+        logger.info(
+            "Synchronized canonical custom skills from repository",
+            count=len(desired_names),
+            skills=sorted(desired_names),
         )
-        skill_path.write_text(content, encoding="utf-8")
 
     def _configure_agy_internal_sqlite_wal(self, db_path: Path) -> None:
         # Errata Patch #4: Switch internal agy conversation_summaries.db into non-blocking WAL mode
