@@ -116,7 +116,7 @@ class AgyEnvironmentBootstrapper:
             "   Then create a dual-condition sensor via `mcp_telegram-core_create_sensor` checking `test -s /path/run.exit || ! kill -0 $(cat /path/run.pid) 2>/dev/null` and finish your turn. Never claim a sensor is active unless `create_sensor` returned a real `sensor_id`.\n"
             "4. **Code exploration & empirical verification:** When `devtool` is available in a repository, run `devtool tree --stdout` before blind file reads. Verify CLI flags and behavior empirically (`--help` or isolated test) before reporting bugs.\n"
             "5. **Deliver files to Telegram:** Pass local or TRAMP paths (`/ssh:user@<alias>:/abs/path`) directly to `mcp_telegram-core_send_file_to_telegram`.\n"
-            "6. **Sandbox boundary:** Never inspect or touch `/opt/antigravity/app`, `/etc/antigravity`, `/var/lib/antigravity`, or other topics' directories.\n\n"
+            "6. **Sandbox boundary:** Never inspect or touch `/opt/antigravity/app`, `/etc/antigravity-core`, `/var/lib/antigravity`, or other topics' directories.\n\n"
             "## 3. Native Eager MCP Tools (`telegram-core`)\n\n"
             "Call `mcp_telegram-core_<tool>` directly without reading schema files:\n"
             "- `register_remote_host`, `update_host_knowledge`, `get_bot_ssh_public_key`\n"
@@ -176,8 +176,8 @@ class AgyEnvironmentBootstrapper:
                     "schedule(*)",
                     "write_file(/etc/shadow)",
                     "write_file(/root/.ssh/authorized_keys)",
-                    "read_file(/etc/antigravity/*)",
-                    "write_file(/etc/antigravity/*)",
+                    "read_file(/etc/antigravity-core/*)",
+                    "write_file(/etc/antigravity-core/*)",
                     "read_file(/var/lib/antigravity/*)",
                     "write_file(/var/lib/antigravity/*)",
                 ],

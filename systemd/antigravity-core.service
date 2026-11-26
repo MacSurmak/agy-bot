@@ -11,9 +11,9 @@ Group=agy-agent
 WorkingDirectory=/opt/antigravity/app
 RuntimeDirectory=agy
 RuntimeDirectoryMode=0750
-Environment="ANTIGRAVITY_CONFIG=/etc/antigravity/config.yaml"
+Environment="ANTIGRAVITY_CONFIG=/etc/antigravity-core/config.yaml"
 Environment="PYTHONUNBUFFERED=1"
-ExecStartPre=/usr/bin/docker compose --project-name app --env-file /etc/antigravity/.env -f /opt/antigravity/app/docker-compose.yml up -d --wait
+ExecStartPre=/usr/bin/docker compose --project-name app --env-file /etc/antigravity-core/.env -f /opt/antigravity/app/docker-compose.yml up -d --wait
 ExecStartPre=/opt/antigravity/venv/bin/alembic -c /opt/antigravity/app/alembic.ini upgrade head
 ExecStart=/opt/antigravity/venv/bin/python -m antigravity_core.main
 Restart=always

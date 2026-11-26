@@ -38,7 +38,7 @@ _PATH_ARG_KEYS: Final[tuple[str, ...]] = (
 _AGENT_ROOT: Final[Path] = Path(pwd.getpwuid(os.geteuid()).pw_dir).resolve()
 
 _FORBIDDEN_BOT_INTERNAL_PATHS: Final[tuple[str, ...]] = (
-    "/etc/antigravity",
+    "/etc/antigravity-core",
     "/var/lib/antigravity",
     "/opt/antigravity/app",
 )

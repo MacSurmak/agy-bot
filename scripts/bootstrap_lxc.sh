@@ -94,7 +94,7 @@ if ! id -u agy-agent >/dev/null 2>&1; then
     useradd -m -s /bin/bash -d /home/agy-agent agy-agent
 fi
 
-install -d -m 0700 -o root -g root /etc/antigravity /var/lib/antigravity /var/lib/antigravity/data /var/lib/antigravity/logs
+install -d -m 0700 -o root -g root /etc/antigravity-core /var/lib/antigravity /var/lib/antigravity/data /var/lib/antigravity/logs
 install -d -m 0750 -o root -g agy-agent /run/agy
 install -d -m 0700 -o agy-agent -g agy-agent \
     /home/agy-agent \
@@ -117,4 +117,4 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bash "${SCRIPT_DIR}/deploy.sh" --no-restart
 
 echo "==> Provisioning complete! Python version in venv: $(/opt/antigravity/venv/bin/python --version)"
-echo "==> Next: place .env and config.yaml in /etc/antigravity (chmod 0600, root:root), then run: sudo systemctl enable --now antigravity-core"
+echo "==> Next: place .env and config.yaml in /etc/antigravity-core (chmod 0600, root:root), then run: sudo systemctl enable --now antigravity-core"

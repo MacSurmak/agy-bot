@@ -40,7 +40,7 @@ AGY_AGENT_USER: str = "agy-agent"
 FHS_OPT_ROOT: str = "/opt/antigravity"
 FHS_APP_DIR: str = "/opt/antigravity/app"
 FHS_BIN_DIR: str = "/opt/antigravity/bin"
-FHS_ETC_DIR: str = "/etc/antigravity"
+FHS_ETC_DIR: str = "/etc/antigravity-core"
 FHS_VAR_LIB_DIR: str = "/var/lib/antigravity"
 FHS_RUN_DIR: str = "/run/agy"
 
