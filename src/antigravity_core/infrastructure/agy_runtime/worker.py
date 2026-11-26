@@ -153,6 +153,7 @@ class TopicWorker:
         worker_env = {
             **self._account_env,
             "PATH": f"{self._cfg.paths.runtime_bin_dir}:{base_path}",
+            "ANTIGRAVITY_APP_ROOT": str(self._cfg.paths.project_root_dir),
             "AGY_CURRENT_TOPIC_ID": str(self._topic_id),
             "AGY_EXECUTION_MODE": self._signature.execution_mode.value,
             "AGY_ACCOUNT_SLUG": self._signature.account_slug,

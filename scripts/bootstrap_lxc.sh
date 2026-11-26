@@ -20,7 +20,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 
-echo "==> [1/4] Installing base OS packages..."
+echo "==> [1/6] Installing base OS packages..."
 apt-get update -y
 apt-get install -y \
     ca-certificates \
@@ -37,12 +37,13 @@ apt-get install -y \
     sshfs \
     fuse3 \
     git \
+    rsync \
     ripgrep \
     fd-find \
     jq \
     sqlite3
 
-echo "==> [2/4] Installing official Docker CE & Docker Compose plugin..."
+echo "==> [2/6] Installing official Docker CE & Docker Compose plugin..."
 if ! docker compose version >/dev/null 2>&1; then
     # shellcheck source=/dev/null
     source /etc/os-release
@@ -67,17 +68,15 @@ if ! docker compose version >/dev/null 2>&1; then
     systemctl enable --now docker.service
 fi
 
-echo "==> [3/4] Provisioning Python 3.14 virtual environment via uv..."
+echo "==> [3/6] Provisioning Python 3.14 virtual environment via uv..."
 if ! command -v uv >/dev/null 2>&1 && [[ ! -x /root/.local/bin/uv ]]; then
     curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 fi
 
 UV_BIN="$(command -v uv || echo /usr/local/bin/uv)"
 "${UV_BIN}" venv --python 3.14 --clear /srv/antigravity/venv
-export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
-"${UV_BIN}" pip install --python /srv/antigravity/venv/bin/python -e /srv/antigravity/app
 
-echo "==> [4/5] Installing Google Antigravity CLI (agy)..."
+echo "==> [4/6] Installing Google Antigravity CLI (agy)..."
 if ! command -v agy >/dev/null 2>&1 && [[ ! -x /usr/local/bin/agy ]]; then
     curl -fsSL https://antigravity.google/cli/install.sh | bash
     if [[ -x /root/.local/bin/agy ]]; then
@@ -116,23 +115,14 @@ chown -R agy-agent:agy-agent \
     /srv/antigravity/app/runtime_data/agent_logs
 
 chown -R root:root \
-    /srv/antigravity/app/src \
-    /srv/antigravity/app/migrations \
     /srv/antigravity/app/runtime_data/logs \
     /srv/antigravity/app/runtime_data/data
 
 chmod 0700 /run/agy /home/agy-agent/.ssh /srv/antigravity/app/runtime_data/logs /srv/antigravity/app/runtime_data/data
-if [[ -f /srv/antigravity/app/.env ]]; then
-    chown root:root /srv/antigravity/app/.env
-    chmod 0600 /srv/antigravity/app/.env
-fi
-if [[ -f /srv/antigravity/app/config.yaml ]]; then
-    chown root:root /srv/antigravity/app/config.yaml
-    chmod 0600 /srv/antigravity/app/config.yaml
-fi
 
-echo "==> [6/6] Reconciling declarative agy harness (RTK + plugins)..."
+echo "==> [6/6] Deploying release into /srv/antigravity/app and reconciling harness..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-bash "${SCRIPT_DIR}/setup_harness.sh"
+bash "${SCRIPT_DIR}/deploy.sh" --no-restart
 
 echo "==> Provisioning complete! Python version in venv: $(/srv/antigravity/venv/bin/python --version)"
+echo "==> Next: place .env and config.yaml in /srv/antigravity/app (chmod 0600, root:root), then run: sudo systemctl enable --now antigravity-core"

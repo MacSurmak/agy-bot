@@ -35,7 +35,11 @@ _PATH_ARG_KEYS: Final[tuple[str, ...]] = (
     "SearchPath",
     "SearchDirectory",
 )
-_REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
+_REPO_ROOT: Final[Path] = (
+    Path(os.environ["ANTIGRAVITY_APP_ROOT"]).resolve()
+    if "ANTIGRAVITY_APP_ROOT" in os.environ
+    else Path("/srv/antigravity/app").resolve()
+)
 _RUNTIME_DATA_DIR: Final[Path] = (_REPO_ROOT / "runtime_data").resolve()
 
 _FORBIDDEN_BOT_INTERNAL_PATHS: Final[tuple[str, ...]] = (
