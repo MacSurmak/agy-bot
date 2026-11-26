@@ -13,6 +13,19 @@ if [[ "${EUID}" -ne 0 ]]; then
     exit 1
 fi
 
+UPDATE_PLUGINS=0
+for arg in "$@"; do
+    case "${arg}" in
+        --update-plugins)
+            UPDATE_PLUGINS=1
+            ;;
+        *)
+            echo "ERROR: Unknown argument '${arg}'. Supported: --update-plugins" >&2
+            exit 1
+            ;;
+    esac
+done
+
 AGENT_USER="agy-agent"
 if ! id -u "${AGENT_USER}" >/dev/null 2>&1; then
     echo "ERROR: System user '${AGENT_USER}' not found. Run scripts/bootstrap_lxc.sh first." >&2
@@ -42,10 +55,12 @@ declare -A DESIRED_PLUGINS=(
     ["ponytail"]="https://github.com/DietrichGebert/ponytail"
 )
 
+declare -A INSTALLED_PLUGINS=()
 INSTALLED_LIST="$(su -s /bin/bash - "${AGENT_USER}" -c "${AGY_BIN} plugin list" 2>/dev/null || true)"
 while IFS= read -r line; do
     if [[ "${line}" =~ ^-\ ([a-zA-Z0-9._-]+)\ \( ]]; then
         pname="${BASH_REMATCH[1]}"
+        INSTALLED_PLUGINS["${pname}"]=1
         if [[ -z "${DESIRED_PLUGINS[${pname}]+x}" ]]; then
             echo "    Removing undeclared plugin: ${pname}"
             su -s /bin/bash - "${AGENT_USER}" -c "${AGY_BIN} plugin uninstall ${pname}" \
@@ -56,7 +71,11 @@ done <<< "${INSTALLED_LIST}"
 
 for pname in "${!DESIRED_PLUGINS[@]}"; do
     repo_url="${DESIRED_PLUGINS[${pname}]}"
-    echo "    Ensuring plugin '${pname}' (${repo_url})..."
+    if [[ -n "${INSTALLED_PLUGINS[${pname}]+x}" && "${UPDATE_PLUGINS}" -eq 0 ]]; then
+        echo "    Plugin '${pname}' already installed (skip; pass --update-plugins to refresh)."
+        continue
+    fi
+    echo "    Installing plugin '${pname}' (${repo_url})..."
     su -s /bin/bash - "${AGENT_USER}" -c "${AGY_BIN} plugin install ${repo_url}"
 done
 

@@ -15,13 +15,17 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 RESTART_SERVICE=1
+HARNESS_ARGS=()
 for arg in "$@"; do
     case "${arg}" in
         --no-restart)
             RESTART_SERVICE=0
             ;;
+        --update-plugins)
+            HARNESS_ARGS+=("--update-plugins")
+            ;;
         *)
-            echo "ERROR: Unknown argument '${arg}'. Supported: --no-restart" >&2
+            echo "ERROR: Unknown argument '${arg}'. Supported: --no-restart, --update-plugins" >&2
             exit 1
             ;;
     esac
@@ -106,7 +110,7 @@ install -m 0644 "${UNIT_SRC}" "${UNIT_DST}"
 systemctl daemon-reload
 
 echo "==> [4/5] Reconciling declarative agy harness (RTK + plugins)..."
-bash "${APP_DIR}/scripts/setup_harness.sh"
+bash "${APP_DIR}/scripts/setup_harness.sh" "${HARNESS_ARGS[@]}"
 
 if [[ "${RESTART_SERVICE}" -eq 1 ]]; then
     echo "==> [5/5] Restarting antigravity-core.service..."
