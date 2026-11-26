@@ -25,6 +25,7 @@ from antigravity_core.infrastructure.database.repositories import (
     SensorRepository,
     SettingsRepository,
 )
+from antigravity_core.infrastructure.process_ownership import agent_exec_identity
 from antigravity_core.lexicon import get_lexicon
 
 SensorWakeAgentCallback: TypeAlias = Callable[[int, str, str, UUID | None, int | None], Awaitable[None]]
@@ -271,6 +272,13 @@ class EventSensorService:
                     re.IGNORECASE,
                 )
 
+                agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
+                sensor_env = {
+                    "PATH": f"{self._cfg.paths.runtime_bin_dir}:{self._cfg.paths.system_path_env}",
+                    "HOME": str(self._cfg.paths.agent_home_dir),
+                    "USER": self._cfg.paths.agent_user,
+                    "LOGNAME": self._cfg.paths.agent_user,
+                }
                 proc = await asyncio.create_subprocess_exec(
                     "bash",
                     "-c",
@@ -278,6 +286,9 @@ class EventSensorService:
                     stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
+                    env=sensor_env,
+                    user=agent_uid,
+                    group=agent_gid,
                     start_new_session=True,
                 )
                 self._procs[sensor.id] = proc
@@ -342,6 +353,13 @@ class EventSensorService:
     async def _exec_probe_command(
         self, sensor_id: UUID, command: str, timeout_sec: float
     ) -> tuple[int, str]:
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
+        sensor_env = {
+            "PATH": f"{self._cfg.paths.runtime_bin_dir}:{self._cfg.paths.system_path_env}",
+            "HOME": str(self._cfg.paths.agent_home_dir),
+            "USER": self._cfg.paths.agent_user,
+            "LOGNAME": self._cfg.paths.agent_user,
+        }
         proc = await asyncio.create_subprocess_exec(
             "bash",
             "-c",
@@ -349,6 +367,9 @@ class EventSensorService:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=sensor_env,
+            user=agent_uid,
+            group=agent_gid,
             start_new_session=True,
         )
         self._procs[sensor_id] = proc

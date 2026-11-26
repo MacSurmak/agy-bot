@@ -144,10 +144,10 @@ class AgyEnvironmentBootstrapper:
                 loaded = json.loads(raw_existing)
                 if isinstance(loaded, dict):
                     existing_settings = loaded
+                    existing_settings.pop("$schema", None)
 
         payload = {
             **existing_settings,
-            "$schema": "https://antigravity.google/schemas/v1/settings.json",
             "agentMode": "accept-edits",
             "toolPermission": "always-proceed",
             "allowNonWorkspaceAccess": True,

@@ -32,6 +32,7 @@ from antigravity_core.infrastructure.database.repositories import (
     SettingsRepository,
     TopicRepository,
 )
+from antigravity_core.infrastructure.process_ownership import as_agent_identity
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
 from antigravity_core.lexicon import UiLexicon, get_lexicon
 from antigravity_core.presentation.formatters import (
@@ -348,21 +349,24 @@ class WorkspaceTopicUI:
         )
 
     async def initialize_created_topic(self, topic_id: int, assigned_dir: str) -> None:
-        Path(assigned_dir).mkdir(parents=True, exist_ok=True)
+        with as_agent_identity(self._cfg.paths):
+            Path(assigned_dir).mkdir(parents=True, exist_ok=True)
         await self._topic_repo.update_workspace_path(topic_id, assigned_dir)
         await self.refresh_pinned_card(topic_id)
 
     async def ensure_topic_registered(self, topic_id: int) -> ForumTopic:
         existing = await self._topic_repo.get_topic(topic_id)
         if existing is not None:
-            Path(existing.workspace_path).mkdir(parents=True, exist_ok=True)
+            with as_agent_identity(self._cfg.paths):
+                Path(existing.workspace_path).mkdir(parents=True, exist_ok=True)
             return existing
 
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
         default_account = await self._account_repo.get_default_account()
         default_dir = self._cfg.paths.workspaces_root_dir / f"topic_{topic_id}"
-        default_dir.mkdir(parents=True, exist_ok=True)
+        with as_agent_identity(self._cfg.paths):
+            default_dir.mkdir(parents=True, exist_ok=True)
 
         topic = await self._topic_repo.create_topic(
             topic_id=topic_id,
@@ -810,7 +814,8 @@ class WorkspaceTopicUI:
         settings = await self._settings_repo.load_settings()
         lex = get_lexicon(settings.ui_language)
         custom_path = Path(prompt.strip()).expanduser().resolve()
-        custom_path.mkdir(parents=True, exist_ok=True)
+        with as_agent_identity(self._cfg.paths):
+            custom_path.mkdir(parents=True, exist_ok=True)
         await self._topic_repo.update_workspace_path(topic_id, str(custom_path))
         await self._pool.evict_topic_worker(topic_id)
         await self.refresh_pinned_card(topic_id)
@@ -1320,7 +1325,8 @@ class WorkspaceTopicUI:
             return True
         if action == "confirm_dir":
             topic = await self._topic_repo.get_topic_strict(topic_id)
-            Path(topic.workspace_path).mkdir(parents=True, exist_ok=True)
+            with as_agent_identity(self._cfg.paths):
+                Path(topic.workspace_path).mkdir(parents=True, exist_ok=True)
             await event.edit(
                 lex.ws_dir_confirmed_msg.format(workspace_path=topic.workspace_path),
                 buttons=None,
