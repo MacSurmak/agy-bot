@@ -37,6 +37,10 @@ class AgyEnvironmentBootstrapper:
             self._cfg.paths.agent_home_dir,
             agy_home,
             cli_dir,
+            cli_dir / "brain",
+            cli_dir / "conversations",
+            cli_dir / "annotations",
+            cli_dir / "cache",
             config_dir,
             hosts_dir,
             skills_dir,
@@ -69,7 +73,17 @@ class AgyEnvironmentBootstrapper:
         gid = self._cfg.paths.agent_gid
         for directory in agent_owned_dirs:
             chown_path(directory, uid, gid)
-        chown_tree(agy_home, uid, gid)
+        for recursive_root in (
+            agy_home,
+            self._cfg.paths.projects_dir,
+            self._cfg.paths.workspaces_root_dir,
+            self._cfg.paths.inbox_dir,
+            self._cfg.paths.profiles_data_dir,
+            self._cfg.paths.runtime_dir,
+            self._cfg.paths.agent_log_dir,
+            self._cfg.paths.ssh_config_dir.parent,
+        ):
+            chown_tree(recursive_root, uid, gid)
 
     def sync_global_agents_md_host_map(self, hosts: list[RemoteHost]) -> None:
         agy_home = self._cfg.paths.agy_home_dir

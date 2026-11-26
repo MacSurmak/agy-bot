@@ -103,8 +103,10 @@ class KeyringProfileManager:
         global_gemini = self._cfg.paths.agy_home_dir
         global_cli = global_gemini / "antigravity-cli"
 
+        global_projects = global_home / "projects"
         symlinks: list[tuple[Path, Path]] = [
             (acc_home / ".ssh", global_home / ".ssh"),
+            (acc_home / "projects", global_projects),
             (acc_gemini / "AGENTS.md", global_gemini / "AGENTS.md"),
             (acc_gemini / "config", global_gemini / "config"),
             (acc_cli / "settings.json", global_cli / "settings.json"),
@@ -117,6 +119,7 @@ class KeyringProfileManager:
             (acc_cli / "annotations", global_cli / "annotations"),
             (acc_cli / "cache", global_cli / "cache"),
         ]
+        global_projects.mkdir(parents=True, exist_ok=True)
         (global_cli / "brain").mkdir(parents=True, exist_ok=True)
         (global_cli / "conversations").mkdir(parents=True, exist_ok=True)
         (global_cli / "annotations").mkdir(parents=True, exist_ok=True)
@@ -149,6 +152,11 @@ class KeyringProfileManager:
         global_proj = global_cli / "cache" / "default_project_id.txt"
         if not default_proj.is_file() and global_proj.is_file():
             default_proj.write_bytes(global_proj.read_bytes())
+
+        uid = self._cfg.paths.agent_uid
+        gid = self._cfg.paths.agent_gid
+        chown_tree(global_cli, uid, gid)
+        chown_path(global_projects, uid, gid)
 
         return acc_home
 

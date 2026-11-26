@@ -216,30 +216,33 @@ class RemoteMountManager:
             main_ssh_config.parent.mkdir(parents=True, exist_ok=True)
             main_ssh_config.write_text(f"{include_line}\n\n", encoding="utf-8")
             os.chmod(main_ssh_config, 0o600)
-            return
+        else:
+            existing_text = main_ssh_config.read_text(encoding="utf-8")
+            first_non_empty = next(
+                (
+                    ln.strip()
+                    for ln in existing_text.splitlines()
+                    if ln.strip() and not ln.strip().startswith("#")
+                ),
+                "",
+            )
+            if not (
+                first_non_empty.startswith("Include ")
+                and "config.d/" in first_non_empty
+            ):
+                cleaned_lines = [
+                    ln
+                    for ln in existing_text.splitlines()
+                    if not (
+                        ln.strip().startswith("Include ") and "config.d/" in ln.strip()
+                    )
+                ]
+                updated_text = (
+                    f"{include_line}\n\n" + "\n".join(cleaned_lines).lstrip("\n") + "\n"
+                )
+                main_ssh_config.write_text(updated_text, encoding="utf-8")
+                os.chmod(main_ssh_config, 0o600)
 
-        existing_text = main_ssh_config.read_text(encoding="utf-8")
-        first_non_empty = next(
-            (
-                ln.strip()
-                for ln in existing_text.splitlines()
-                if ln.strip() and not ln.strip().startswith("#")
-            ),
-            "",
-        )
-        if first_non_empty.startswith("Include ") and "config.d/" in first_non_empty:
-            return
-
-        cleaned_lines = [
-            ln
-            for ln in existing_text.splitlines()
-            if not (ln.strip().startswith("Include ") and "config.d/" in ln.strip())
-        ]
-        updated_text = (
-            f"{include_line}\n\n" + "\n".join(cleaned_lines).lstrip("\n") + "\n"
-        )
-        main_ssh_config.write_text(updated_text, encoding="utf-8")
-        os.chmod(main_ssh_config, 0o600)
         chown_tree(
             ssh_dir.parent, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid
         )
@@ -255,6 +258,7 @@ class RemoteMountManager:
         pub_key = ssh_root / "id_ed25519.pub"
 
         if not priv_key.is_file() or not pub_key.is_file():
+            agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
             proc = await asyncio.create_subprocess_exec(
                 "ssh-keygen",
                 "-t",
@@ -268,6 +272,9 @@ class RemoteMountManager:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=self._internal_ssh_env(),
+                user=agent_uid,
+                group=agent_gid,
             )
             await proc.communicate()
             if priv_key.is_file():
@@ -327,8 +334,9 @@ class RemoteMountManager:
 
     async def verify_ssh_connectivity(self, host: RemoteHost) -> None:
         self.write_ssh_config_entry(host)
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         proc = await asyncio.create_subprocess_exec(
-            "ssh",
+            "/usr/bin/ssh",
             "-o",
             "BatchMode=yes",
             "-o",
@@ -338,6 +346,9 @@ class RemoteMountManager:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=self._internal_ssh_env(),
+            user=agent_uid,
+            group=agent_gid,
         )
         ssh_timeout = float(
             self._cfg.remotes.ssh_connect_timeout_sec
@@ -1341,6 +1352,7 @@ class RemoteMountManager:
                 ai_notes_md="- *(Add architectural notes, project paths, and service details here via `update_host_knowledge`.)*",
             )
             rule_path.write_text(skeleton, encoding="utf-8")
+        chown_path(rule_path, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
         return rule_path
 
     @staticmethod
@@ -1492,8 +1504,12 @@ class RemoteMountManager:
 
         effective_timeout = float(max(5, min(3600, timeout_sec)))
 
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         if host is None:
             local_scratch_dir.mkdir(parents=True, exist_ok=True)
+            chown_path(
+                local_scratch_dir, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid
+            )
             proc = await asyncio.create_subprocess_exec(
                 "bash",
                 "-c",
@@ -1502,6 +1518,9 @@ class RemoteMountManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(local_scratch_dir),
+                env=self._internal_ssh_env(),
+                user=agent_uid,
+                group=agent_gid,
                 start_new_session=True,
             )
         else:
@@ -1518,6 +1537,8 @@ class RemoteMountManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=self._internal_ssh_env(),
+                user=agent_uid,
+                group=agent_gid,
                 start_new_session=True,
             )
 

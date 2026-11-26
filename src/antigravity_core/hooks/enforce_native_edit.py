@@ -1,10 +1,11 @@
 import json
 import os
+import pwd
 import re
 import socket
 import sys
-from typing import Final
 from pathlib import Path
+from typing import Final
 
 _WRITE_TOOLS: Final[frozenset[str]] = frozenset(
     {
@@ -58,6 +59,7 @@ _FORBIDDEN_BOT_INTERNAL_PATHS: Final[tuple[str, ...]] = (
 )
 
 _AGENT_HOME: Final[Path] = Path.home().resolve()
+_REAL_AGENT_HOME: Final[Path] = Path(pwd.getpwuid(os.geteuid()).pw_dir).resolve()
 
 _ALLOWED_LOCAL_WRITE_ROOTS: Final[tuple[Path, ...]] = (
     (_RUNTIME_DATA_DIR / "workspaces").resolve(),
@@ -67,6 +69,9 @@ _ALLOWED_LOCAL_WRITE_ROOTS: Final[tuple[Path, ...]] = (
     (_AGENT_HOME / "projects").resolve(),
     (_AGENT_HOME / ".gemini" / "config" / "hosts").resolve(),
     (_AGENT_HOME / ".gemini" / "config" / "skills").resolve(),
+    (_REAL_AGENT_HOME / "projects").resolve(),
+    (_REAL_AGENT_HOME / ".gemini" / "config" / "hosts").resolve(),
+    (_REAL_AGENT_HOME / ".gemini" / "config" / "skills").resolve(),
     Path("/tmp"),
 )
 
