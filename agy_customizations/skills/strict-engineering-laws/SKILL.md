@@ -1,81 +1,84 @@
 ---
 name: strict-engineering-laws
-description: "Use when writing, refactoring, or auditing source code in any programming language to enforce mandatory engineering invariants: Fail-Fast, zero hidden defaults or fallbacks, strict DAG top-level imports, SSOT, zero stubs, total static typing, and devtool/linter gate compliance. Complementary to process skills (planning, TDD, debugging)."
+description: "Use when writing, refactoring, or auditing code to enforce Fail-Fast, zero defaults/fallbacks, static typing, SSOT, and devtool gates. Do NOT use for prose."
+metadata:
+  author: MacSurmak
+  tags:
+    - engineering
+    - code-quality
+    - typing
+    - fail-fast
+    - devtool
 ---
 
 # Strict Engineering Laws & Code Invariants
 
-This skill defines **non-negotiable code quality invariants** applied whenever writing, editing, or reviewing code. It does not replace workflow skills (such as planning, TDD, or systematic debugging); it constrains the exact code you are allowed to produce during those workflows.
+## Purpose
+
+Defines non-negotiable code quality invariants enforced whenever writing, editing, refactoring, or auditing source code in any language. Complements process skills (planning, TDD, debugging) by constraining the code produced.
 
 ## Prerequisites
 
-- Read the actual target source files in full before proposing or applying any change; never edit blindly.
-- Check whether `devtool`, `ruff`, or `pyright` is installed in the target repository before claiming verification.
+- Read target source files in full before proposing or applying edits; never patch blindly.
+- Check whether `devtool`, `ruff`, or `pyright` is available in the target repository before claiming verification.
 
-## Mandatory Code Invariants
+## Instructions
 
-1. **Proportionality & YAGNI:**
-   - Match structure strictly to task scope. Do not introduce factories, wrappers, registries, or broker abstractions where a pure function or single module suffices.
-   - Apply the same typing, Fail-Fast, and determinism rules to small scripts as to core services.
+1. **Proportionality and YAGNI:**
+   - Match structure strictly to task scope; avoid unnecessary factories, wrappers, or registries where a pure function or single module suffices.
+   - Apply identical typing, Fail-Fast, and determinism rules to small utility scripts and core services alike.
 2. **Fail-Fast (Zero Silent Failures):**
-   - Fail loudly and deterministically on any violated data contract, schema mismatch, or non-zero subprocess exit code.
+   - Fail loudly and deterministically on violated data contracts, schema mismatches, or non-zero subprocess exit codes.
    - Never mask errors with sentinel fallbacks (`0`, `float('nan')`, `None`, empty collections, or zero-byte files).
-   - Ban bare `except:`, broad `except Exception:` / `except BaseException:`, and multi-exception catch-alls that swallow errors. Every `except` block must end with an explicit `raise` (no `pass`, `continue`, or fallback return). Ban `sys.exit()` outside `main()`.
-3. **Configuration Strictness (Zero Defaults, Fallbacks & Magic Constants):**
-   - Ban default parameter values in new function and method signatures (including `= None`) — require explicit arguments from callers.
+   - Ban bare `except:`, broad `except Exception:` / `except BaseException:`, and catch-alls that swallow errors. Every `except` block must end with an explicit `raise` (no `pass`, `continue`, or fallback return). Ban `sys.exit()` outside `main()`.
+3. **Configuration Strictness (Zero Defaults, Fallbacks, or Magic Constants):**
+   - Ban default parameter values in new function and method signatures (including `= None`) so callers pass every argument explicitly.
    - Ban `.get(key, default)`, `os.getenv()`, `os.environ.get()`, `.setdefault()`, 3-arg `getattr()`, and `val or []` fallback expressions on contracts.
    - Ban magic numbers in logic (`PLR2004`). Store environment/business parameters in validated startup config and algorithmic constants in `Final[...]` module constants.
-4. **Root-Cause Eradication (Zero FS Heuristics):**
-   - Trace failures to their root contract and fix the cause rather than adding defensive checks downstream.
-   - Ban filesystem and filename heuristics (`glob`, `fnmatch`, `.rglob()`, `getmtime`, regex parsing of state from filenames).
-5. **SSOT & Stateless Purity:**
-   - Store stateful data transactionally (e.g., ACID SQL/3NF) rather than duplicating state in parallel caches or filenames.
+4. **Root-Cause Eradication (Zero Filesystem Heuristics):**
+   - Trace failures to their root contract and fix the source rather than adding defensive checks downstream.
+   - Ban filesystem and filename heuristics (`glob`, `fnmatch`, `.rglob()`, `getmtime`, regex state parsing from filenames).
+5. **SSOT and Stateless Purity:**
+   - Store stateful data transactionally (ACID SQL/3NF) rather than duplicating state in parallel caches or filenames.
    - Keep stateless modules pure: ban `global`, `nonlocal`, and module-level mutable collections (`list`, `dict`, `set`).
-6. **Strict Layer Boundaries (DAG & Top-Level Imports):**
-   - Maintain a strictly acyclic dependency graph (Presentation -> Application -> Domain -> Infrastructure).
-   - Place all imports strictly at module top level (`PLC0415`); no lazy imports inside functions.
-   - Keep orchestrator templates (Shell, CI/CD, Nextflow) free of multi-line inline Python/Bash scripts.
-7. **I/O Hygiene & Subprocess Isolation:**
-   - Perform scratch work in isolated temporary directories cleaned up via `finally` or context managers; publish only validated outputs.
+6. **Strict Layer Boundaries (DAG and Top-Level Imports):**
+   - Maintain a strictly acyclic dependency graph (`Presentation -> Application -> Domain -> Infrastructure`).
+   - Place all imports strictly at module top level (`PLC0415`); forbid lazy imports inside functions.
+   - Keep orchestrator templates (Shell, CI/CD, Nextflow) free of multi-line inline Python or Bash scripts.
+7. **I/O Hygiene and Subprocess Isolation:**
+   - Run scratch work in isolated temporary directories cleaned up via `finally` or context managers; publish only validated outputs.
    - Pass explicit `env=...`, `timeout=...`, and `check=...` to every subprocess call and ensure child process cleanup.
-8. **Zero Stubs & Zero Linter Suppressions:**
+8. **Zero Stubs and Zero Linter Suppressions:**
    - Ban `pass` (use docstrings for empty exception classes), `...`, `raise NotImplementedError`, `TODO`/`FIXME`/`HACK` comments, and suppression pragmas (`# type: ignore`, `# noqa`, `# pragma: no cover`).
    - Escape all dynamic output sent to shell, SQL, HTML, or Telegram.
-9. **Strict DRY, Atomicity & Total Static Typing:**
+9. **Strict DRY, Atomicity, and Total Static Typing:**
    - Implement non-trivial logic once in a canonical module. Keep cyclomatic complexity `<= 14` (`C901`), branches `<= 14` (`PLR0912`), and statements `<= 60` (`PLR0915`).
    - Annotate every function argument, return type, and module constant (`Final[...]`). Ban `Any`, `object`, and unparameterized `list`/`dict`/`set`/`tuple`. Mark every `@dataclass` as `frozen=True`. Write all code comments and commit messages in English (`RUF003`).
 
 ## Verification Gate
 
 Before concluding any code change:
-1. If `devtool` is available in the repository, run `devtool check` (or `devtool tree --stdout` before exploring) and resolve every Ruff, AST, cross-file contract, and Pyright diagnostic.
+1. If `devtool` is installed in the repository, run `devtool check` (and `devtool tree --stdout` before exploring) and resolve every Ruff, AST, cross-file contract, and Pyright diagnostic.
 2. Otherwise run the repository's native static checks (`ruff check`, `pyright`, `pytest`) and report the exact exit code and output.
 
 ## Examples
 
-### Example: Replacing Silent Fallback with Fail-Fast Contract
-Bad (violates Laws 2 & 3):
-```python
-def load_timeout(cfg: dict) -> float:
-    return float(cfg.get("timeout", 30.0))
-```
-Good:
-```python
-def load_timeout(cfg: dict[str, float | int | str]) -> float:
-    if "timeout" not in cfg:
-        raise ConfigurationError("Missing mandatory configuration key: 'timeout'.")
-    timeout = float(cfg["timeout"])
-    if timeout <= 0.0:
-        raise ConfigurationError(f"Timeout must be strictly positive, got {timeout}.")
-    return timeout
-```
+### Contract Enforcement Patterns
+
+| Prohibited Anti-Pattern | Required Fail-Fast Contract |
+| :--- | :--- |
+| Reading config with `.get("timeout", 30.0)` or `os.getenv(...)` | Check key presence explicitly and raise `ConfigurationError` if missing or non-positive |
+| Catching `except Exception:` and returning `None` or `[]` | Catch narrow domain exceptions only and re-raise with diagnostic context |
+| Default arguments (`def run(retries: int = 3)`) | Require explicit parameters (`def run(retries: int) -> Result`) |
+| Unparameterized `dict` / `list` or `Any` annotations | Fully parameterized types (`dict[str, float]`) and `Final[...]` constants |
+| Mutable `@dataclass` or `# noqa` / `# type: ignore` | `@dataclass(frozen=True, slots=True)` with zero suppression pragmas |
 
 ## Limitations
 
-- When integrating with third-party libraries whose public base classes require specific method signatures or default arguments, keep the adapter boundary minimal and strictly typed without propagating loose types inward.
-- Legacy files not touched by the current task should not be refactored opportunistically unless explicitly requested.
+- When integrating with third-party libraries whose base classes mandate specific method signatures or default arguments, keep the adapter boundary minimal and strictly typed without propagating loose types inward.
+- Do not opportunistically refactor untouched legacy files unless explicitly requested.
 
 ## Troubleshooting
 
-- **Pyright complains about a missing stub or dynamic third-party return:** Narrow the return type with explicit `isinstance(...)` checks at the infrastructure boundary rather than introducing `Any` or `# type: ignore`.
+- **Pyright reports a dynamic third-party return type:** Narrow the value with explicit `isinstance(...)` checks at the infrastructure boundary rather than using `Any` or `# type: ignore`.
 - **Complexity limit exceeded (`C901`/`PLR0915`):** Extract cohesive, pure helper functions with explicit typed parameters rather than nesting conditionals.

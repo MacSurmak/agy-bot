@@ -63,7 +63,7 @@ _PROFILE_HOME_GEMINI_RE: re.Pattern[str] = re.compile(
     r"/home/[^/\s'\"]+/profiles/([^/\s'\"]+)/home/\.gemini/"
 )
 _REMOTES_PATH_RE: re.Pattern[str] = re.compile(
-    r"/home/[^/\s'\"]+/[^/\s'\"]+/runtime_data/remotes/"
+    r"/home/[^/\s'\"]+/remotes/"
 )
 _HOME_PATH_RE: re.Pattern[str] = re.compile(r"(?<![A-Za-z0-9_/-])/home/[^/\s'\"]+/")
 _SINGLE_PARAM_PREFIX_RE: Final[re.Pattern[str]] = re.compile(

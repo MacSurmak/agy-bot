@@ -261,7 +261,7 @@ async def run_service(static_config: StaticConfig) -> None:
     )
 
     batcher = MessageBatcher(
-        inbox_dir=static_config.paths.inbox_dir,
+        paths=static_config.paths,
         settings_repo=settings_repo,
         on_flush=workspace_ui.execute_batched_prompt,
         on_staged_media=workspace_ui.notify_staged_media_held,

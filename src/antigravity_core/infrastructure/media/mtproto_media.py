@@ -16,6 +16,10 @@ from telethon.tl.types import Updates
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import AntigravityError
 from antigravity_core.infrastructure.database.repositories import SettingsRepository
+from antigravity_core.infrastructure.process_ownership import (
+    as_agent_identity,
+    chown_path,
+)
 from antigravity_core.lexicon import get_lexicon
 
 
@@ -43,7 +47,8 @@ class MediaService:
         settings = await self._settings_repo.load_settings()
         date_folder = datetime.now(tz=UTC).strftime("%Y-%m-%d")
         target_dir = self._cfg.paths.inbox_dir / date_folder / f"topic_{topic_id}"
-        target_dir.mkdir(parents=True, exist_ok=True)
+        with as_agent_identity(self._cfg.paths):
+            target_dir.mkdir(parents=True, exist_ok=True)
 
         orig_name = getattr(message.file, "name", None) if message.file else None
         ext = getattr(message.file, "ext", "") if message.file else ""
@@ -118,6 +123,9 @@ class MediaService:
             )
 
         resolved_path = Path(str(downloaded)).resolve()
+        chown_path(
+            resolved_path, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid
+        )
         logger.info(
             "Downloaded incoming Telegram media",
             topic_id=topic_id,

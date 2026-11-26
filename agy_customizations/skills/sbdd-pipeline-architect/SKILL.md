@@ -1,51 +1,64 @@
 ---
 name: sbdd-pipeline-architect
-description: "Use ONLY when working on the sbdd_pipeline project (Slurm, Nextflow DSL2, SQLite 3NF, GROMACS, AMBER tLEaP, GNINA, Uni-Dock, Schrodinger, sbdd watch, or /shared/sbdd_pipeline). Do NOT use for general coding or unrelated projects."
+description: "Use when working on sbdd_pipeline (Nextflow DSL2, Slurm, SQLite 3NF, Uni-Dock, GROMACS, AMBER tLEaP, /shared/sbdd_pipeline). Do NOT use for unrelated code."
+metadata:
+  author: MacSurmak
+  tags:
+    - sbdd
+    - nextflow
+    - slurm
+    - gromacs
+    - docking
 ---
 
 # SBDD Pipeline Architectural Laws
 
+## Purpose
+
+Enforces the domain architecture, data model, cluster I/O isolation, and docking/MD invariants of the `sbdd_pipeline` computational chemistry platform under `/shared/sbdd_pipeline`.
+
 ## Prerequisites
 
-- Verify the target path is inside the `sbdd_pipeline` repository or `/shared/sbdd_pipeline` before applying these rules.
-- Read the target host's on-demand passport (`~/.gemini/config/hosts/infra-<alias>.md`) to confirm exact Slurm partitions, GPU nodes, and Conda/Apptainer paths.
+- Confirm the target path is inside the `sbdd_pipeline` repository or `/shared/sbdd_pipeline` before applying these rules.
+- Read the target cluster host passport in `/home/agy-agent/hosts/` to verify active Slurm partitions, GPU nodes, and Conda/Apptainer paths.
 
-## Architectural Invariants
+## Instructions
 
 1. **SQLite 3NF as Single Source of Truth (SSOT):**
-   - All pipeline entities, ligands, runs, poses, and statuses are tracked transactionally in SQLite 3NF (`PRAGMA foreign_keys = ON`, surrogate integer IDs, cascading FKs).
-   - Never encode run status in filenames or scan directories with `glob`/`rglob` to infer state.
-2. **Plan & Receipt Pattern for Cluster Jobs:**
-   - Every Slurm/Nextflow step receives an immutable JSON plan with canonical absolute paths and emits a structured JSON receipt on completion.
-   - Orchestrator templates (Nextflow DSL2, Slurm `.sbatch`) must never contain multi-line inline Python or Bash logic; call standalone typed CLI modules instead.
-3. **Monolith Layout & Environment Separation:**
-   - Code and shared artifacts live under `/shared/sbdd_pipeline`.
-   - Python/scientific dependencies run in the canonical `sbdd_cluster_env` Conda environment; containerized engines invoke `/opt/containers/bin` Apptainer wrappers. Cluster provisioning is managed via Ansible.
-4. **`$SLURM_TMPDIR` I/O Law:**
-   - All scratch I/O (docking conformers, GROMACS trajectories, temporary PDBQT/SDF files) runs strictly on node-local `$SLURM_TMPDIR` with guaranteed cleanup.
-   - Copy only validated final outputs back to `/shared/sbdd_pipeline` and record only permanent paths in SQLite.
-5. **Chemistry & Docking Engine Rules:**
+   - Track all pipeline entities, ligands, runs, poses, and statuses transactionally in SQLite 3NF (`PRAGMA foreign_keys = ON`, surrogate integer IDs, cascading foreign keys).
+   - Never encode run status in filenames or scan directories with `glob`/`rglob` to infer pipeline state.
+2. **Plan and Receipt Pattern for Cluster Jobs:**
+   - Pass every Slurm or Nextflow step an immutable JSON plan containing canonical absolute paths, and require a structured JSON receipt upon completion.
+   - Keep orchestrator templates (Nextflow DSL2, Slurm `.sbatch`) free of multi-line inline Python or Bash logic; invoke standalone typed CLI modules instead.
+3. **Monolith Layout and Environment Separation:**
+   - Store shared code and validated artifacts under `/shared/sbdd_pipeline`.
+   - Execute Python workflows in the canonical `sbdd_cluster_env` Conda environment and containerized engines through `/opt/containers/bin` Apptainer wrappers. Manage cluster provisioning via Ansible.
+4. **`$SLURM_TMPDIR` Local Scratch I/O Law:**
+   - Keep all scratch I/O (docking conformers, GROMACS trajectories, temporary PDBQT/SDF files) strictly on node-local `$SLURM_TMPDIR` with guaranteed cleanup.
+   - Copy only validated final artifacts back to `/shared/sbdd_pipeline` and record only permanent paths in SQLite.
+5. **Chemistry and Docking Engine Rules:**
    - Deduplicate ligands strictly by Standard InChIKey.
    - **Uni-Dock** is the sole primary docking engine; **GNINA**, **Glide**, and **Prime** (Schrodinger) are legacy-only backends and must never receive new default pathways or CLI aliases.
    - Enforce zero CLI aliases across `sbdd` subcommands.
-6. **Molecular Dynamics & Analysis Invariants:**
-   - Parameterize complexes via AMBER `tLEaP` and build GROMACS index groups strictly by lexical group names (never brittle numeric index offsets).
-   - Compute ligand stability via MCS In-Situ RMSD rather than naive atom-order RMSD.
-   - Track cluster ETA and throughput telemetry using analytical EMA formulas.
+6. **Molecular Dynamics and Analysis Invariants:**
+   - Parameterize complexes via AMBER `tLEaP` and build GROMACS index groups strictly by lexical group names (never numeric index offsets).
+   - Measure ligand stability via MCS In-Situ RMSD rather than naive atom-order RMSD.
+   - Compute cluster ETA and throughput telemetry using analytical EMA formulas.
 
 ## Examples
 
-### Example: Launching a Detached Multi-Minute SBDD Run
-1. Launch `sbdd` or `nextflow` detached on the cluster head node with an exit-code marker (`setsid bash -c '...; echo $? > /shared/sbdd_pipeline/runs/r1.exit' > /shared/sbdd_pipeline/runs/r1.log 2>&1 < /dev/null & echo $! > /shared/sbdd_pipeline/runs/r1.pid`).
-2. Attach a dual-condition sensor via `mcp_telegram-core_create_sensor` and end the turn immediately.
+### Example: Structuring and Monitoring a Long-Running SBDD Workflow
+1. Prepare an immutable JSON run plan referencing `/shared/sbdd_pipeline` inputs and `$SLURM_TMPDIR` scratch paths, and submit the Nextflow/Slurm workflow via its standalone CLI entrypoint.
+2. **User notice before background execution:** Before starting any multi-minute background job or writing log/PID/exit-code markers to `/shared/sbdd_pipeline/runs/`, inform the user of the exact command and output paths and confirm they want to proceed.
+3. **User notice before Telegram notifications:** Before creating a completion sensor via `mcp_telegram-core_create_sensor`, inform the user that job status updates will be sent to Telegram and proceed only with explicit user consent.
 
 ## Limitations
 
 - Applies strictly to `sbdd_pipeline`; do not invoke these rules on `agy-bot`, homelab configs, or unrelated Python projects.
-- Never block a Telegram turn waiting for long `prep`, `md-setup`, `ORCA`, `GROMACS`, or `nextflow` jobs.
+- Never block an interactive turn waiting for multi-minute `prep`, `md-setup`, `ORCA`, `GROMACS`, or `nextflow` jobs.
 
 ## Troubleshooting
 
-- **Apptainer cannot see a file path:** Ensure the path resides under `/shared/` or `$SLURM_TMPDIR` (mounted inside containers) rather than an unmounted home subdirectory.
+- **Apptainer cannot see a file path:** Ensure the path resides under `/shared/` or `$SLURM_TMPDIR` (bind-mounted inside containers) rather than an unmounted home subdirectory.
 - **GROMACS `make_ndx` selects the wrong group:** Replace numeric group IDs with explicit lexical group names (`Protein`, `LIG`, `Water_and_ions`).
-- **SQLite `database is locked` under parallel Slurm workers:** Ensure WAL mode (`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=...`) is configured and only the orchestrator writes run state via receipts.
+- **SQLite `database is locked` under parallel Slurm workers:** Ensure WAL mode (`PRAGMA journal_mode=WAL`) and `busy_timeout` are enabled and only the orchestrator commits run state from receipts.

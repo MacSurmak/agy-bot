@@ -7,7 +7,9 @@ from typing import Final
 
 from loguru import logger
 
+from antigravity_core.config.static_config import PathsStaticConfig
 from antigravity_core.infrastructure.database.repositories import SettingsRepository
+from antigravity_core.infrastructure.process_ownership import as_agent_identity
 from antigravity_core.lexicon import get_lexicon
 
 LONG_PROMPT_FILE_THRESHOLD_CHARS: Final[int] = 2500
@@ -51,12 +53,13 @@ class MessageBatcher:
 
     def __init__(
         self,
-        inbox_dir: Path,
+        paths: PathsStaticConfig,
         settings_repo: SettingsRepository,
         on_flush: FlushCallback,
         on_staged_media: StagedMediaCallback,
     ) -> None:
-        self._inbox_dir = inbox_dir
+        self._paths = paths
+        self._inbox_dir = paths.inbox_dir
         self._settings_repo = settings_repo
         self._on_flush = on_flush
         self._on_staged_media = on_staged_media
@@ -203,9 +206,10 @@ class MessageBatcher:
     ) -> str:
         date_folder = datetime.now(tz=UTC).strftime("%Y-%m-%d")
         target_dir = self._inbox_dir / date_folder / f"topic_{topic_id}"
-        target_dir.mkdir(parents=True, exist_ok=True)
         md_path = (target_dir / f"{msg_id}_prompt.md").resolve()
-        md_path.write_text(full_text, encoding="utf-8")
+        with as_agent_identity(self._paths):
+            target_dir.mkdir(parents=True, exist_ok=True)
+            md_path.write_text(full_text, encoding="utf-8")
         logger.info(
             "Converted long user prompt ({} chars) into attached markdown file: {}",
             len(full_text),
