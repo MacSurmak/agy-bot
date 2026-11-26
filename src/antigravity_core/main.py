@@ -43,7 +43,7 @@ from antigravity_core.infrastructure.media.mtproto_media import (
     MediaService,
     TelethonForumGateway,
 )
-from antigravity_core.infrastructure.process_ownership import chown_path
+from antigravity_core.infrastructure.process_ownership import as_agent_identity
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
 from antigravity_core.logging_setup import configure_loguru
 from antigravity_core.presentation.control_panel_ui import ControlPanelUI
@@ -140,13 +140,9 @@ async def run_service(static_config: StaticConfig) -> None:
         old_passport = Path(host.rule_file_path)
         if old_passport.resolve() != target_passport:
             if old_passport.is_file() and not target_passport.exists():
-                target_passport.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(old_passport), str(target_passport))
-                chown_path(
-                    target_passport,
-                    static_config.paths.agent_uid,
-                    static_config.paths.agent_gid,
-                )
+                with as_agent_identity(static_config.paths):
+                    target_passport.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(old_passport), str(target_passport))
             host = await host_repo.update_rule_file_path(
                 host.alias, str(target_passport)
             )

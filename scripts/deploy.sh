@@ -33,8 +33,10 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-APP_DIR="/srv/antigravity/app"
-VENV_DIR="/srv/antigravity/venv"
+OPT_DIR="/opt/antigravity"
+APP_DIR="${OPT_DIR}/app"
+PYTHON_DIR="${OPT_DIR}/python"
+VENV_DIR="${OPT_DIR}/venv"
 UNIT_SRC="${APP_DIR}/systemd/antigravity-core.service"
 UNIT_DST="/etc/systemd/system/antigravity-core.service"
 
@@ -64,46 +66,24 @@ if [[ ! -x "${UV_BIN}" ]]; then
     exit 1
 fi
 
-echo "==> [1/5] Syncing clean release tree (${SOURCE_DIR} -> ${APP_DIR}, no .git)..."
-mkdir -p "${APP_DIR}"
+echo "==> [1/5] Syncing immutable release tree (${SOURCE_DIR} -> ${APP_DIR})..."
+install -d -m 0755 -o root -g root "${OPT_DIR}" "${APP_DIR}" "${OPT_DIR}/bin"
 rsync -a --delete \
     --exclude='.git/' \
     --exclude='.git' \
     --exclude='.gitignore' \
-    --exclude='.env' \
-    --exclude='config.yaml' \
-    --exclude='runtime_data/' \
     --exclude='.venv/' \
     --exclude='__pycache__/' \
     --exclude='*.pyc' \
-    --exclude='.mypy_cache/' \
-    --exclude='.pytest_cache/' \
-    --exclude='.ruff_cache/' \
     "${SOURCE_DIR}/" "${APP_DIR}/"
-
-chown -R root:root \
-    "${APP_DIR}/src" \
-    "${APP_DIR}/migrations" \
-    "${APP_DIR}/agy_customizations" \
-    "${APP_DIR}/scripts" \
-    "${APP_DIR}/systemd" \
-    "${APP_DIR}/pyproject.toml" \
-    "${APP_DIR}/alembic.ini" \
-    "${APP_DIR}/docker-compose.yml" \
-    "${APP_DIR}/config.example.yaml"
-
-if [[ -f "${APP_DIR}/.env" ]]; then
-    chown root:root "${APP_DIR}/.env"
-    chmod 0600 "${APP_DIR}/.env"
-fi
-if [[ -f "${APP_DIR}/config.yaml" ]]; then
-    chown root:root "${APP_DIR}/config.yaml"
-    chmod 0600 "${APP_DIR}/config.yaml"
-fi
+chown -R root:root "${APP_DIR}"
+chmod -R a+rX "${APP_DIR}"
 
 echo "==> [2/5] Installing non-editable release package into ${VENV_DIR}..."
+export UV_PYTHON_INSTALL_DIR="${PYTHON_DIR}"
 export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" --reinstall-package antigravity-telegram-core "${APP_DIR}"
+chmod -R a+rX "${PYTHON_DIR}" "${VENV_DIR}"
 
 echo "==> [3/5] Installing systemd unit (${UNIT_DST})..."
 install -m 0644 "${UNIT_SRC}" "${UNIT_DST}"

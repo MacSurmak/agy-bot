@@ -23,7 +23,7 @@ from antigravity_core.domain.models import (
 )
 from antigravity_core.infrastructure.process_ownership import (
     agent_exec_identity,
-    chown_path,
+    as_agent_identity,
 )
 from antigravity_core.infrastructure.agy_runtime.stream_protocol import (
     ParsedInitEvent,
@@ -139,10 +139,8 @@ class TopicWorker:
             return
 
         workspace_dir = Path(self._signature.workspace_path)
-        workspace_dir.mkdir(parents=True, exist_ok=True)
-        chown_path(
-            workspace_dir, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid
-        )
+        with as_agent_identity(self._cfg.paths):
+            workspace_dir.mkdir(parents=True, exist_ok=True)
 
         cmd = self._build_command_args(settings)
         base_path = (
@@ -153,7 +151,8 @@ class TopicWorker:
         worker_env = {
             **self._account_env,
             "PATH": f"{self._cfg.paths.runtime_bin_dir}:{base_path}",
-            "ANTIGRAVITY_APP_ROOT": str(self._cfg.paths.project_root_dir),
+            "AGY_AGENT_HOME": str(self._cfg.paths.agent_home_dir),
+            "AGY_SSH_CONFIG": str(self._cfg.paths.ssh_config_dir.parent / "config"),
             "AGY_CURRENT_TOPIC_ID": str(self._topic_id),
             "AGY_EXECUTION_MODE": self._signature.execution_mode.value,
             "AGY_ACCOUNT_SLUG": self._signature.account_slug,
@@ -200,8 +199,13 @@ class TopicWorker:
         log_file = (
             self._cfg.paths.agent_log_dir / f"agy_topic_{self._topic_id}.log"
         )
+        settings_file = (
+            self._cfg.paths.agy_home_dir / "antigravity-cli" / "settings.json"
+        )
         cmd: list[str] = [
             str(self._cfg.paths.agy_binary_path),
+            "--settings",
+            str(settings_file),
             "--input-format",
             "stream-json",
             "--output-format",

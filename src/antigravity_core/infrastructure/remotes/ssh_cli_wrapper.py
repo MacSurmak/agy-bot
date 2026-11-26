@@ -329,8 +329,17 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
     return os.waitstatus_to_exitcode(final_status)
 
 
+def _with_shared_ssh_config(ssh_argv: list[str]) -> list[str]:
+    if "AGY_SSH_CONFIG" not in os.environ or "-F" in ssh_argv:
+        return list(ssh_argv)
+    ssh_cfg = os.environ["AGY_SSH_CONFIG"].strip()
+    if not ssh_cfg:
+        return list(ssh_argv)
+    return ["-F", ssh_cfg, *ssh_argv]
+
+
 def main() -> int:
-    return _run_pty_ssh_bridge(sys.argv[1:])
+    return _run_pty_ssh_bridge(_with_shared_ssh_config(sys.argv[1:]))
 
 
 if __name__ == "__main__":

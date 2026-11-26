@@ -19,6 +19,11 @@ from antigravity_core.config.constants import (
     DEFAULT_POSTGRES_HOST,
     DEFAULT_POSTGRES_PORT,
     DEFAULT_SYSTEM_PATH,
+    FHS_APP_DIR,
+    FHS_BIN_DIR,
+    FHS_ETC_DIR,
+    FHS_RUN_DIR,
+    FHS_VAR_LIB_DIR,
     LimitsStaticConfig,
     RemotesStaticConfig,
     RuntimeStaticConfig,
@@ -133,14 +138,11 @@ class StaticConfig:
 
 
 def resolve_default_config_path() -> Path:
-    env_val = os.environ.get("ANTIGRAVITY_CONFIG", "").strip()
-    if env_val:
-        return Path(env_val).expanduser().resolve()
-    cwd_candidate = (Path.cwd() / "config.yaml").resolve()
-    if cwd_candidate.is_file():
-        return cwd_candidate
-    repo_root = Path(__file__).resolve().parents[3]
-    return repo_root / "config.yaml"
+    if "ANTIGRAVITY_CONFIG" in os.environ:
+        env_val = os.environ["ANTIGRAVITY_CONFIG"].strip()
+        if env_val:
+            return Path(env_val).expanduser().resolve()
+    return (Path(FHS_ETC_DIR) / "config.yaml").resolve()
 
 
 def _load_dotenv_map(project_root: Path) -> dict[str, str]:
@@ -247,40 +249,41 @@ def _resolve_agent_identity() -> tuple[str, int, int, Path]:
     return pw.pw_name, pw.pw_uid, pw.pw_gid, Path(pw.pw_dir).resolve()
 
 
-def _resolve_paths_config(project_root: Path) -> PathsStaticConfig:
-    runtime_root = (project_root / "runtime_data").resolve()
+def _resolve_paths_config() -> PathsStaticConfig:
     current_user = getpass.getuser()
     raw_path = os.environ["PATH"].strip() if "PATH" in os.environ else ""
     current_path = raw_path if raw_path else DEFAULT_SYSTEM_PATH
     agent_user, agent_uid, agent_gid, agent_home = _resolve_agent_identity()
     agy_home = agent_home / ".gemini"
+    run_root = Path(FHS_RUN_DIR).resolve()
+    var_lib_root = Path(FHS_VAR_LIB_DIR).resolve()
 
     return PathsStaticConfig(
-        project_root_dir=project_root.resolve(),
+        project_root_dir=Path(FHS_APP_DIR).resolve(),
         venv_python_path=Path(sys.executable),
         agy_binary_path=_resolve_agy_binary(),
         rtk_binary_path=_resolve_rtk_binary(),
         agy_home_dir=agy_home,
-        hosts_passports_dir=agy_home / "config" / "hosts",
+        hosts_passports_dir=agent_home / "hosts",
         projects_dir=agent_home / "projects",
         agent_user=agent_user,
         agent_uid=agent_uid,
         agent_gid=agent_gid,
         agent_home_dir=agent_home,
-        agent_log_dir=runtime_root / "agent_logs",
+        agent_log_dir=agent_home / "logs",
         system_path_env=current_path,
         system_user=current_user,
         system_logname=current_user,
         ssh_config_dir=agent_home / ".ssh" / "config.d",
         ssh_sockets_dir=agent_home / ".ssh" / "sockets",
-        runtime_bin_dir=runtime_root / "bin",
-        workspaces_root_dir=runtime_root / "workspaces",
-        remotes_mount_dir=runtime_root / "remotes",
-        inbox_dir=runtime_root / "inbox",
-        profiles_data_dir=runtime_root / "profiles",
-        runtime_dir=runtime_root / "run",
-        ipc_socket_path=runtime_root / "run" / "bot_ipc.sock",
-        log_file_path=runtime_root / "logs" / "antigravity_core.jsonl",
+        runtime_bin_dir=Path(FHS_BIN_DIR).resolve(),
+        workspaces_root_dir=agent_home / "workspaces",
+        remotes_mount_dir=agent_home / "remotes",
+        inbox_dir=agent_home / "inbox",
+        profiles_data_dir=agent_home / "profiles",
+        runtime_dir=run_root,
+        ipc_socket_path=run_root / "core.sock",
+        log_file_path=var_lib_root / "logs" / "antigravity_core.jsonl",
     )
 
 
@@ -321,11 +324,11 @@ def load_static_config(config_path: Path | None = None) -> StaticConfig:
             f"Configuration validation failed for {resolved_cfg_path}:\n{exc}"
         ) from exc
 
-    project_root = resolved_cfg_path.parent
-    paths_cfg = _resolve_paths_config(project_root)
-    db_cfg = _resolve_database_config(project_root, parsed_yaml)
+    config_dir = resolved_cfg_path.parent
+    paths_cfg = _resolve_paths_config()
+    db_cfg = _resolve_database_config(config_dir, parsed_yaml)
     session_file = (
-        project_root / "runtime_data" / "data" / "telethon_bot.session"
+        Path(FHS_VAR_LIB_DIR) / "data" / "telethon_bot.session"
     ).resolve()
 
     tg_cfg = TelegramStaticConfig(

@@ -74,7 +74,10 @@ if ! command -v uv >/dev/null 2>&1 && [[ ! -x /root/.local/bin/uv ]]; then
 fi
 
 UV_BIN="$(command -v uv || echo /usr/local/bin/uv)"
-"${UV_BIN}" venv --python 3.14 --clear /srv/antigravity/venv
+export UV_PYTHON_INSTALL_DIR="/opt/antigravity/python"
+install -d -m 0755 -o root -g root /opt/antigravity /opt/antigravity/python /opt/antigravity/bin
+"${UV_BIN}" python install 3.14
+"${UV_BIN}" venv --python 3.14 --clear /opt/antigravity/venv
 
 echo "==> [4/6] Installing Google Antigravity CLI (agy)..."
 if ! command -v agy >/dev/null 2>&1 && [[ ! -x /usr/local/bin/agy ]]; then
@@ -91,38 +94,27 @@ if ! id -u agy-agent >/dev/null 2>&1; then
     useradd -m -s /bin/bash -d /home/agy-agent agy-agent
 fi
 
-mkdir -p \
-    /home/agy-agent/projects \
-    /home/agy-agent/.gemini/config/hosts \
+install -d -m 0700 -o root -g root /etc/antigravity /var/lib/antigravity /var/lib/antigravity/data /var/lib/antigravity/logs
+install -d -m 0750 -o root -g agy-agent /run/agy
+install -d -m 0700 -o agy-agent -g agy-agent \
+    /home/agy-agent \
+    /home/agy-agent/.gemini \
+    /home/agy-agent/.gemini/config \
     /home/agy-agent/.gemini/config/skills \
+    /home/agy-agent/.gemini/antigravity-cli \
+    /home/agy-agent/.ssh \
     /home/agy-agent/.ssh/config.d \
     /home/agy-agent/.ssh/sockets \
-    /srv/antigravity/app/runtime_data/workspaces \
-    /srv/antigravity/app/runtime_data/inbox \
-    /srv/antigravity/app/runtime_data/profiles \
-    /srv/antigravity/app/runtime_data/run \
-    /srv/antigravity/app/runtime_data/agent_logs \
-    /srv/antigravity/app/runtime_data/logs \
-    /srv/antigravity/app/runtime_data/data \
-    /run/agy
+    /home/agy-agent/hosts \
+    /home/agy-agent/projects \
+    /home/agy-agent/workspaces \
+    /home/agy-agent/inbox \
+    /home/agy-agent/profiles \
+    /home/agy-agent/logs
 
-chown -R agy-agent:agy-agent \
-    /home/agy-agent \
-    /srv/antigravity/app/runtime_data/workspaces \
-    /srv/antigravity/app/runtime_data/inbox \
-    /srv/antigravity/app/runtime_data/profiles \
-    /srv/antigravity/app/runtime_data/run \
-    /srv/antigravity/app/runtime_data/agent_logs
-
-chown -R root:root \
-    /srv/antigravity/app/runtime_data/logs \
-    /srv/antigravity/app/runtime_data/data
-
-chmod 0700 /run/agy /home/agy-agent/.ssh /srv/antigravity/app/runtime_data/logs /srv/antigravity/app/runtime_data/data
-
-echo "==> [6/6] Deploying release into /srv/antigravity/app and reconciling harness..."
+echo "==> [6/6] Deploying release into /opt/antigravity/app and reconciling harness..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bash "${SCRIPT_DIR}/deploy.sh" --no-restart
 
-echo "==> Provisioning complete! Python version in venv: $(/srv/antigravity/venv/bin/python --version)"
-echo "==> Next: place .env and config.yaml in /srv/antigravity/app (chmod 0600, root:root), then run: sudo systemctl enable --now antigravity-core"
+echo "==> Provisioning complete! Python version in venv: $(/opt/antigravity/venv/bin/python --version)"
+echo "==> Next: place .env and config.yaml in /etc/antigravity (chmod 0600, root:root), then run: sudo systemctl enable --now antigravity-core"

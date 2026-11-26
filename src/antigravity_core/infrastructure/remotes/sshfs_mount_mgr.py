@@ -27,9 +27,8 @@ from antigravity_core.infrastructure.database.repositories import (
 )
 from antigravity_core.infrastructure.process_ownership import (
     agent_exec_identity,
-    chown_parents_up_to,
+    as_agent_identity,
     chown_path,
-    chown_tree,
 )
 
 _AI_NOTES_MARKER: Final[str] = "<!-- AI_NOTES_START -->"
@@ -190,15 +189,14 @@ class RemoteMountManager:
 
     def _ensure_main_ssh_config_include(self) -> None:
         ssh_dir = self._cfg.paths.ssh_config_dir
+        ssh_root = ssh_dir.parent
         sockets_dir = self._cfg.paths.ssh_sockets_dir
-        ssh_dir.mkdir(parents=True, exist_ok=True)
-        sockets_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(sockets_dir, 0o700)
-
         multiplex_conf = ssh_dir / "00-antigravity-multiplex.conf"
         multiplex_content = (
             "# Managed by Antigravity Telegram Core\n"
             "Host *\n"
+            f"    IdentityFile {ssh_root}/id_ed25519\n"
+            f"    UserKnownHostsFile {ssh_root}/known_hosts\n"
             "    ControlMaster auto\n"
             f"    ControlPath {sockets_dir}/%r@%h-%p\n"
             f"    ControlPersist {self._cfg.remotes.ssh_control_persist_sec}\n"
@@ -206,52 +204,55 @@ class RemoteMountManager:
             "    ServerAliveCountMax 3\n"
             "    StrictHostKeyChecking accept-new\n"
         )
-        multiplex_conf.write_text(multiplex_content, encoding="utf-8")
-        os.chmod(multiplex_conf, 0o600)
-
-        main_ssh_config = ssh_dir.parent / "config"
+        main_ssh_config = ssh_root / "config"
         include_line = f"Include {ssh_dir}/*.conf"
 
-        if not main_ssh_config.is_file():
-            main_ssh_config.parent.mkdir(parents=True, exist_ok=True)
-            main_ssh_config.write_text(f"{include_line}\n\n", encoding="utf-8")
-            os.chmod(main_ssh_config, 0o600)
-        else:
-            existing_text = main_ssh_config.read_text(encoding="utf-8")
-            first_non_empty = next(
-                (
-                    ln.strip()
-                    for ln in existing_text.splitlines()
-                    if ln.strip() and not ln.strip().startswith("#")
-                ),
-                "",
-            )
-            if not (
-                first_non_empty.startswith("Include ")
-                and "config.d/" in first_non_empty
-            ):
-                cleaned_lines = [
-                    ln
-                    for ln in existing_text.splitlines()
-                    if not (
-                        ln.strip().startswith("Include ") and "config.d/" in ln.strip()
-                    )
-                ]
-                updated_text = (
-                    f"{include_line}\n\n" + "\n".join(cleaned_lines).lstrip("\n") + "\n"
-                )
-                main_ssh_config.write_text(updated_text, encoding="utf-8")
-                os.chmod(main_ssh_config, 0o600)
+        with as_agent_identity(self._cfg.paths):
+            ssh_dir.mkdir(parents=True, exist_ok=True)
+            sockets_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(sockets_dir, 0o700)
+            multiplex_conf.write_text(multiplex_content, encoding="utf-8")
+            os.chmod(multiplex_conf, 0o600)
 
-        chown_tree(
-            ssh_dir.parent, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid
-        )
+            if not main_ssh_config.is_file():
+                main_ssh_config.write_text(f"{include_line}\n\n", encoding="utf-8")
+                os.chmod(main_ssh_config, 0o600)
+            else:
+                existing_text = main_ssh_config.read_text(encoding="utf-8")
+                first_non_empty = next(
+                    (
+                        ln.strip()
+                        for ln in existing_text.splitlines()
+                        if ln.strip() and not ln.strip().startswith("#")
+                    ),
+                    "",
+                )
+                if not (
+                    first_non_empty.startswith("Include ")
+                    and "config.d/" in first_non_empty
+                ):
+                    cleaned_lines = [
+                        ln
+                        for ln in existing_text.splitlines()
+                        if not (
+                            ln.strip().startswith("Include ")
+                            and "config.d/" in ln.strip()
+                        )
+                    ]
+                    updated_text = (
+                        f"{include_line}\n\n"
+                        + "\n".join(cleaned_lines).lstrip("\n")
+                        + "\n"
+                    )
+                    main_ssh_config.write_text(updated_text, encoding="utf-8")
+                    os.chmod(main_ssh_config, 0o600)
 
     async def ensure_local_ssh_keypair(self) -> str:
         """Auto-generates ~/.ssh/id_ed25519 if absent and returns the public key string."""
         ssh_root = self._cfg.paths.ssh_config_dir.parent
-        ssh_root.mkdir(parents=True, exist_ok=True)
-        os.chmod(ssh_root, 0o700)
+        with as_agent_identity(self._cfg.paths):
+            ssh_root.mkdir(parents=True, exist_ok=True)
+            os.chmod(ssh_root, 0o700)
         self._ensure_main_ssh_config_include()
 
         priv_key = ssh_root / "id_ed25519"
@@ -284,7 +285,6 @@ class RemoteMountManager:
                 path=str(pub_key),
             )
 
-        chown_tree(ssh_root, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
         if pub_key.is_file():
             return pub_key.read_text(encoding="utf-8").strip()
         raise RemoteMountError(
@@ -322,9 +322,9 @@ class RemoteMountManager:
             f"    ServerAliveCountMax 2\n"
             f"    StrictHostKeyChecking accept-new\n"
         )
-        config_file.write_text(content, encoding="utf-8")
-        os.chmod(config_file, 0o600)
-        chown_path(config_file, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
+        with as_agent_identity(self._cfg.paths):
+            config_file.write_text(content, encoding="utf-8")
+            os.chmod(config_file, 0o600)
         return config_file
 
     def remove_host_config(self, alias: str) -> None:
@@ -495,14 +495,13 @@ class RemoteMountManager:
         self, resolved_target: str, port: int, password: str, jump_host: str
     ) -> bool:
         pub_key = await self.ensure_local_ssh_keypair()
-        self._cfg.paths.runtime_dir.mkdir(parents=True, exist_ok=True)
-        askpass_script = (
-            self._cfg.paths.runtime_dir / f".askpass_{secrets.token_hex(12)}.sh"
-        )
+        ssh_root = self._cfg.paths.ssh_config_dir.parent
+        askpass_script = ssh_root / f".askpass_{secrets.token_hex(12)}.sh"
         script_body = f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(password)}\n"
-        askpass_script.write_text(script_body, encoding="utf-8")
-        os.chmod(askpass_script, 0o700)
-        chown_path(askpass_script, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
+        with as_agent_identity(self._cfg.paths):
+            ssh_root.mkdir(parents=True, exist_ok=True)
+            askpass_script.write_text(script_body, encoding="utf-8")
+            os.chmod(askpass_script, 0o700)
 
         env = {
             **self._internal_ssh_env(),
@@ -1033,22 +1032,26 @@ class RemoteMountManager:
             )
 
         if header == "AGY_KIND_DIR":
-            spec.local_stage_path.mkdir(parents=True, exist_ok=True)
-            for raw_entry in body_bytes.decode("utf-8", errors="replace").splitlines():
-                parts = raw_entry.split()
-                if len(parts) >= _LS_LA_MIN_COLUMNS:
-                    entry_name = " ".join(parts[8:])
-                    if entry_name not in (".", "..") and "/" not in entry_name:
-                        entry_path = spec.local_stage_path / entry_name
-                        if parts[0].startswith("d"):
-                            entry_path.mkdir(parents=True, exist_ok=True)
-                        else:
-                            entry_path.write_bytes(b"")
-            chown_tree(
+            spec.stage_root_dir.mkdir(parents=True, exist_ok=True)
+            chown_path(
                 spec.stage_root_dir,
                 self._cfg.paths.agent_uid,
                 self._cfg.paths.agent_gid,
             )
+            with as_agent_identity(self._cfg.paths):
+                spec.local_stage_path.mkdir(parents=True, exist_ok=True)
+                for raw_entry in body_bytes.decode(
+                    "utf-8", errors="replace"
+                ).splitlines():
+                    parts = raw_entry.split()
+                    if len(parts) >= _LS_LA_MIN_COLUMNS:
+                        entry_name = " ".join(parts[8:])
+                        if entry_name not in (".", "..") and "/" not in entry_name:
+                            entry_path = spec.local_stage_path / entry_name
+                            if parts[0].startswith("d"):
+                                entry_path.mkdir(parents=True, exist_ok=True)
+                            else:
+                                entry_path.write_bytes(b"")
             async with lock:
                 self._stage_refcounts[stage_key] = (
                     self._stage_refcounts[stage_key] + 1
@@ -1118,17 +1121,18 @@ class RemoteMountManager:
                 f"To create a new file at this path, call 'write_file' or 'write_to_file' with '{raw_path}'."
             )
 
-        spec.local_stage_path.parent.mkdir(parents=True, exist_ok=True)
-        if existed:
-            spec.local_stage_path.write_bytes(body_bytes)
-        else:
-            spec.local_stage_path.unlink(missing_ok=True)
-        chown_parents_up_to(
-            spec.local_stage_path if existed else spec.local_stage_path.parent,
+        spec.stage_root_dir.mkdir(parents=True, exist_ok=True)
+        chown_path(
             spec.stage_root_dir,
             self._cfg.paths.agent_uid,
             self._cfg.paths.agent_gid,
         )
+        with as_agent_identity(self._cfg.paths):
+            spec.local_stage_path.parent.mkdir(parents=True, exist_ok=True)
+            if existed:
+                spec.local_stage_path.write_bytes(body_bytes)
+            else:
+                spec.local_stage_path.unlink(missing_ok=True)
 
         self._staged_baselines[(topic_id, str(spec.local_stage_path))] = (
             _StagedFileBaseline(
@@ -1344,15 +1348,15 @@ class RemoteMountManager:
 
     def ensure_rule_skeleton(self, host: RemoteHost) -> Path:
         rule_path = Path(host.rule_file_path)
-        rule_path.parent.mkdir(parents=True, exist_ok=True)
-        if not rule_path.exists():
-            skeleton = self._render_two_tier_passport(
-                host=host,
-                auto_telemetry_md="*(Auto-telemetry scan pending...)*",
-                ai_notes_md="- *(Add architectural notes, project paths, and service details here via `update_host_knowledge`.)*",
-            )
-            rule_path.write_text(skeleton, encoding="utf-8")
-        chown_path(rule_path, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
+        with as_agent_identity(self._cfg.paths):
+            rule_path.parent.mkdir(parents=True, exist_ok=True)
+            if not rule_path.exists():
+                skeleton = self._render_two_tier_passport(
+                    host=host,
+                    auto_telemetry_md="*(Auto-telemetry scan pending...)*",
+                    ai_notes_md="- *(Add architectural notes, project paths, and service details here via `update_host_knowledge`.)*",
+                )
+                rule_path.write_text(skeleton, encoding="utf-8")
         return rule_path
 
     @staticmethod
@@ -1453,11 +1457,11 @@ class RemoteMountManager:
             f"```text\n{telemetry_out[:4000]}\n```"
         )
         rule_path = Path(host.rule_file_path)
-        rule_path.parent.mkdir(parents=True, exist_ok=True)
         existing_notes = self._extract_existing_ai_notes(rule_path)
         full_doc = self._render_two_tier_passport(host, auto_section, existing_notes)
-        rule_path.write_text(full_doc, encoding="utf-8")
-        chown_path(rule_path, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
+        with as_agent_identity(self._cfg.paths):
+            rule_path.parent.mkdir(parents=True, exist_ok=True)
+            rule_path.write_text(full_doc, encoding="utf-8")
         return rule_path
 
     def update_host_ai_notes(
@@ -1486,8 +1490,8 @@ class RemoteMountManager:
             updated_notes = notes_markdown.strip()
 
         full_doc = self._render_two_tier_passport(host, auto_telemetry, updated_notes)
-        rule_path.write_text(full_doc, encoding="utf-8")
-        chown_path(rule_path, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
+        with as_agent_identity(self._cfg.paths):
+            rule_path.write_text(full_doc, encoding="utf-8")
         return rule_path
 
     async def execute_remote_ssh(
@@ -1506,10 +1510,8 @@ class RemoteMountManager:
 
         agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
         if host is None:
-            local_scratch_dir.mkdir(parents=True, exist_ok=True)
-            chown_path(
-                local_scratch_dir, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid
-            )
+            with as_agent_identity(self._cfg.paths):
+                local_scratch_dir.mkdir(parents=True, exist_ok=True)
             proc = await asyncio.create_subprocess_exec(
                 "bash",
                 "-c",

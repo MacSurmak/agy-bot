@@ -8,7 +8,7 @@ from loguru import logger
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import StartupValidationError
 from antigravity_core.domain.models import RemoteHost
-from antigravity_core.infrastructure.process_ownership import chown_path, chown_tree
+from antigravity_core.infrastructure.process_ownership import as_agent_identity
 
 
 class AgyEnvironmentBootstrapper:
@@ -33,14 +33,17 @@ class AgyEnvironmentBootstrapper:
         hosts_dir = self._cfg.paths.hosts_passports_dir
         skills_dir = config_dir / "skills"
 
+        for root_dir in (
+            self._cfg.paths.runtime_bin_dir,
+            self._cfg.paths.runtime_dir,
+            self._cfg.paths.log_file_path.parent,
+        ):
+            root_dir.mkdir(parents=True, exist_ok=True)
+
         agent_owned_dirs = (
             self._cfg.paths.agent_home_dir,
             agy_home,
             cli_dir,
-            cli_dir / "brain",
-            cli_dir / "conversations",
-            cli_dir / "annotations",
-            cli_dir / "cache",
             config_dir,
             hosts_dir,
             skills_dir,
@@ -49,41 +52,22 @@ class AgyEnvironmentBootstrapper:
             self._cfg.paths.remotes_mount_dir,
             self._cfg.paths.inbox_dir,
             self._cfg.paths.profiles_data_dir,
-            self._cfg.paths.runtime_dir,
             self._cfg.paths.agent_log_dir,
             self._cfg.paths.ssh_config_dir.parent,
             self._cfg.paths.ssh_config_dir,
             self._cfg.paths.ssh_sockets_dir,
         )
-        for directory in (
-            *agent_owned_dirs,
-            self._cfg.paths.runtime_bin_dir,
-            self._cfg.paths.log_file_path.parent,
-        ):
-            directory.mkdir(parents=True, exist_ok=True)
-
+        with as_agent_identity(self._cfg.paths):
+            for directory in agent_owned_dirs:
+                directory.mkdir(parents=True, exist_ok=True)
+            self._write_settings_json(cli_dir / "settings.json")
+            self._write_hooks_json(config_dir / "hooks.json")
+            self._write_mcp_config_json(config_dir / "mcp_config.json")
+            self._sync_custom_skills_from_repo(skills_dir)
+            self._configure_agy_internal_sqlite_wal(
+                cli_dir / "conversation_summaries.db"
+            )
         self.sync_global_agents_md_host_map(hosts=[])
-        self._write_settings_json(cli_dir / "settings.json")
-        self._write_hooks_json(config_dir / "hooks.json")
-        self._write_mcp_config_json(config_dir / "mcp_config.json")
-        self._sync_custom_skills_from_repo(skills_dir)
-        self._configure_agy_internal_sqlite_wal(cli_dir / "conversation_summaries.db")
-
-        uid = self._cfg.paths.agent_uid
-        gid = self._cfg.paths.agent_gid
-        for directory in agent_owned_dirs:
-            chown_path(directory, uid, gid)
-        for recursive_root in (
-            agy_home,
-            self._cfg.paths.projects_dir,
-            self._cfg.paths.workspaces_root_dir,
-            self._cfg.paths.inbox_dir,
-            self._cfg.paths.profiles_data_dir,
-            self._cfg.paths.runtime_dir,
-            self._cfg.paths.agent_log_dir,
-            self._cfg.paths.ssh_config_dir.parent,
-        ):
-            chown_tree(recursive_root, uid, gid)
 
     def sync_global_agents_md_host_map(self, hosts: list[RemoteHost]) -> None:
         agy_home = self._cfg.paths.agy_home_dir
@@ -132,7 +116,7 @@ class AgyEnvironmentBootstrapper:
             "   Then create a dual-condition sensor via `mcp_telegram-core_create_sensor` checking `test -s /path/run.exit || ! kill -0 $(cat /path/run.pid) 2>/dev/null` and finish your turn. Never claim a sensor is active unless `create_sensor` returned a real `sensor_id`.\n"
             "4. **Code exploration & empirical verification:** When `devtool` is available in a repository, run `devtool tree --stdout` before blind file reads. Verify CLI flags and behavior empirically (`--help` or isolated test) before reporting bugs.\n"
             "5. **Deliver files to Telegram:** Pass local or TRAMP paths (`/ssh:user@<alias>:/abs/path`) directly to `mcp_telegram-core_send_file_to_telegram`.\n"
-            "6. **Sandbox boundary:** Never inspect or touch `/srv/antigravity/app/src`, `config.yaml`, `.env`, bot logs/data, or other topics' directories.\n\n"
+            "6. **Sandbox boundary:** Never inspect or touch `/opt/antigravity/app`, `/etc/antigravity`, `/var/lib/antigravity`, or other topics' directories.\n\n"
             "## 3. Native Eager MCP Tools (`telegram-core`)\n\n"
             "Call `mcp_telegram-core_<tool>` directly without reading schema files:\n"
             "- `register_remote_host`, `update_host_knowledge`, `get_bot_ssh_public_key`\n"
@@ -141,12 +125,9 @@ class AgyEnvironmentBootstrapper:
             "- `create_sensor`, `list_sensors`, `cancel_sensor`\n"
             "- `create_workspace_topic`, `rename_current_topic` (call on turn 1 of a new topic with a concise 3-5 word title in the user's language)\n"
         )
-        root_agents.write_text(content, encoding="utf-8")
-        config_agents.write_text(content, encoding="utf-8")
-        uid = self._cfg.paths.agent_uid
-        gid = self._cfg.paths.agent_gid
-        chown_path(root_agents, uid, gid)
-        chown_path(config_agents, uid, gid)
+        with as_agent_identity(self._cfg.paths):
+            root_agents.write_text(content, encoding="utf-8")
+            config_agents.write_text(content, encoding="utf-8")
 
     def _write_settings_json(self, settings_path: Path) -> None:
         workspaces_dir = str(self._cfg.paths.workspaces_root_dir)
@@ -195,10 +176,10 @@ class AgyEnvironmentBootstrapper:
                     "schedule(*)",
                     "write_file(/etc/shadow)",
                     "write_file(/root/.ssh/authorized_keys)",
-                    "read_file(/srv/antigravity/app/config.yaml)",
-                    "write_file(/srv/antigravity/app/config.yaml)",
-                    "read_file(/srv/antigravity/app/.env)",
-                    "write_file(/srv/antigravity/app/.env)",
+                    "read_file(/etc/antigravity/*)",
+                    "write_file(/etc/antigravity/*)",
+                    "read_file(/var/lib/antigravity/*)",
+                    "write_file(/var/lib/antigravity/*)",
                 ],
                 "ask": [],
             },

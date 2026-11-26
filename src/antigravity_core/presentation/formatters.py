@@ -57,10 +57,10 @@ _AGY_CMD_EXIT_NONZERO_RE: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 _BRAIN_PATH_RE: re.Pattern[str] = re.compile(
-    r"(?:/srv/antigravity/app/runtime_data/profiles/[^/\s'\"]+/home|/root|/home/[^/\s'\"]+)/\.gemini/antigravity-cli/brain/[0-9a-fA-F\-]{36}/"
+    r"(?:/home/[^/\s'\"]+/profiles/[^/\s'\"]+/home|/root|/home/[^/\s'\"]+)/\.gemini/antigravity-cli/brain/[0-9a-fA-F\-]{36}/"
 )
 _PROFILE_HOME_GEMINI_RE: re.Pattern[str] = re.compile(
-    r"/srv/antigravity/app/runtime_data/profiles/([^/\s'\"]+)/home/\.gemini/"
+    r"/home/[^/\s'\"]+/profiles/([^/\s'\"]+)/home/\.gemini/"
 )
 _REMOTES_PATH_RE: re.Pattern[str] = re.compile(
     r"/home/[^/\s'\"]+/[^/\s'\"]+/runtime_data/remotes/"

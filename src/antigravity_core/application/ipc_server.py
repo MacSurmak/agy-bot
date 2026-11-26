@@ -29,7 +29,10 @@ from antigravity_core.infrastructure.database.repositories import (
     TopicRepository,
 )
 from antigravity_core.infrastructure.media.mtproto_media import MediaService
-from antigravity_core.infrastructure.process_ownership import chown_path
+from antigravity_core.infrastructure.process_ownership import (
+    as_agent_identity,
+    chown_path,
+)
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
 
 
@@ -78,8 +81,8 @@ class CoreIpcServer:
             self._handle_client,
             path=str(sock_path),
         )
-        os.chmod(sock_path, 0o600)
-        chown_path(sock_path, self._cfg.paths.agent_uid, self._cfg.paths.agent_gid)
+        chown_path(sock_path, 0, self._cfg.paths.agent_gid)
+        os.chmod(sock_path, 0o660)
         logger.info(
             "Started local UNIX IPC server for MCP stdio_proxy", socket=str(sock_path)
         )
@@ -498,7 +501,8 @@ class CoreIpcServer:
             scratch_dir = (
                 self._cfg.paths.workspaces_root_dir / f"topic_{created.topic_id}"
             ).resolve()
-            scratch_dir.mkdir(parents=True, exist_ok=True)
+            with as_agent_identity(self._cfg.paths):
+                scratch_dir.mkdir(parents=True, exist_ok=True)
             updated = await self._topic_repo.update_workspace_path(
                 created.topic_id, str(scratch_dir)
             )

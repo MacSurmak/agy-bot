@@ -35,8 +35,14 @@ SSHFS_MOUNT_GRACE_SEC: int = 10
 SSH_CONTROL_PERSIST_SEC: int = 600
 INTERACTIVE_APPROVAL_TIMEOUT_SEC: float = 900.0
 
-# Privilege separation identity for agy workers, D-Bus, keyring, and SSH
+# Privilege separation identity and canonical FHS roots
 AGY_AGENT_USER: str = "agy-agent"
+FHS_OPT_ROOT: str = "/opt/antigravity"
+FHS_APP_DIR: str = "/opt/antigravity/app"
+FHS_BIN_DIR: str = "/opt/antigravity/bin"
+FHS_ETC_DIR: str = "/etc/antigravity"
+FHS_VAR_LIB_DIR: str = "/var/lib/antigravity"
+FHS_RUN_DIR: str = "/run/agy"
 
 # Subprocess, D-Bus, PTY, and Scheduler runtime constants
 AGY_SQLITE_BUSY_TIMEOUT_MS: int = 5000

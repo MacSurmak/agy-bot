@@ -35,47 +35,20 @@ _PATH_ARG_KEYS: Final[tuple[str, ...]] = (
     "SearchPath",
     "SearchDirectory",
 )
-_REPO_ROOT: Final[Path] = (
-    Path(os.environ["ANTIGRAVITY_APP_ROOT"]).resolve()
-    if "ANTIGRAVITY_APP_ROOT" in os.environ
-    else Path("/srv/antigravity/app").resolve()
-)
-_RUNTIME_DATA_DIR: Final[Path] = (_REPO_ROOT / "runtime_data").resolve()
+_AGENT_ROOT: Final[Path] = Path(pwd.getpwuid(os.geteuid()).pw_dir).resolve()
 
 _FORBIDDEN_BOT_INTERNAL_PATHS: Final[tuple[str, ...]] = (
-    str(_REPO_ROOT / "src"),
-    str(_REPO_ROOT / "migrations"),
-    str(_REPO_ROOT / "devtool_pkg"),
-    str(_REPO_ROOT / "config.yaml"),
-    str(_REPO_ROOT / ".env"),
-    str(_RUNTIME_DATA_DIR / "logs"),
-    str(_RUNTIME_DATA_DIR / "data"),
-    str(_RUNTIME_DATA_DIR / "profiles"),
-    str(_RUNTIME_DATA_DIR / "run"),
-    "/srv/antigravity/app/src",
-    "/srv/antigravity/app/migrations",
-    "/srv/antigravity/app/config.yaml",
-    "/srv/antigravity/app/.env",
-    "/srv/antigravity/app/runtime_data/logs",
-    "/srv/antigravity/app/runtime_data/data",
-    "/srv/antigravity/app/runtime_data/profiles",
-    "/srv/antigravity/app/runtime_data/run",
+    "/etc/antigravity",
+    "/var/lib/antigravity",
+    "/opt/antigravity/app",
 )
 
-_AGENT_HOME: Final[Path] = Path.home().resolve()
-_REAL_AGENT_HOME: Final[Path] = Path(pwd.getpwuid(os.geteuid()).pw_dir).resolve()
-
 _ALLOWED_LOCAL_WRITE_ROOTS: Final[tuple[Path, ...]] = (
-    (_RUNTIME_DATA_DIR / "workspaces").resolve(),
-    (_RUNTIME_DATA_DIR / "inbox").resolve(),
-    Path("/srv/antigravity/app/runtime_data/workspaces"),
-    Path("/srv/antigravity/app/runtime_data/inbox"),
-    (_AGENT_HOME / "projects").resolve(),
-    (_AGENT_HOME / ".gemini" / "config" / "hosts").resolve(),
-    (_AGENT_HOME / ".gemini" / "config" / "skills").resolve(),
-    (_REAL_AGENT_HOME / "projects").resolve(),
-    (_REAL_AGENT_HOME / ".gemini" / "config" / "hosts").resolve(),
-    (_REAL_AGENT_HOME / ".gemini" / "config" / "skills").resolve(),
+    (_AGENT_ROOT / "workspaces").resolve(),
+    (_AGENT_ROOT / "inbox").resolve(),
+    (_AGENT_ROOT / "projects").resolve(),
+    (_AGENT_ROOT / "hosts").resolve(),
+    (_AGENT_ROOT / ".gemini" / "config" / "skills").resolve(),
     Path("/tmp"),
 )
 
@@ -83,10 +56,10 @@ _ALLOWED_LOCAL_READ_ONLY_SEGMENTS: Final[tuple[str, ...]] = (
     "/.gemini/antigravity-cli/mcp/",
     "/.system_generated/tasks/",
     "/.system_generated/steps/",
-    "/.gemini/config/hosts/",
     "/.gemini/config/skills/",
     "/.gemini/config/plugins/",
     "/.gemini/AGENTS.md",
+    "/hosts/",
     "/projects/",
 )
 
@@ -97,7 +70,7 @@ _FORBIDDEN_INPLACE_EDIT_RE: Final[re.Pattern[str]] = re.compile(
     r"\b(?:sed\s+(?:-[a-zA-Z]*i|--in-place)|awk\s+-i\s+inplace|perl\s+-[a-zA-Z]*p[a-zA-Z]*i)\b"
 )
 _TOPIC_DIR_RE: Final[re.Pattern[str]] = re.compile(r"\btopic_(\d+)\b")
-_HOOK_LOG_PATH: Final[Path] = _RUNTIME_DATA_DIR / "agent_logs" / "agy_hooks.log"
+_HOOK_LOG_PATH: Final[Path] = _AGENT_ROOT / "logs" / "agy_hooks.log"
 
 
 def _log_hook_decision(tool_name: str, decision: str, detail: str) -> None:
@@ -413,8 +386,8 @@ def _handle_pre_file_tool(tool_name: str, str_args: dict[str, str]) -> None:
                     "decision": "deny",
                     "reason": (
                         f"LOCAL LXC SANDBOX RESTRICTION: Access to '{resolved_local}' inside the LXC workstation is forbidden. "
-                        "You may only access your topic workspace (/srv/antigravity/app/runtime_data/workspaces/...), "
-                        "inbox (/srv/antigravity/app/runtime_data/inbox/...), ~/projects/..., host passports (~/.gemini/config/hosts/...), or /tmp. "
+                        f"You may only access your topic workspace ({_AGENT_ROOT}/workspaces/...), "
+                        f"inbox ({_AGENT_ROOT}/inbox/...), {_AGENT_ROOT}/projects/..., host passports ({_AGENT_ROOT}/hosts/...), or /tmp. "
                         "To access files on a remote machine, use '/ssh:user@<alias>:/abs/path'."
                     ),
                 }

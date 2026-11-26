@@ -23,10 +23,11 @@ from antigravity_core.domain.exceptions import (
 from antigravity_core.domain.models import GoogleAccount
 from antigravity_core.infrastructure.crypto.fernet_vault import FernetVault
 from antigravity_core.infrastructure.database.repositories import AccountRepository
+import sqlite3
+
 from antigravity_core.infrastructure.process_ownership import (
     agent_exec_identity,
-    chown_path,
-    chown_tree,
+    as_agent_identity,
 )
 
 _ANSI_ESCAPE_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\].*?\x07")
@@ -91,72 +92,47 @@ class KeyringProfileManager:
             return False
 
     def _prepare_isolated_account_home(self, xdg_dir: Path) -> Path:
-        """Creates an isolated HOME for the account with shared symlinks for rules/brain/ssh and isolated token files."""
+        """Creates an isolated account HOME with native antigravity-cli state and 2 read-only config symlinks."""
         acc_home = xdg_dir / "home"
         acc_gemini = acc_home / ".gemini"
         acc_cli = acc_gemini / "antigravity-cli"
         acc_cache = acc_cli / "cache"
-        acc_cli.mkdir(parents=True, exist_ok=True)
-        os.chmod(acc_home, 0o700)
-
-        global_home = self._cfg.paths.agy_home_dir.parent
         global_gemini = self._cfg.paths.agy_home_dir
-        global_cli = global_gemini / "antigravity-cli"
 
-        global_projects = global_home / "projects"
-        symlinks: list[tuple[Path, Path]] = [
-            (acc_home / ".ssh", global_home / ".ssh"),
-            (acc_home / "projects", global_projects),
-            (acc_gemini / "AGENTS.md", global_gemini / "AGENTS.md"),
-            (acc_gemini / "config", global_gemini / "config"),
-            (acc_cli / "settings.json", global_cli / "settings.json"),
-            (
-                acc_cli / "conversation_summaries.db",
-                global_cli / "conversation_summaries.db",
-            ),
-            (acc_cli / "brain", global_cli / "brain"),
-            (acc_cli / "conversations", global_cli / "conversations"),
-            (acc_cli / "annotations", global_cli / "annotations"),
-            (acc_cli / "cache", global_cli / "cache"),
-        ]
-        global_projects.mkdir(parents=True, exist_ok=True)
-        (global_cli / "brain").mkdir(parents=True, exist_ok=True)
-        (global_cli / "conversations").mkdir(parents=True, exist_ok=True)
-        (global_cli / "annotations").mkdir(parents=True, exist_ok=True)
-        (global_cli / "cache").mkdir(parents=True, exist_ok=True)
+        with as_agent_identity(self._cfg.paths):
+            for subdir in ("brain", "conversations", "annotations", "cache"):
+                (acc_cli / subdir).mkdir(parents=True, exist_ok=True)
+            os.chmod(acc_home, 0o700)
 
-        for link_path, target_path in symlinks:
-            if link_path.is_symlink():
-                if link_path.resolve() == target_path.resolve():
-                    continue
-                link_path.unlink()
-            elif link_path.exists():
-                if link_path.is_dir():
-                    shutil.rmtree(link_path, ignore_errors=True)
-                else:
+            readonly_symlinks: tuple[tuple[Path, Path], ...] = (
+                (acc_gemini / "AGENTS.md", global_gemini / "AGENTS.md"),
+                (acc_gemini / "config", global_gemini / "config"),
+            )
+            for link_path, target_path in readonly_symlinks:
+                if link_path.is_symlink():
+                    if link_path.resolve() == target_path.resolve():
+                        continue
                     link_path.unlink()
-            link_path.symlink_to(target_path)
+                elif link_path.exists():
+                    if link_path.is_dir():
+                        shutil.rmtree(link_path, ignore_errors=True)
+                    else:
+                        link_path.unlink()
+                link_path.symlink_to(target_path)
 
-        onboarding_file = acc_cache / "onboarding.json"
-        if not onboarding_file.is_file():
-            global_onboarding = global_cli / "cache" / "onboarding.json"
-            if global_onboarding.is_file():
-                onboarding_file.write_bytes(global_onboarding.read_bytes())
-            else:
+            onboarding_file = acc_cache / "onboarding.json"
+            if not onboarding_file.is_file():
                 onboarding_file.write_text(
                     '{"onboardingCompleted":true,"termsAccepted":true,"theme":"default"}\n',
                     encoding="utf-8",
                 )
 
-        default_proj = acc_cache / "default_project_id.txt"
-        global_proj = global_cli / "cache" / "default_project_id.txt"
-        if not default_proj.is_file() and global_proj.is_file():
-            default_proj.write_bytes(global_proj.read_bytes())
-
-        uid = self._cfg.paths.agent_uid
-        gid = self._cfg.paths.agent_gid
-        chown_tree(global_cli, uid, gid)
-        chown_path(global_projects, uid, gid)
+            db_path = acc_cli / "conversation_summaries.db"
+            busy_ms = self._cfg.runtime.agy_sqlite_busy_timeout_ms
+            with sqlite3.connect(db_path) as acc_db:
+                acc_db.execute("PRAGMA journal_mode=WAL;")
+                acc_db.execute("PRAGMA synchronous=NORMAL;")
+                acc_db.execute(f"PRAGMA busy_timeout={busy_ms};")
 
         return acc_home
 
@@ -170,46 +146,42 @@ class KeyringProfileManager:
         xdg_dir = Path(account.xdg_data_dir)
         keyrings_dir = xdg_dir / "keyrings"
         acc_runtime_dir = xdg_dir / "run"
-        keyrings_dir.mkdir(parents=True, exist_ok=True)
-        acc_runtime_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(xdg_dir, 0o700)
-        os.chmod(keyrings_dir, 0o700)
-        os.chmod(acc_runtime_dir, 0o700)
+        socket_path = Path(account.dbus_socket_path)
+        with as_agent_identity(self._cfg.paths):
+            keyrings_dir.mkdir(parents=True, exist_ok=True)
+            acc_runtime_dir.mkdir(parents=True, exist_ok=True)
+            socket_path.parent.mkdir(parents=True, exist_ok=True)
+            os.chmod(xdg_dir, 0o700)
+            os.chmod(keyrings_dir, 0o700)
+            os.chmod(acc_runtime_dir, 0o700)
+
+            default_ptr = keyrings_dir / "default"
+            if not default_ptr.exists():
+                default_ptr.write_text("login\n", encoding="utf-8")
+                os.chmod(default_ptr, 0o600)
+
+            login_keyring_file = keyrings_dir / "login.keyring"
+            keyring_header = (
+                "[keyring]\n"
+                "display-name=login\n"
+                "ctime=0\n"
+                "mtime=0\n"
+                "lock-on-idle=false\n"
+                "lock-after=false\n"
+            )
+            needs_keyring_init = not login_keyring_file.is_file()
+            if not needs_keyring_init:
+                raw_kr = login_keyring_file.read_bytes()
+                if not raw_kr.startswith(b"[keyring]"):
+                    needs_keyring_init = True
+            if needs_keyring_init:
+                login_keyring_file.write_text(keyring_header, encoding="utf-8")
+                os.chmod(login_keyring_file, 0o600)
 
         acc_home = self._prepare_isolated_account_home(xdg_dir)
         acc_cli = self._account_cli_dir(xdg_dir)
         token_file = acc_cli / "antigravity-oauth-token"
         jetski_file = acc_cli / "jetski_state.pbtxt"
-
-        default_ptr = keyrings_dir / "default"
-        if not default_ptr.exists():
-            default_ptr.write_text("login\n", encoding="utf-8")
-            os.chmod(default_ptr, 0o600)
-
-        login_keyring_file = keyrings_dir / "login.keyring"
-        keyring_header = (
-            "[keyring]\n"
-            "display-name=login\n"
-            "ctime=0\n"
-            "mtime=0\n"
-            "lock-on-idle=false\n"
-            "lock-after=false\n"
-        )
-        needs_keyring_init = not login_keyring_file.is_file()
-        if not needs_keyring_init:
-            raw_kr = login_keyring_file.read_bytes()
-            if not raw_kr.startswith(b"[keyring]"):
-                needs_keyring_init = True
-        if needs_keyring_init:
-            login_keyring_file.write_text(keyring_header, encoding="utf-8")
-            os.chmod(login_keyring_file, 0o600)
-
-        socket_path = Path(account.dbus_socket_path)
-        socket_path.parent.mkdir(parents=True, exist_ok=True)
-        uid = self._cfg.paths.agent_uid
-        gid = self._cfg.paths.agent_gid
-        chown_tree(xdg_dir, uid, gid)
-        chown_path(socket_path.parent, uid, gid)
 
         dbus_pid: int | None = None
         if not await self._is_unix_socket_alive(socket_path):
@@ -251,20 +223,22 @@ class KeyringProfileManager:
                 bundle_json = restored_payload[len("agy-bundle-v1:") :]
                 bundle = json.loads(bundle_json)
                 if isinstance(bundle, dict):
-                    if "oauth_token_b64" in bundle and bundle["oauth_token_b64"]:
-                        token_file.write_bytes(
-                            base64.b64decode(
-                                str(bundle["oauth_token_b64"]).encode("ascii")
+                    with as_agent_identity(self._cfg.paths):
+                        if "oauth_token_b64" in bundle and bundle["oauth_token_b64"]:
+                            token_file.write_bytes(
+                                base64.b64decode(
+                                    str(bundle["oauth_token_b64"]).encode("ascii")
+                                )
                             )
-                        )
-                        os.chmod(token_file, 0o600)
-                        chown_path(token_file, uid, gid)
-                    if "jetski_b64" in bundle and bundle["jetski_b64"]:
-                        jetski_file.write_bytes(
-                            base64.b64decode(str(bundle["jetski_b64"]).encode("ascii"))
-                        )
-                        os.chmod(jetski_file, 0o600)
-                        chown_path(jetski_file, uid, gid)
+                            os.chmod(token_file, 0o600)
+                        if "jetski_b64" in bundle and bundle["jetski_b64"]:
+                            jetski_file.write_bytes(
+                                base64.b64decode(
+                                    str(bundle["jetski_b64"]).encode("ascii")
+                                )
+                            )
+                            os.chmod(jetski_file, 0o600)
+
                     logger.info(
                         "Restored antigravity-oauth-token bundle from Fernet backup",
                         account_slug=account.slug,
