@@ -23,8 +23,6 @@ from antigravity_core.domain.exceptions import (
 from antigravity_core.domain.models import GoogleAccount
 from antigravity_core.infrastructure.crypto.fernet_vault import FernetVault
 from antigravity_core.infrastructure.database.repositories import AccountRepository
-import sqlite3
-
 from antigravity_core.infrastructure.process_ownership import (
     agent_exec_identity,
     as_agent_identity,
@@ -92,23 +90,32 @@ class KeyringProfileManager:
             return False
 
     def _prepare_isolated_account_home(self, xdg_dir: Path) -> Path:
-        """Creates an isolated account HOME with native antigravity-cli state and 2 read-only config symlinks."""
+        """Creates an isolated account HOME keeping tokens/cache per-account and sharing config/history SSOT."""
         acc_home = xdg_dir / "home"
         acc_gemini = acc_home / ".gemini"
         acc_cli = acc_gemini / "antigravity-cli"
         acc_cache = acc_cli / "cache"
         global_gemini = self._cfg.paths.agy_home_dir
+        global_cli = global_gemini / "antigravity-cli"
 
         with as_agent_identity(self._cfg.paths):
-            for subdir in ("brain", "conversations", "annotations", "cache"):
-                (acc_cli / subdir).mkdir(parents=True, exist_ok=True)
+            acc_cache.mkdir(parents=True, exist_ok=True)
+            for shared_dir in ("brain", "conversations", "annotations"):
+                (global_cli / shared_dir).mkdir(parents=True, exist_ok=True)
             os.chmod(acc_home, 0o700)
 
-            readonly_symlinks: tuple[tuple[Path, Path], ...] = (
+            shared_links: tuple[tuple[Path, Path], ...] = (
                 (acc_gemini / "AGENTS.md", global_gemini / "AGENTS.md"),
                 (acc_gemini / "config", global_gemini / "config"),
+                (
+                    acc_cli / "conversation_summaries.db",
+                    global_cli / "conversation_summaries.db",
+                ),
+                (acc_cli / "brain", global_cli / "brain"),
+                (acc_cli / "conversations", global_cli / "conversations"),
+                (acc_cli / "annotations", global_cli / "annotations"),
             )
-            for link_path, target_path in readonly_symlinks:
+            for link_path, target_path in shared_links:
                 if link_path.is_symlink():
                     if link_path.resolve() == target_path.resolve():
                         continue
@@ -126,13 +133,6 @@ class KeyringProfileManager:
                     '{"onboardingCompleted":true,"termsAccepted":true,"theme":"default"}\n',
                     encoding="utf-8",
                 )
-
-            db_path = acc_cli / "conversation_summaries.db"
-            busy_ms = self._cfg.runtime.agy_sqlite_busy_timeout_ms
-            with sqlite3.connect(db_path) as acc_db:
-                acc_db.execute("PRAGMA journal_mode=WAL;")
-                acc_db.execute("PRAGMA synchronous=NORMAL;")
-                acc_db.execute(f"PRAGMA busy_timeout={busy_ms};")
 
         return acc_home
 

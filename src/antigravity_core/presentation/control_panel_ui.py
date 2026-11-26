@@ -548,10 +548,9 @@ class ControlPanelUI:
         existing = await self._account_repo.list_accounts()
         staging_token = f"oauth_{secrets.token_hex(4)}"
         email_label = "Pending Google Sign-In"
-        xdg_dir = str((self._cfg.paths.profiles_data_dir / staging_token).resolve())
-        dbus_sock = str(
-            (self._cfg.paths.runtime_dir / f"bus_{staging_token}.sock").resolve()
-        )
+        profile_root = (self._cfg.paths.profiles_data_dir / staging_token).resolve()
+        xdg_dir = str(profile_root)
+        dbus_sock = str((profile_root / "run" / "dbus.sock").resolve())
         keyring_password = secrets.token_urlsafe(
             self._cfg.runtime.keyring_password_bytes
         )
