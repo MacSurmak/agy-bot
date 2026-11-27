@@ -285,6 +285,7 @@ async def run_service(static_config: StaticConfig) -> None:
         workspace_ui=workspace_ui,
     ).register_handlers()
 
+    await forum_gateway.initialize_topic_emojis()
     await ipc_server.start()
     await scheduler_service.start_and_hydrate()
     await sensor_service.start_and_hydrate()
@@ -305,6 +306,7 @@ async def run_service(static_config: StaticConfig) -> None:
         await ipc_server.stop()
         await worker_pool.shutdown_all()
         await keyring_mgr.shutdown_all()
+        await forum_gateway.shutdown()
         await client.disconnect()
         await db_mgr.close()
 

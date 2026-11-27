@@ -513,13 +513,17 @@ class CoreIpcServer:
             new_title = str(params["title"]).strip()
             if not new_title:
                 raise ValueError("Topic title cannot be empty.")
+            raw_emoji = str(params["icon_emoji"]).strip() if "icon_emoji" in params else ""
+            icon_emoji = raw_emoji if raw_emoji else None
             renamed = await self._topic_lifecycle.rename_topic(
                 topic_id=topic_id,
                 new_title=new_title,
+                icon_emoji=icon_emoji,
             )
             return {
                 "topic_id": renamed.topic_id,
                 "title": renamed.title,
+                "icon_emoji": raw_emoji,
                 "status": "renamed",
             }
 

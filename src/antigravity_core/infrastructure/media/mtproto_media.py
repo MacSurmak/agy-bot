@@ -16,6 +16,11 @@ from telethon.tl.types import Updates
 from antigravity_core.config.static_config import StaticConfig
 from antigravity_core.domain.exceptions import AntigravityError
 from antigravity_core.infrastructure.database.repositories import SettingsRepository
+from antigravity_core.infrastructure.media.topic_emoji_registry import (
+    TOPIC_EMOJI_CONFIG_PATH,
+    USER_EMOJI_SESSION_FILENAME,
+    TopicEmojiRegistry,
+)
 from antigravity_core.infrastructure.process_ownership import (
     as_agent_identity,
     chown_path,
@@ -232,6 +237,46 @@ class TelethonForumGateway:
     def __init__(self, client: TelegramClient, static_config: StaticConfig) -> None:
         self._client = client
         self._cfg = static_config
+        self._emoji_registry = TopicEmojiRegistry(TOPIC_EMOJI_CONFIG_PATH)
+        self._user_emoji_client: TelegramClient | None = None
+
+    async def initialize_topic_emojis(self) -> None:
+        """Loads custom topic emoji pack mappings and connects isolated Premium user session if present."""
+        await self._emoji_registry.load_from_telegram(self._client)
+        session_path = (
+            self._cfg.telegram.session_file_path.parent / USER_EMOJI_SESSION_FILENAME
+        )
+        if not session_path.is_file():
+            logger.info(
+                "Premium user emoji session not found; custom topic icons disabled until initialized",
+                session_path=str(session_path),
+            )
+            return
+        user_client = TelegramClient(
+            str(session_path.with_suffix("")),
+            self._cfg.telegram.api_id,
+            self._cfg.telegram.api_hash,
+        )
+        await user_client.connect()
+        if not await user_client.is_user_authorized():
+            await user_client.disconnect()
+            logger.warning(
+                "Premium user emoji session exists but is not authorized; custom topic icons disabled",
+                session_path=str(session_path),
+            )
+            return
+        self._user_emoji_client = user_client
+        logger.info(
+            "Connected isolated Premium user session for custom forum topic icons",
+            session_path=str(session_path),
+            icons_loaded=len(self._emoji_registry.available_emojis()),
+        )
+
+    async def shutdown(self) -> None:
+        """Disconnects the isolated Premium user emoji session if active."""
+        if self._user_emoji_client is not None:
+            await self._user_emoji_client.disconnect()
+            self._user_emoji_client = None
 
     async def create_forum_topic(self, title: str) -> int:
         updates: Updates = await self._client(
@@ -248,7 +293,32 @@ class TelethonForumGateway:
             "Failed to extract created topic_id from CreateForumTopicRequest response."
         )
 
-    async def rename_forum_topic(self, topic_id: int, new_title: str) -> None:
+    async def rename_forum_topic(
+        self, topic_id: int, new_title: str, icon_emoji: str | None
+    ) -> None:
+        icon_id = (
+            self._emoji_registry.resolve_icon_id(icon_emoji)
+            if icon_emoji is not None and icon_emoji.strip()
+            else None
+        )
+        if icon_id is not None and self._user_emoji_client is not None:
+            await self._user_emoji_client(
+                EditForumTopicRequest(
+                    peer=self._cfg.telegram.forum_chat_id,
+                    topic_id=topic_id,
+                    title=new_title,
+                    icon_emoji_id=icon_id,
+                )
+            )
+            return
+        if icon_emoji is not None and icon_emoji.strip():
+            logger.warning(
+                "Topic icon_emoji skipped (unregistered emoji or Premium user session unavailable)",
+                topic_id=topic_id,
+                icon_emoji=icon_emoji,
+                resolved_icon_id=icon_id,
+                has_user_session=self._user_emoji_client is not None,
+            )
         await self._client(
             EditForumTopicRequest(
                 peer=self._cfg.telegram.forum_chat_id,

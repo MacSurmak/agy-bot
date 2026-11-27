@@ -47,9 +47,7 @@ _BARE_LATEX_CMD_RE: Final[re.Pattern[str]] = re.compile(
 _INTRAWORD_UNDERSCORE_RE: Final[re.Pattern[str]] = re.compile(
     r"(?<=[0-9A-Za-zА-Яа-яЁё°])_(?=[0-9A-Za-zА-Яа-яЁё])"
 )
-_GLOB_STAR_RE: Final[re.Pattern[str]] = re.compile(
-    r"(?<=[0-9A-Za-zА-Яа-яЁё_])\*(?!\*)"
-)
+_GLOB_STAR_RE: Final[re.Pattern[str]] = re.compile(r"(?<=_)\*(?!\*)")
 _HEADING_OR_LIST_LINE_RE: Final[re.Pattern[str]] = re.compile(
     r"^(?:#{1,6}\s+|[-*]\s+|\d+\.\s+)"
 )

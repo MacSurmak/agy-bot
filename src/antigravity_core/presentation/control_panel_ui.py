@@ -679,7 +679,9 @@ class ControlPanelUI:
                 ).resolve()
             )
             final_title = lex.ws_auto_topic_title.format(topic_id=topic.topic_id)
-            await self._topic_lifecycle.rename_topic(topic.topic_id, final_title)
+            await self._topic_lifecycle.rename_topic(
+                topic.topic_id, final_title, None
+            )
             await self._workspace_ui_init_new_topic(topic.topic_id, assigned_dir)
             internal_chat_id = str(abs(self._cfg.telegram.forum_chat_id)).removeprefix(
                 "100"
@@ -717,15 +719,15 @@ class ControlPanelUI:
     ) -> tuple[str, list[list[Button]]]:
         accounts = await self._account_repo.list_accounts()
         lines = [
+            RICH_SPACER_MENU,
+            "",
             format_wide_header_block(lex.cp_accounts_hub_title),
             "",
             lex.cp_accounts_hub_subtitle,
         ]
         if not accounts:
             lines.append(lex.cp_accounts_hub_empty_hint)
-        lines.append(
-            f"{RICH_SPACER_MENU}\n---\n*Google AI Pro · {len(accounts)}*"
-        )
+        lines.append(f"\n---\n*Google AI Pro · {len(accounts)}*")
         return "\n".join(lines), build_paginated_accounts_keyboard(lex, accounts, page)
 
     async def _render_accounts_hub(
@@ -761,6 +763,8 @@ class ControlPanelUI:
             else ""
         )
         lines = [
+            RICH_SPACER_MENU,
+            "",
             format_wide_header_block(
                 lex.cp_acc_card_header.format(email_label=acc.display_email)
             ),
@@ -771,7 +775,7 @@ class ControlPanelUI:
             lex.cp_acc_card_status_line.format(
                 status_label=status_label, quota_line=quota_line
             ),
-            f"{RICH_SPACER_MENU}\n---\n*{acc.display_email}*",
+            f"\n---\n*{acc.display_email}*",
         ]
 
         await self._update_or_recreate_panel(
@@ -804,6 +808,8 @@ class ControlPanelUI:
         page_hosts = hosts[start_idx : start_idx + _HOSTS_PAGE_SIZE]
 
         lines: list[str] = [
+            RICH_SPACER_MENU,
+            "",
             format_wide_header_block(lex.cp_hosts_menu_title),
             "",
             lex.cp_hosts_menu_subtitle,
@@ -873,7 +879,7 @@ class ControlPanelUI:
             )
 
         lines.append(
-            f"{RICH_SPACER_MENU}\n---\n*Серверы: {total} · Стр. {curr_page + 1}/{max_page + 1}*"
+            f"\n---\n*Серверы: {total} · Стр. {curr_page + 1}/{max_page + 1}*"
         )
         rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
         await self._safe_edit_event(event, "\n".join(lines), rows)
@@ -899,10 +905,11 @@ class ControlPanelUI:
             status_line=status_line,
         )
         text = (
-            format_wide_header_block(lex.cp_host_tools_title.format(alias=host.alias))
+            f"{RICH_SPACER_MENU}\n\n"
+            + format_wide_header_block(lex.cp_host_tools_title.format(alias=host.alias))
             + "\n\n"
             + body
-            + f"\n{RICH_SPACER_MENU}\n---\n*hosts/infra-{host.alias}.md*"
+            + f"\n\n---\n*hosts/infra-{host.alias}.md*"
         )
         prefix = (
             f"cp:host_inst_ob:{onboarding_req_id}:{host.alias}"
@@ -1109,16 +1116,19 @@ class ControlPanelUI:
             (lex.setting_label_default_model, settings.default_model),
             (lex.setting_label_default_mode, mode_display),
         ]
-        lines = [format_wide_header_block(lex.cp_settings_menu_header.strip()), ""]
+        lines = [
+            RICH_SPACER_MENU,
+            "",
+            format_wide_header_block(lex.cp_settings_menu_header.strip()),
+            "",
+        ]
         for label, val in items:
             lines.append(
                 lex.cp_settings_menu_item.format(
                     key="", value_json=val, description=label
                 )
             )
-        lines.append(
-            f"{RICH_SPACER_MENU}\n---\n*{settings.ui_language} · {settings.default_model}*"
-        )
+        lines.append(f"\n---\n*{settings.ui_language} · {settings.default_model}*")
         btn_labels = [
             (lex.btn_cp_set_language, "ui_language"),
             (lex.btn_cp_set_model, "default_model"),

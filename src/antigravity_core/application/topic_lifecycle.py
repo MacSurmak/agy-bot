@@ -113,12 +113,18 @@ class TopicLifecycleService:
         await self._pool.evict_topic_worker(topic_id)
         return updated
 
-    async def _bg_rename_forum_topic(self, topic_id: int, clean_title: str) -> None:
+    async def _bg_rename_forum_topic(
+        self, topic_id: int, clean_title: str, icon_emoji: str | None
+    ) -> None:
         await self._forum_gateway.rename_forum_topic(
-            topic_id=topic_id, new_title=clean_title
+            topic_id=topic_id,
+            new_title=clean_title,
+            icon_emoji=icon_emoji,
         )
 
-    async def rename_topic(self, topic_id: int, new_title: str) -> ForumTopic:
+    async def rename_topic(
+        self, topic_id: int, new_title: str, icon_emoji: str | None
+    ) -> ForumTopic:
         max_len = self._cfg.limits.topic_title_max_chars
         clean_title = new_title.strip()[:max_len]
         if not clean_title:
@@ -126,7 +132,9 @@ class TopicLifecycleService:
         updated = await self._topic_repo.update_topic_title(
             topic_id=topic_id, new_title=clean_title
         )
-        asyncio.create_task(self._bg_rename_forum_topic(topic_id, clean_title))
+        asyncio.create_task(
+            self._bg_rename_forum_topic(topic_id, clean_title, icon_emoji)
+        )
         return updated
 
     async def archive_topic(self, topic_id: int) -> ForumTopic:

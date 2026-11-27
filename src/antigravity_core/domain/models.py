@@ -245,7 +245,10 @@ class ForumTopicGateway(Protocol):
 
     async def create_forum_topic(self, title: str) -> int: ...
 
-    async def rename_forum_topic(self, topic_id: int, new_title: str) -> None: ...
+    async def rename_forum_topic(
+        self, topic_id: int, new_title: str, icon_emoji: str | None
+    ) -> None:
+        """Renames a Telegram Forum Topic and optionally applies a custom emoji icon."""
 
     async def close_and_rename_forum_topic(
         self, topic_id: int, new_title: str

@@ -198,7 +198,7 @@ def render_topic_header_card(
         worker_str=worker_str,
     )
     if supports_native_rich_output():
-        return f"{rendered.rstrip()}\n{RICH_SPACER_MENU}\n---\n*📂 {short_ws}*"
+        return f"{RICH_SPACER_MENU}\n\n{rendered.rstrip()}\n\n---\n*📂 {short_ws}*"
     return rendered
 
 
@@ -512,8 +512,6 @@ def build_final_execution_trace_pages(
 
 _COMPACT_BAR_WIDTH: Final[int] = 8
 _DEFAULT_SSH_PORT: Final[int] = 22
-_SHORT_ANSWER_THRESHOLD_CHARS: Final[int] = 260
-
 RICH_SPACER_ANSWER_FULL: Final[str] = (
     "<table><tr>"
     + "".join("<td>" + ("\u2800" * 12) + "</td>" for _ in range(10))
@@ -539,7 +537,9 @@ def _format_trace_blocks_as_html_pages(
 ) -> list[str]:
     """Paginates collapsible <details> trace blocks into Rich HTML messages below Telegram Show More cutoff."""
     if not blocks:
-        return [f"{_render_html_header(header_line)}\n{RICH_SPACER_MENU}"]
+        return [
+            f"{RICH_SPACER_MENU}\n{_render_html_header(header_line)}\n<hr><p><i>⏳ ...</i></p>"
+        ]
 
     pieces: list[str] = []
     for block in blocks:
@@ -581,12 +581,23 @@ def _format_trace_blocks_as_html_pages(
     for idx, page_pieces in enumerate(raw_pages, start=1):
         if total_pages == 1:
             hdr_text = header_line
+            footer_html = f"<hr><p><i>⚙ {len(page_pieces)}</i></p>"
         else:
             hdr_text = lex.trace_active_page_suffix.format(
                 header=header_line, page_num=idx
             )
+            footer_html = (
+                f"<hr><p><i>📄 {idx} / {total_pages} · ⚙ {len(page_pieces)}</i></p>"
+            )
         rendered.append(
-            "\n".join([_render_html_header(hdr_text), *page_pieces, RICH_SPACER_MENU])
+            "\n".join(
+                [
+                    RICH_SPACER_MENU,
+                    _render_html_header(hdr_text),
+                    *page_pieces,
+                    footer_html,
+                ]
+            )
         )
     return rendered
 
@@ -647,13 +658,6 @@ def build_final_trace_rich_html_pages(
     )
 
 
-def _should_use_wide_answer_bubble(body_markdown: str, chunk_count: int) -> bool:
-    if chunk_count > 1 or len(body_markdown.strip()) >= _SHORT_ANSWER_THRESHOLD_CHARS:
-        return True
-    structured_markers = ("\n#", "\n- ", "\n1. ", "| ---", "```")
-    return any(marker in body_markdown for marker in structured_markers)
-
-
 def split_rich_markdown_chunks(
     body_markdown: str,
     footer_bar_text: str,
@@ -662,22 +666,18 @@ def split_rich_markdown_chunks(
     """Splits native RichMessage Markdown below Telegram Show More cutoff with uniform full-width bubbles."""
     clean_footer = footer_bar_text.strip()
     footer_block = f"\n\n---\n*{clean_footer}*"
-    spacer_overhead = len(RICH_SPACER_ANSWER_FULL) + 4
+    spacer_overhead = len(RICH_SPACER_ANSWER_FULL) + 6
     budget = max(1000, max_chars - len(footer_block) - spacer_overhead - 120)
     chunks = split_markdown_preserving_blocks(body_markdown, budget)
     if not chunks:
-        return [footer_block.lstrip()]
-
-    if not _should_use_wide_answer_bubble(body_markdown, len(chunks)):
-        chunks[-1] = f"{chunks[-1]}{footer_block}"
-        return chunks
+        return [f"{RICH_SPACER_ANSWER_FULL}\n\n---\n*{clean_footer}*"]
 
     total = len(chunks)
     for idx in range(total - 1):
         chunks[idx] = (
-            f"{chunks[idx]}\n{RICH_SPACER_ANSWER_FULL}\n---\n*📄 {idx + 1} / {total}*"
+            f"{RICH_SPACER_ANSWER_FULL}\n\n{chunks[idx]}\n\n---\n*📄 {idx + 1} / {total}*"
         )
-    chunks[-1] = f"{chunks[-1]}\n{RICH_SPACER_ANSWER_FULL}\n---\n*{clean_footer}*"
+    chunks[-1] = f"{RICH_SPACER_ANSWER_FULL}\n\n{chunks[-1]}\n\n---\n*{clean_footer}*"
     return chunks
 
 
@@ -1215,19 +1215,24 @@ def render_control_panel_dashboard(
     online_hosts = sum(1 for h in hosts if h.alias in mount_statuses and mount_statuses[h.alias])
     active_sensors = sensors if sensors is not None else []
 
-    lines: list[str] = [
-        lex.dashboard_header.format(
-            warm_count=warm_count, running_count=running_count
-        ),
-        "",
-        "| Воркеры | Серверы | Задачи | Сенсоры |"
-        if settings.ui_language == "ru"
-        else "| Workers | Servers | Tasks | Sensors |",
-        "| :--- | :---: | :---: | :---: |",
-        f"| `{warm_count}` RAM · `{running_count}` раб. | 🟢 `{online_hosts}/{len(hosts)}` | `{len(tasks)}` | `{len(active_sensors)}` |"
-        if settings.ui_language == "ru"
-        else f"| `{warm_count}` RAM · `{running_count}` busy | 🟢 `{online_hosts}/{len(hosts)}` | `{len(tasks)}` | `{len(active_sensors)}` |",
-    ]
+    lines: list[str] = []
+    if supports_native_rich_output():
+        lines.extend([RICH_SPACER_MENU, ""])
+    lines.extend(
+        [
+            lex.dashboard_header.format(
+                warm_count=warm_count, running_count=running_count
+            ),
+            "",
+            "| Воркеры | Серверы | Задачи | Сенсоры |"
+            if settings.ui_language == "ru"
+            else "| Workers | Servers | Tasks | Sensors |",
+            "| :--- | :---: | :---: | :---: |",
+            f"| `{warm_count}` RAM · `{running_count}` раб. | 🟢 `{online_hosts}/{len(hosts)}` | `{len(tasks)}` | `{len(active_sensors)}` |"
+            if settings.ui_language == "ru"
+            else f"| `{warm_count}` RAM · `{running_count}` busy | 🟢 `{online_hosts}/{len(hosts)}` | `{len(tasks)}` | `{len(active_sensors)}` |",
+        ]
+    )
     accounts_by_slug = {a.slug: a.display_email for a in accounts}
     warm_snaps = [s for s in pool_snapshots if s.is_warm]
     if warm_snaps:
@@ -1296,7 +1301,7 @@ def render_control_panel_dashboard(
         quota_auto_switch_threshold_pct=settings.quota_auto_switch_threshold_pct,
     ).strip()
     if supports_native_rich_output():
-        lines.append(f"{RICH_SPACER_MENU}\n---\n*{footer_summary}*")
+        lines.append(f"\n---\n*{footer_summary}*")
     else:
         lines.append(f"\n{footer_summary}")
     return "\n".join(lines)

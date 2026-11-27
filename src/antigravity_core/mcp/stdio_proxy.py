@@ -1,3 +1,5 @@
+"""MCP stdio proxy for Antigravity Telegram Core."""
+
 import asyncio
 import json
 import os
@@ -7,13 +9,35 @@ from mcp.server import MCPServer
 from pydantic import Field
 
 from antigravity_core.domain.exceptions import IpcError
+from antigravity_core.infrastructure.media.topic_emoji_registry import (
+    TOPIC_EMOJI_CONFIG_PATH,
+    load_topic_emoji_config_specs,
+)
 
 type IpcScalar = str | int | float | bool | None
 type IpcPayload = dict[str, IpcScalar | list[dict[str, IpcScalar]]]
 
+def _build_icon_emoji_description() -> str:
+    specs = load_topic_emoji_config_specs(TOPIC_EMOJI_CONFIG_PATH)
+    if not specs:
+        return (
+            "Optional single emoji for the Telegram Forum Topic icon, or empty string if no custom emoji pack is configured."
+        )
+    palette = ", ".join(
+        f"{spec.emoji} ({spec.label})" if spec.label else spec.emoji
+        for spec in specs
+    )
+    return (
+        "Single emoji for the Telegram Forum Topic icon. "
+        f"Pick strictly from the available pack icons: {palette}."
+    )
+
+
+_ICON_EMOJI_FIELD_DESC: Final[str] = _build_icon_emoji_description()
+
 _SERVER_INSTRUCTIONS: Final[str] = (
     "Native control plane for Antigravity Telegram Core. "
-    "At the end of the first substantive turn of a new conversation, call rename_current_topic with a concise keyword-first '<Subject>: <action>' title (2-4 words) in the user's language. "
+    "At the end of the first substantive turn of a new conversation, call rename_current_topic with a concise keyword-first '<Subject>: <action>' title (2-4 words) in the user's language and an appropriate icon_emoji from the available pack. "
     "Use register_remote_host to onboard SSH servers (with jump_host for internal nodes), "
     "update_host_knowledge to record infrastructure notes in /home/agy-agent/hosts/infra-<host>.md, "
     "send_file_to_telegram to deliver local or remote TRAMP (/ssh:user@alias:/abs/path) files to Telegram, "
@@ -385,12 +409,17 @@ async def rename_current_topic(
             description="Concise 2-4 word topic title in the conversation language using '<Subject>: <action>' format with the primary entity or domain keyword first. Never start with generic action words and never paste the raw user prompt."
         ),
     ],
+    icon_emoji: Annotated[
+        str,
+        Field(description=_ICON_EMOJI_FIELD_DESC),
+    ],
 ) -> IpcPayload:
-    """Set or update the title of the current Telegram Forum Topic. Call this at the end of the first substantive turn once context is clear, or when asked to rename the topic."""
+    """Set or update the title and icon of the current Telegram Forum Topic. Call this at the end of the first substantive turn once context is clear, or when asked to rename the topic."""
     return await _call_bot_ipc(
         "rename_current_topic",
         {
             "title": title,
+            "icon_emoji": icon_emoji,
         },
     )
 

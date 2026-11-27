@@ -605,7 +605,7 @@ class WorkspaceTopicUI:
             parts = raw_text.split(maxsplit=1)
             if len(parts) == _CMD_WITH_ARG_PARTS and parts[1].strip():
                 new_title = parts[1].strip()
-                await self._lifecycle.rename_topic(topic_id, new_title)
+                await self._lifecycle.rename_topic(topic_id, new_title, None)
                 await self.refresh_pinned_card(topic_id)
                 return True
 
