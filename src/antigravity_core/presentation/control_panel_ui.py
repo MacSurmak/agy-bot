@@ -47,6 +47,7 @@ from antigravity_core.presentation.formatters import (
 _HOSTS_PAGE_SIZE: Final[int] = 6
 _HOST_BTN_COLS: Final[int] = 2
 _DEFAULT_SSH_PORT: Final[int] = 22
+_NEW_TOPIC_DEFAULT_ICON_EMOJI: Final[str] = "✨"
 from antigravity_core.presentation.tg_renderer import (
     edit_rich_or_standard_message,
     send_rich_or_standard_message,
@@ -680,7 +681,7 @@ class ControlPanelUI:
             )
             final_title = lex.ws_auto_topic_title.format(topic_id=topic.topic_id)
             await self._topic_lifecycle.rename_topic(
-                topic.topic_id, final_title, None
+                topic.topic_id, final_title, _NEW_TOPIC_DEFAULT_ICON_EMOJI
             )
             await self._workspace_ui_init_new_topic(topic.topic_id, assigned_dir)
             internal_chat_id = str(abs(self._cfg.telegram.forum_chat_id)).removeprefix(
