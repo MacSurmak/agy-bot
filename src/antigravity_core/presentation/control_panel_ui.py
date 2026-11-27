@@ -39,6 +39,7 @@ from antigravity_core.infrastructure.keyring.dbus_profile_mgr import (
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
 from antigravity_core.lexicon import SUPPORTED_LANGUAGES, UiLexicon, get_lexicon
 from antigravity_core.presentation.formatters import (
+    RICH_SPACER_MENU,
     format_wide_header_block,
     render_control_panel_dashboard,
 )
@@ -722,6 +723,8 @@ class ControlPanelUI:
         ]
         if not accounts:
             lines.append(lex.cp_accounts_hub_empty_hint)
+        lines.append("")
+        lines.append(RICH_SPACER_MENU)
         return "\n".join(lines), build_paginated_accounts_keyboard(lex, accounts, page)
 
     async def _render_accounts_hub(
@@ -767,6 +770,8 @@ class ControlPanelUI:
             lex.cp_acc_card_status_line.format(
                 status_label=status_label, quota_line=quota_line
             ),
+            "",
+            RICH_SPACER_MENU,
         ]
 
         await self._update_or_recreate_panel(
@@ -867,6 +872,8 @@ class ControlPanelUI:
                 ]
             )
 
+        lines.append("")
+        lines.append(RICH_SPACER_MENU)
         rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
         await self._safe_edit_event(event, "\n".join(lines), rows)
 
@@ -894,6 +901,8 @@ class ControlPanelUI:
             format_wide_header_block(lex.cp_host_tools_title.format(alias=host.alias))
             + "\n\n"
             + body
+            + "\n\n"
+            + RICH_SPACER_MENU
         )
         prefix = (
             f"cp:host_inst_ob:{onboarding_req_id}:{host.alias}"
@@ -1107,6 +1116,8 @@ class ControlPanelUI:
                     key="", value_json=val, description=label
                 )
             )
+        lines.append("")
+        lines.append(RICH_SPACER_MENU)
         btn_labels = [
             (lex.btn_cp_set_language, "ui_language"),
             (lex.btn_cp_set_model, "default_model"),

@@ -76,7 +76,6 @@ from antigravity_core.presentation.keyboards import (
 
 _CMD_WITH_ARG_PARTS: Final[int] = 2
 _SUDO_CB_MIN_PARTS: Final[int] = 4
-_TITLE_SYNC_ATTEMPTS: Final[int] = 4
 _MAX_RICH_OUTPUT_CHARS: Final[int] = 6800
 _LIVE_LOG_TAIL_BYTES: Final[int] = 4096
 _LIVE_LOG_MAX_LINES: Final[int] = 8
@@ -994,39 +993,7 @@ class WorkspaceTopicUI:
         await self._deliver_formatted_turn_output(
             topic_id, reply_to_msg_id, body_text, footer_bar, updated_topic
         )
-        await self._auto_sync_topic_title_if_generic(
-            updated_topic, result.conversation_id
-        )
         await self.refresh_pinned_card(topic_id)
-
-    async def _auto_sync_topic_title_if_generic(
-        self, topic: ForumTopic, conversation_id: UUID
-    ) -> None:
-        if not topic.title.startswith(("💬", "Рабочий топик #", "Workspace #")):
-            return
-        summary = None
-        for _ in range(_TITLE_SYNC_ATTEMPTS):
-            summary = self._history_reader.get_conversation_summary(conversation_id)
-            if (
-                summary is not None
-                and summary.title.strip()
-                and summary.title != "Untitled Session"
-            ):
-                break
-            await asyncio.sleep(0.5)
-
-        if (
-            summary is not None
-            and summary.title.strip()
-            and summary.title != "Untitled Session"
-        ):
-            new_title = summary.title.strip()[: self._cfg.limits.topic_title_max_chars]
-            await self._lifecycle.rename_topic(topic.topic_id, new_title)
-            logger.info(
-                "Auto-renamed topic title from agy conversation summary",
-                topic_id=topic.topic_id,
-                new_title=new_title,
-            )
 
     async def _run_interactive_wake_turn(
         self,

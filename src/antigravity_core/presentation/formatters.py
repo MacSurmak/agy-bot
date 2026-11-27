@@ -196,6 +196,8 @@ def render_topic_header_card(
         sudo_str=sudo_str,
         worker_str=worker_str,
     )
+    if supports_native_rich_output():
+        return f"{rendered.rstrip()}\n\n{RICH_SPACER_MENU}"
     return rendered
 
 
@@ -303,14 +305,12 @@ def _format_tool_blocks_untruncated(
 
     if tool.parameters_text:
         p_clean = _shorten_verbose_paths(_clean_binary_noise(tool.parameters_text))[
-            :600
+            :2000
         ]
         p_stripped = _SINGLE_PARAM_PREFIX_RE.sub("", p_clean).strip()
-        # Omit parameters section if it is a single-line command/path already shown in the header
+        # Omit parameters section only when the single-line header already displays the exact full command/path
         is_redundant_param = (
-            "\n" not in p_clean
-            and bool(clean_h)
-            and (p_stripped == clean_h or len(raw_hint) <= 140)
+            "\n" not in p_clean and bool(clean_h) and p_stripped == clean_h
         )
         if p_clean and not is_redundant_param:
             body_sections.append(f"{lex.trace_tool_params_label}\n{p_stripped}")
@@ -511,33 +511,23 @@ def build_final_execution_trace_pages(
 
 _COMPACT_BAR_WIDTH: Final[int] = 8
 _DEFAULT_SSH_PORT: Final[int] = 22
-_UNIFORM_BUBBLE_COLS: Final[int] = 86
-MENU_BUBBLE_COLS: Final[int] = 68
-_ANSWER_BUBBLE_COLS: Final[int] = 78
 _SHORT_ANSWER_THRESHOLD_CHARS: Final[int] = 260
 
-
-def make_rich_width_bar(label: str, target_cols: int) -> str:
-    """Renders a 1-line monospaced bar that keeps Telegram Desktop bubbles wide without breaking mobile layout."""
-    clean = " ".join(label.replace("**", "").replace("`", "").splitlines()).strip()
-    pad_count = max(0, target_cols - len(clean))
-    return f"```text\n{clean}{' ' * pad_count}\n```"
-
-
-def pad_rich_width(line: str, target_cols: int) -> str:
-    """Pads a Markdown or text line with non-breaking spaces so Telegram Desktop expands the bubble uniformly."""
-    visible = len(line.replace("**", "").replace("`", "").replace("#", "").strip())
-    if visible >= target_cols:
-        return line
-    pad_count = target_cols - visible
-    return line + ("\u00a0" * pad_count) + "\u2060"
+RICH_SPACER_ANSWER_FULL: Final[str] = (
+    "<table><tr>"
+    + "".join("<td>" + ("\u2800" * 12) + "</td>" for _ in range(10))
+    + "</tr></table>"
+)
+RICH_SPACER_MENU: Final[str] = (
+    "<table><tr>"
+    + "".join("<td>" + ("\u2800" * 6) + "</td>" for _ in range(8))
+    + "</tr></table>"
+)
 
 
 def _render_html_header(header_line: str) -> str:
     raw_clean = header_line.replace("**", "").replace("`", "").strip()
-    pad_count = max(0, _UNIFORM_BUBBLE_COLS - len(raw_clean))
-    pad_suffix = ("\u00a0" * pad_count) + "\u2060" if pad_count > 0 else ""
-    return f"<p><b>{html.escape(raw_clean)}</b>{pad_suffix}</p>"
+    return f"<p><b>{html.escape(raw_clean)}</b></p>"
 
 
 def _format_trace_blocks_as_html_pages(
@@ -548,7 +538,7 @@ def _format_trace_blocks_as_html_pages(
 ) -> list[str]:
     """Paginates collapsible <details> trace blocks into Rich HTML messages below Telegram Show More cutoff."""
     if not blocks:
-        return [_render_html_header(header_line)]
+        return [f"{_render_html_header(header_line)}\n{RICH_SPACER_MENU}"]
 
     pieces: list[str] = []
     for block in blocks:
@@ -594,7 +584,9 @@ def _format_trace_blocks_as_html_pages(
             hdr_text = lex.trace_active_page_suffix.format(
                 header=header_line, page_num=idx
             )
-        rendered.append("\n".join([_render_html_header(hdr_text), *page_pieces]))
+        rendered.append(
+            "\n".join([_render_html_header(hdr_text), *page_pieces, RICH_SPACER_MENU])
+        )
     return rendered
 
 
@@ -654,18 +646,35 @@ def build_final_trace_rich_html_pages(
     )
 
 
+def _should_use_wide_answer_bubble(body_markdown: str, chunk_count: int) -> bool:
+    if chunk_count > 1 or len(body_markdown.strip()) >= _SHORT_ANSWER_THRESHOLD_CHARS:
+        return True
+    structured_markers = ("\n#", "\n- ", "\n1. ", "| ---", "```")
+    return any(marker in body_markdown for marker in structured_markers)
+
+
 def split_rich_markdown_chunks(
     body_markdown: str,
     footer_bar_text: str,
     max_chars: int,
 ) -> list[str]:
-    """Splits native RichMessage Markdown below Telegram Show More cutoff without stripping GFM/LaTeX."""
-    footer_block = f"\n\n---\n*{footer_bar_text.strip()}*"
-    budget = max(1000, max_chars - len(footer_block) - 120)
+    """Splits native RichMessage Markdown below Telegram Show More cutoff with uniform full-width bubbles."""
+    clean_footer = footer_bar_text.strip()
+    footer_block = f"\n\n---\n*{clean_footer}*"
+    spacer_overhead = len(RICH_SPACER_ANSWER_FULL) + 4
+    budget = max(1000, max_chars - len(footer_block) - spacer_overhead - 120)
     chunks = split_markdown_preserving_blocks(body_markdown, budget)
     if not chunks:
         return [footer_block.lstrip()]
-    chunks[-1] = f"{chunks[-1]}{footer_block}"
+
+    if not _should_use_wide_answer_bubble(body_markdown, len(chunks)):
+        chunks[-1] = f"{chunks[-1]}{footer_block}"
+        return chunks
+
+    total = len(chunks)
+    for idx in range(total - 1):
+        chunks[idx] = f"{chunks[idx]}\n\n{RICH_SPACER_ANSWER_FULL}"
+    chunks[-1] = f"{chunks[-1]}\n\n{RICH_SPACER_ANSWER_FULL}{footer_block}"
     return chunks
 
 
@@ -1269,6 +1278,8 @@ def render_control_panel_dashboard(
             quota_auto_switch_threshold_pct=settings.quota_auto_switch_threshold_pct,
         )
     )
+    if supports_native_rich_output():
+        lines.append(f"\n{RICH_SPACER_MENU}")
     return "\n".join(lines)
 
 

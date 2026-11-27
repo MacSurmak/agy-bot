@@ -967,9 +967,12 @@ class RemoteMountManager:
             pkg_script = (
                 "if command -v apt-get >/dev/null 2>&1; then "
                 "DEBIAN_FRONTEND=noninteractive apt-get update -y || true; "
-                "DEBIAN_FRONTEND=noninteractive apt-get install -y ripgrep fd-find tree; "
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y --fix-missing ripgrep fd-find tree; "
                 "elif command -v dnf >/dev/null 2>&1; then dnf install -y ripgrep fd-find tree; "
                 "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --noconfirm ripgrep fd tree; "
+                "elif command -v apk >/dev/null 2>&1; then apk add --no-cache ripgrep fd tree; "
+                "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install ripgrep fd tree; "
+                "elif command -v opkg >/dev/null 2>&1; then opkg update || true; opkg install ripgrep fd tree || opkg install tree; "
                 "else echo 'Unsupported package manager' >&2; exit 1; fi"
             )
             if host.ssh_user == "root":
