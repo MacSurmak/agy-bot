@@ -184,10 +184,11 @@ def render_topic_header_card(
         else lex.topic_card_worker_cold.format(ttl_min=ttl_min)
     )
 
+    short_ws = _shorten_verbose_paths(topic.workspace_path)
     rendered = lex.topic_card_template.format(
         title=topic.title,
         session_str=session_str,
-        workspace_path=topic.workspace_path,
+        workspace_path=short_ws,
         model_slug=topic.model_slug,
         effort_str=effort_str,
         account_slug=account.slug,
@@ -197,7 +198,7 @@ def render_topic_header_card(
         worker_str=worker_str,
     )
     if supports_native_rich_output():
-        return f"{rendered.rstrip()}\n\n{RICH_SPACER_MENU}"
+        return f"{rendered.rstrip()}\n{RICH_SPACER_MENU}\n---\n*📂 {short_ws}*"
     return rendered
 
 
@@ -673,8 +674,10 @@ def split_rich_markdown_chunks(
 
     total = len(chunks)
     for idx in range(total - 1):
-        chunks[idx] = f"{chunks[idx]}\n\n{RICH_SPACER_ANSWER_FULL}"
-    chunks[-1] = f"{chunks[-1]}\n\n{RICH_SPACER_ANSWER_FULL}{footer_block}"
+        chunks[idx] = (
+            f"{chunks[idx]}\n{RICH_SPACER_ANSWER_FULL}\n---\n*📄 {idx + 1} / {total}*"
+        )
+    chunks[-1] = f"{chunks[-1]}\n{RICH_SPACER_ANSWER_FULL}\n---\n*{clean_footer}*"
     return chunks
 
 
@@ -1209,14 +1212,27 @@ def render_control_panel_dashboard(
 ) -> str:
     warm_count = sum(1 for s in pool_snapshots if s.is_warm)
     running_count = sum(1 for s in pool_snapshots if s.is_running_turn)
+    online_hosts = sum(1 for h in hosts if h.alias in mount_statuses and mount_statuses[h.alias])
+    active_sensors = sensors if sensors is not None else []
 
-    hdr_lines = lex.dashboard_header.format(
-        warm_count=warm_count, running_count=running_count
-    ).splitlines()
-    lines: list[str] = hdr_lines
+    lines: list[str] = [
+        lex.dashboard_header.format(
+            warm_count=warm_count, running_count=running_count
+        ),
+        "",
+        "| Воркеры | Серверы | Задачи | Сенсоры |"
+        if settings.ui_language == "ru"
+        else "| Workers | Servers | Tasks | Sensors |",
+        "| :--- | :---: | :---: | :---: |",
+        f"| `{warm_count}` RAM · `{running_count}` раб. | 🟢 `{online_hosts}/{len(hosts)}` | `{len(tasks)}` | `{len(active_sensors)}` |"
+        if settings.ui_language == "ru"
+        else f"| `{warm_count}` RAM · `{running_count}` busy | 🟢 `{online_hosts}/{len(hosts)}` | `{len(tasks)}` | `{len(active_sensors)}` |",
+    ]
     accounts_by_slug = {a.slug: a.display_email for a in accounts}
-    for snap in pool_snapshots:
-        if snap.is_warm:
+    warm_snaps = [s for s in pool_snapshots if s.is_warm]
+    if warm_snaps:
+        lines.append("")
+        for snap in warm_snaps:
             state_badge = (
                 lex.dashboard_worker_running_badge
                 if snap.is_running_turn
@@ -1236,50 +1252,53 @@ def render_control_panel_dashboard(
                 )
             )
 
+    lines.append("\n---")
     lines.extend(_build_accounts_dashboard_lines(lex, accounts))
-    lines.extend(_build_hosts_dashboard_lines(lex, hosts, mount_statuses))
 
     short_len = limits.uuid_short_chars
     tasks_lim = limits.dashboard_tasks_display_limit
-    lines.append(lex.dashboard_tasks_header.format(count=len(tasks)))
-    for t in tasks[:tasks_lim]:
-        lines.append(
-            lex.dashboard_task_item.format(
-                short_id=str(t.id)[:short_len],
-                topic_id=t.topic_id,
-                schedule_kind=t.schedule_kind.value,
-                trigger_spec=t.trigger_spec,
-                notify_policy=t.notify_policy.value,
+    if tasks:
+        lines.append("\n---")
+        lines.append(lex.dashboard_tasks_header.format(count=len(tasks)))
+        for t in tasks[:tasks_lim]:
+            lines.append(
+                lex.dashboard_task_item.format(
+                    short_id=str(t.id)[:short_len],
+                    topic_id=t.topic_id,
+                    schedule_kind=t.schedule_kind.value,
+                    trigger_spec=t.trigger_spec,
+                    notify_policy=t.notify_policy.value,
+                )
             )
-        )
 
-    active_sensors = sensors if sensors is not None else []
-    lines.append(lex.dashboard_sensors_header.format(count=len(active_sensors)))
-    for s in active_sensors[:tasks_lim]:
-        mode_tag = "1x" if s.one_shot else f"↻ {s.poll_interval_sec}s"
-        lines.append(
-            lex.dashboard_sensor_item.format(
-                short_id=str(s.id)[:short_len],
-                topic_id=s.topic_id,
-                name=s.name,
-                sensor_kind=s.sensor_kind.value,
-                condition=s.trigger_condition.value,
-                mode_tag=mode_tag,
+    if active_sensors:
+        lines.append("\n---")
+        lines.append(lex.dashboard_sensors_header.format(count=len(active_sensors)))
+        for s in active_sensors[:tasks_lim]:
+            mode_tag = "1x" if s.one_shot else f"↻ {s.poll_interval_sec}s"
+            lines.append(
+                lex.dashboard_sensor_item.format(
+                    short_id=str(s.id)[:short_len],
+                    topic_id=s.topic_id,
+                    name=s.name,
+                    sensor_kind=s.sensor_kind.value,
+                    condition=s.trigger_condition.value,
+                    mode_tag=mode_tag,
+                )
             )
-        )
 
-    lines.append(
-        lex.dashboard_settings_summary.format(
-            ui_language=settings.ui_language,
-            default_model=settings.default_model,
-            default_execution_mode=settings.default_execution_mode.value,
-            worker_idle_ttl_sec=settings.worker_idle_ttl_sec,
-            debounce_window_sec=settings.debounce_window_sec,
-            quota_auto_switch_threshold_pct=settings.quota_auto_switch_threshold_pct,
-        )
-    )
+    footer_summary = lex.dashboard_settings_summary.format(
+        ui_language=settings.ui_language,
+        default_model=settings.default_model,
+        default_execution_mode=settings.default_execution_mode.value,
+        worker_idle_ttl_sec=settings.worker_idle_ttl_sec,
+        debounce_window_sec=settings.debounce_window_sec,
+        quota_auto_switch_threshold_pct=settings.quota_auto_switch_threshold_pct,
+    ).strip()
     if supports_native_rich_output():
-        lines.append(f"\n{RICH_SPACER_MENU}")
+        lines.append(f"{RICH_SPACER_MENU}\n---\n*{footer_summary}*")
+    else:
+        lines.append(f"\n{footer_summary}")
     return "\n".join(lines)
 
 

@@ -20,14 +20,14 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     topic_card_worker_warm="🟢 Warm in RAM (TTL: {ttl_min}m)",
     topic_card_worker_cold="⚪ Cold (spawns on message, TTL: {ttl_min}m)",
     topic_card_template=(
-        "### 📌 Topic Passport: {title}\n\n"
-        "- 💬 **Session:** {session_str}\n"
-        "- 📂 **Workspace:** `{workspace_path}`\n"
-        "- 🧠 **Model:** `{model_slug}`{effort_str}\n"
-        "- 👤 **Account:** `{email_label}`\n"
-        "- 🛡 **Permissions:** {mode_str}\n"
-        "- 🔑 **Sudo Mode:** {sudo_str}\n"
-        "- 📡 **Worker:** {worker_str}"
+        "### {title}\n\n"
+        "| Field | Value |\n"
+        "| :--- | :--- |\n"
+        "| Session | {session_str} |\n"
+        "| Model | `{model_slug}`{effort_str} |\n"
+        "| Account | `{email_label}` |\n"
+        "| Access | {mode_str} · {sudo_str} |\n"
+        "| Worker | {worker_str} |"
     ),
     # New Session Divider
     new_session_mode_full_access="Full Write",
@@ -77,10 +77,7 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     wake_badge_timer="⏰ Scheduled Timer",
     wake_badge_sensor="📡 Sensor: {sensor_name}",
     # Control Panel Dashboard
-    dashboard_header=(
-        "### 🛠 Antigravity Core — Control Panel\n\n"
-        "- 📡 **Worker Pool:** `{warm_count}` warm in RAM · `{running_count}` executing"
-    ),
+    dashboard_header="### Antigravity Core — Control Panel",
     dashboard_worker_running_badge="🔥 RUNNING",
     dashboard_worker_warm_badge="🟢 WARM",
     dashboard_worker_item="- Topic `{topic_id}`: {state_badge} (`{model_slug}` on `{account_slug}`)",
@@ -103,10 +100,7 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     dashboard_task_item="- `{short_id}` [Topic `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
     dashboard_sensors_header="\n### 📡 Active Event Sensors: `{count}`\n",
     dashboard_sensor_item="- `{short_id}` [Topic `{topic_id}`] **{name}** (`{sensor_kind}` · `{condition}` · {mode_tag})",
-    dashboard_settings_summary=(
-        "\n### ⚙️ Default Settings\n\n"
-        "- Language: `{ui_language}` · Model: `{default_model}` · Mode: `{default_execution_mode}`"
-    ),
+    dashboard_settings_summary="Defaults: lang {ui_language} · model {default_model} · mode {default_execution_mode}",
     dashboard_accounts_table_header=(
         "| Group | 5-Hour | Weekly |\n"
         "| :--- | :--- | :--- |"
@@ -127,16 +121,16 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     workspace_dir_local_label="📂 local/{name}",
     workspace_dir_remote_label="🌐 remote/{name}",
     # Inline Keyboards
-    btn_cp_refresh="🔄 Refresh Dashboard",
-    btn_cp_probe_quotas="📊 Probe Quotas",
-    btn_cp_new_topic="➕ Create Topic",
-    btn_cp_auth_menu="🔑 Google Accounts",
-    btn_cp_switch_default_acc="🔀 Switch Default Account",
-    btn_cp_remount_hosts="🖥 Servers & SSH Passwords",
-    btn_cp_tasks_menu="⏰ Scheduled Tasks",
+    btn_cp_refresh="🔄 Refresh",
+    btn_cp_probe_quotas="📊 Quotas",
+    btn_cp_new_topic="➕ New Topic",
+    btn_cp_auth_menu="👤 Accounts",
+    btn_cp_switch_default_acc="🔀 Default Account",
+    btn_cp_remount_hosts="🖥 Servers",
+    btn_cp_tasks_menu="⏰ Tasks",
     btn_cp_settings_menu="⚙️ Settings",
-    btn_cp_show_ssh_key="🔑 Bot SSH Public Key",
-    btn_cp_create_invite="🎟 Generate Member Invite",
+    btn_cp_show_ssh_key="🗝 SSH Key",
+    btn_cp_create_invite="🎟 Invite",
     cp_ssh_key_card=(
         "🔑 **Antigravity Core Public SSH Key**\n\n"
         "Run this one-liner on your target server to grant passwordless SSH access to the bot:\n"
@@ -164,14 +158,14 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     mode_option_full_access="⚡ Full Access (Read & Write)",
     mode_option_read_only="🛡 Read-Only (Plan Mode)",
     cp_toast_sensor_canceled="Sensor canceled.",
-    btn_ws_new_session="🔄 New Session (/new)",
-    btn_ws_past_sessions="🕰 Past Sessions",
-    btn_ws_mode_full_to_plan="🛡 Mode: Full Write ⇄ Plan",
-    btn_ws_mode_plan_to_full="⚡ Mode: Plan (Read-Only) ⇄ Write",
-    btn_ws_models="🧠 Switch Model",
-    btn_ws_workspace="📂 Workspace",
-    btn_ws_switch_account="👤 Switch Account",
-    btn_ws_archive_topic="🗄 Archive Topic",
+    btn_ws_new_session="🔄 New Session",
+    btn_ws_past_sessions="📜 History",
+    btn_ws_mode_full_to_plan="🛡 Write → Plan",
+    btn_ws_mode_plan_to_full="⚡ Plan → Write",
+    btn_ws_models="🧠 Model",
+    btn_ws_workspace="📂 Folder",
+    btn_ws_switch_account="👤 Account",
+    btn_ws_archive_topic="🗄 Archive",
     btn_ws_stop_turn="⏹ Stop Turn (/cancel)",
     btn_ws_fresh_session="🔄 Fresh Session",
     btn_ws_resp_to_plan="🛡 Switch to Plan (Read-Only)",

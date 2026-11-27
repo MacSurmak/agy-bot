@@ -47,6 +47,13 @@ _BARE_LATEX_CMD_RE: Final[re.Pattern[str]] = re.compile(
 _INTRAWORD_UNDERSCORE_RE: Final[re.Pattern[str]] = re.compile(
     r"(?<=[0-9A-Za-zА-Яа-яЁё°])_(?=[0-9A-Za-zА-Яа-яЁё])"
 )
+_GLOB_STAR_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?<=[0-9A-Za-zА-Яа-яЁё_])\*(?!\*)"
+)
+_HEADING_OR_LIST_LINE_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:#{1,6}\s+|[-*]\s+|\d+\.\s+)"
+)
+_LIST_LINE_RE: Final[re.Pattern[str]] = re.compile(r"^(?:[-*]\s+|\d+\.\s+)")
 _MATH_SPLIT_RE: Final[re.Pattern[str]] = re.compile(
     r"(\$\$[^$]+\$\$|\$[^$\n]+\$)"
 )
@@ -60,7 +67,8 @@ _GFM_TABLE_SEP_RE: Final[re.Pattern[str]] = re.compile(
 def _escape_underscores_preserving_urls(text: str) -> str:
     url_parts = _URL_SPLIT_RE.split(text)
     for idx in range(0, len(url_parts), 2):
-        url_parts[idx] = _INTRAWORD_UNDERSCORE_RE.sub(r"\_", url_parts[idx])
+        escaped = _INTRAWORD_UNDERSCORE_RE.sub(r"\_", url_parts[idx])
+        url_parts[idx] = _GLOB_STAR_RE.sub(r"\*", escaped)
     return "".join(url_parts)
 
 
@@ -140,6 +148,18 @@ def prepare_rich_markdown(raw_md: str) -> str:
             and out_lines
             and out_lines[-1].strip()
             and _GFM_TABLE_LINE_RE.match(out_lines[-1]) is None
+        ):
+            out_lines.append("")
+
+        prev_nonempty = out_lines[-1].strip() if out_lines else ""
+        if (
+            prev_nonempty
+            and _HEADING_OR_LIST_LINE_RE.match(stripped) is not None
+            and not (
+                _LIST_LINE_RE.match(stripped) is not None
+                and _LIST_LINE_RE.match(prev_nonempty) is not None
+            )
+            and not prev_nonempty.startswith("#")
         ):
             out_lines.append("")
 

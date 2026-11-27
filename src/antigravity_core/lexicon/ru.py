@@ -20,14 +20,14 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     topic_card_worker_warm="🟢 Прогрет в RAM (TTL: {ttl_min} мин)",
     topic_card_worker_cold="⚪ Холодный (старт по сообщению, TTL: {ttl_min} мин)",
     topic_card_template=(
-        "### 📌 Паспорт топика: {title}\n\n"
-        "- 💬 **Сессия:** {session_str}\n"
-        "- 📂 **Папка:** `{workspace_path}`\n"
-        "- 🧠 **Модель:** `{model_slug}`{effort_str}\n"
-        "- 👤 **Аккаунт:** `{email_label}`\n"
-        "- 🛡 **Права агента:** {mode_str}\n"
-        "- 🔑 **Режим Sudo:** {sudo_str}\n"
-        "- 📡 **Воркер:** {worker_str}"
+        "### {title}\n\n"
+        "| Параметр | Значение |\n"
+        "| :--- | :--- |\n"
+        "| Сессия | {session_str} |\n"
+        "| Модель | `{model_slug}`{effort_str} |\n"
+        "| Аккаунт | `{email_label}` |\n"
+        "| Доступ | {mode_str} · {sudo_str} |\n"
+        "| Воркер | {worker_str} |"
     ),
     # New Session Divider
     new_session_mode_full_access="Полный доступ (Запись)",
@@ -79,10 +79,7 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     wake_badge_timer="⏰ Таймер",
     wake_badge_sensor="📡 Датчик: {sensor_name}",
     # Control Panel Dashboard
-    dashboard_header=(
-        "### 🛠 Панель управления Antigravity Core\n\n"
-        "- 📡 **Пул воркеров:** `{warm_count}` прогрето в RAM · `{running_count}` в работе"
-    ),
+    dashboard_header="### Панель управления Antigravity Core",
     dashboard_worker_running_badge="🔥 В РАБОТЕ",
     dashboard_worker_warm_badge="🟢 ПРОГРЕТ",
     dashboard_worker_item="- Топик `{topic_id}`: {state_badge} (`{model_slug}` на `{account_slug}`)",
@@ -109,10 +106,7 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     dashboard_task_item="- `{short_id}` [Топик `{topic_id}`] `{schedule_kind}` `{trigger_spec}` ({notify_policy})",
     dashboard_sensors_header="\n### 📡 Активные датчики: `{count}`\n",
     dashboard_sensor_item="- `{short_id}` [Топик `{topic_id}`] **{name}** (`{sensor_kind}` · `{condition}` · {mode_tag})",
-    dashboard_settings_summary=(
-        "\n### ⚙️ Настройки по умолчанию\n\n"
-        "- Язык: `{ui_language}` · Модель: `{default_model}` · Режим: `{default_execution_mode}`"
-    ),
+    dashboard_settings_summary="По умолчанию: язык {ui_language} · модель {default_model} · режим {default_execution_mode}",
     dashboard_accounts_table_header=(
         "| Группа | 5-часовой | Недельный |\n"
         "| :--- | :--- | :--- |"
@@ -133,16 +127,16 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     workspace_dir_local_label="📂 local/{name}",
     workspace_dir_remote_label="🌐 remote/{name}",
     # Inline Keyboards
-    btn_cp_refresh="🔄 Обновить дашборд",
-    btn_cp_probe_quotas="📊 Обновить квоты",
-    btn_cp_new_topic="➕ Создать топик",
-    btn_cp_auth_menu="🔑 Аккаунты Google",
-    btn_cp_switch_default_acc="🔀 Сменить основной аккаунт",
-    btn_cp_remount_hosts="🖥 Серверы и Пароли SSH",
-    btn_cp_tasks_menu="⏰ Расписания и Таймеры",
+    btn_cp_refresh="🔄 Обновить",
+    btn_cp_probe_quotas="📊 Квоты",
+    btn_cp_new_topic="➕ Новый топик",
+    btn_cp_auth_menu="👤 Аккаунты",
+    btn_cp_switch_default_acc="🔀 Основной аккаунт",
+    btn_cp_remount_hosts="🖥 Серверы",
+    btn_cp_tasks_menu="⏰ Задачи",
     btn_cp_settings_menu="⚙️ Настройки",
-    btn_cp_show_ssh_key="🔑 SSH-ключ бота",
-    btn_cp_create_invite="🎟 Создать инвайт-токен",
+    btn_cp_show_ssh_key="🗝 SSH-ключ",
+    btn_cp_create_invite="🎟 Инвайт",
     cp_ssh_key_card=(
         "🔑 **Публичный SSH-ключ контейнера Antigravity Core**\n\n"
         "Выполните эту команду на целевом сервере (например, на мастере `labcomp` или `work`), "
@@ -171,14 +165,14 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     mode_option_full_access="⚡ Полный доступ (Чтение и Запись)",
     mode_option_read_only="🛡 Только чтение (Режим Plan)",
     cp_toast_sensor_canceled="Датчик отключен.",
-    btn_ws_new_session="🔄 Новая сессия (/new)",
-    btn_ws_past_sessions="🕰 Прошлые сессии",
-    btn_ws_mode_full_to_plan="🛡 Режим: Запись разрешена ⇄ Plan",
-    btn_ws_mode_plan_to_full="⚡ Режим: Только чтение (Plan) ⇄ Запись",
-    btn_ws_models="🧠 Сменить модель",
-    btn_ws_workspace="📂 Сменить папку",
-    btn_ws_switch_account="👤 Сменить аккаунт",
-    btn_ws_archive_topic="🗄 В Архив",
+    btn_ws_new_session="🔄 Новая сессия",
+    btn_ws_past_sessions="📜 История",
+    btn_ws_mode_full_to_plan="🛡 Запись → Plan",
+    btn_ws_mode_plan_to_full="⚡ Plan → Запись",
+    btn_ws_models="🧠 Модель",
+    btn_ws_workspace="📂 Папка",
+    btn_ws_switch_account="👤 Аккаунт",
+    btn_ws_archive_topic="🗄 В архив",
     btn_ws_stop_turn="⏹ Остановить ход (/cancel)",
     btn_ws_fresh_session="🔄 С чистого листа",
     btn_ws_resp_to_plan="🛡 В режим Plan (Чтение)",
@@ -319,8 +313,8 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     topic_archive_prefix="🗄 [Архив] ",
     topic_card_sudo_cb_on="🔓 Полный карт-бланш (автономно 24/7)",
     topic_card_sudo_cb_off="🔒 По запросу (с кнопкой подтверждения)",
-    btn_ws_sudo_cb_on_to_off="🔓 Sudo: Карт-бланш ВКЛ ⇄ По запросу",
-    btn_ws_sudo_cb_off_to_on="🔒 Sudo: По запросу ⇄ Дать карт-бланш",
+    btn_ws_sudo_cb_on_to_off="🔓 Sudo: Карт-бланш → По запросу",
+    btn_ws_sudo_cb_off_to_on="🔐 Sudo: По запросу → Карт-бланш",
     ws_toast_sudo_cb_on="Включен полный карт-бланш Sudo для этого топика.",
     ws_toast_sudo_cb_off="Карт-бланш Sudo выключен (подтверждение по кнопке).",
     ssh_password_prompt_card=(

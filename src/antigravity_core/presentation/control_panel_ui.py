@@ -723,8 +723,9 @@ class ControlPanelUI:
         ]
         if not accounts:
             lines.append(lex.cp_accounts_hub_empty_hint)
-        lines.append("")
-        lines.append(RICH_SPACER_MENU)
+        lines.append(
+            f"{RICH_SPACER_MENU}\n---\n*Google AI Pro · {len(accounts)}*"
+        )
         return "\n".join(lines), build_paginated_accounts_keyboard(lex, accounts, page)
 
     async def _render_accounts_hub(
@@ -770,8 +771,7 @@ class ControlPanelUI:
             lex.cp_acc_card_status_line.format(
                 status_label=status_label, quota_line=quota_line
             ),
-            "",
-            RICH_SPACER_MENU,
+            f"{RICH_SPACER_MENU}\n---\n*{acc.display_email}*",
         ]
 
         await self._update_or_recreate_panel(
@@ -872,8 +872,9 @@ class ControlPanelUI:
                 ]
             )
 
-        lines.append("")
-        lines.append(RICH_SPACER_MENU)
+        lines.append(
+            f"{RICH_SPACER_MENU}\n---\n*Серверы: {total} · Стр. {curr_page + 1}/{max_page + 1}*"
+        )
         rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
         await self._safe_edit_event(event, "\n".join(lines), rows)
 
@@ -901,8 +902,7 @@ class ControlPanelUI:
             format_wide_header_block(lex.cp_host_tools_title.format(alias=host.alias))
             + "\n\n"
             + body
-            + "\n\n"
-            + RICH_SPACER_MENU
+            + f"\n{RICH_SPACER_MENU}\n---\n*hosts/infra-{host.alias}.md*"
         )
         prefix = (
             f"cp:host_inst_ob:{onboarding_req_id}:{host.alias}"
@@ -1116,8 +1116,9 @@ class ControlPanelUI:
                     key="", value_json=val, description=label
                 )
             )
-        lines.append("")
-        lines.append(RICH_SPACER_MENU)
+        lines.append(
+            f"{RICH_SPACER_MENU}\n---\n*{settings.ui_language} · {settings.default_model}*"
+        )
         btn_labels = [
             (lex.btn_cp_set_language, "ui_language"),
             (lex.btn_cp_set_model, "default_model"),
