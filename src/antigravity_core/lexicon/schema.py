@@ -296,6 +296,22 @@ class UiLexicon:
     cp_host_sudo_missing_badge: str
     btn_cp_reset_host_pass: str
     btn_cp_delete_host: str
+    btn_cp_host_tools: str
+    cp_host_tools_title: str
+    cp_host_tools_body: str
+    btn_cp_host_inst_all: str
+    btn_cp_host_inst_rtk: str
+    btn_cp_host_inst_nav: str
+    btn_cp_host_inst_crg: str
+    btn_cp_host_sync_passport: str
+    btn_cp_host_back_hosts: str
+    btn_cp_host_done_onboarding: str
+    cp_toast_host_probing: str
+    cp_toast_host_installing: str
+    cp_toast_host_sync_done: str
+    cp_host_tools_install_ok: str
+    cp_host_tools_install_fail: str
+    cp_host_tools_onboarding_done: str
 
     # Two-level Model Group Picker & In-Place Navigation
     ws_select_model_group_prompt: str

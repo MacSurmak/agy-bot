@@ -64,14 +64,64 @@ def _prepare_ssh_command(
     raw_remote_cmd = " ".join(remote_cmd_parts)
     needs_pty = "sudo" in raw_remote_cmd
 
+    path_export = 'export GIT_PAGER=cat PAGER=cat PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"'
     if needs_pty:
         wrapped_cmd = (
-            f"export GIT_PAGER=cat PAGER=cat SUDO_PROMPT={shlex.quote(prompt_marker)}; "
+            f"{path_export} SUDO_PROMPT={shlex.quote(prompt_marker)}; "
             f"{raw_remote_cmd}"
         )
+    elif "\n" in raw_remote_cmd or "setsid" in raw_remote_cmd:
+        wrapped_cmd = f"{path_export}; {raw_remote_cmd}"
     else:
-        wrapped_cmd = f"export GIT_PAGER=cat PAGER=cat; {raw_remote_cmd}"
+        quoted_cmd = shlex.quote(raw_remote_cmd)
+        wrapped_cmd = (
+            f"{path_export}; "
+            "if command -v rtk >/dev/null 2>&1; then "
+            f'__agy_rw="$(rtk rewrite {quoted_cmd} 2>/dev/null || true)"; '
+            f'if [ -n "$__agy_rw" ]; then eval "$__agy_rw"; else {raw_remote_cmd}; fi; '
+            f"else {raw_remote_cmd}; fi"
+        )
     return needs_pty, [*host_and_opts, wrapped_cmd]
+
+
+def _request_sudo_secret(
+    target_label: str,
+    port: int,
+    cmd_display: str,
+    invalidate_existing: bool,
+) -> tuple[bool, str, str]:
+    method = (
+        "invalidate_and_reprompt_sudo"
+        if invalidate_existing
+        else "authorize_pty_sudo"
+    )
+    if invalidate_existing:
+        sys.stderr.write(
+            f"\n[Antigravity Sudo Gateway]: Saved sudo password for {target_label} was rejected. "
+            "Waiting for owner to provide the updated password in Telegram...\n"
+        )
+    else:
+        sys.stderr.write(
+            f"\n[Antigravity Sudo Gateway]: Waiting for owner to click [Approve Sudo] in Telegram for {target_label}... "
+            "DO NOT kill or cancel this task!\n"
+        )
+    sys.stderr.flush()
+    ok, auth_res, err_msg = _ipc_call(
+        method,
+        {
+            "target": target_label,
+            "port": port,
+            "command": cmd_display,
+        },
+    )
+    if not ok:
+        return False, "", err_msg
+    sys.stderr.write(
+        f"[Antigravity Sudo Gateway]: Owner approved sudo on {target_label}. Executing command...\n"
+    )
+    sys.stderr.flush()
+    secret = auth_res["sudo_password"] if "sudo_password" in auth_res else ""
+    return True, secret, ""
 
 
 def _ipc_call(
@@ -250,6 +300,7 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
 
     os.close(slave_fd)
     cached_sudo_secret: str | None = None
+    sudo_prompt_count = 0
     pending_buf = b""
     cmd_display = " ".join(ssh_argv)
     keep_tail_len = len(prompt_marker_bytes) - 1
@@ -284,34 +335,24 @@ def _run_pty_ssh_bridge(ssh_argv: list[str]) -> int:
                     sys.stdout.buffer.flush()
                 pending_buf = after_marker
 
-                if cached_sudo_secret is None:
-                    sys.stderr.write(
-                        f"\n[Antigravity Sudo Gateway]: Waiting for owner to click [Approve Sudo] in Telegram for {target_label}... "
-                        "DO NOT kill or cancel this task!\n"
-                    )
-                    sys.stderr.flush()
-                    ok, auth_res, err_msg = _ipc_call(
-                        "authorize_pty_sudo",
-                        {
-                            "target": target_label,
-                            "port": port,
-                            "command": cmd_display,
-                        },
+                rejected_retry = (
+                    sudo_prompt_count > 0 and b"try again" in before_marker.lower()
+                )
+                if cached_sudo_secret is None or rejected_retry:
+                    ok, new_secret, err_msg = _request_sudo_secret(
+                        target_label=target_label,
+                        port=port,
+                        cmd_display=cmd_display,
+                        invalidate_existing=rejected_retry,
                     )
                     if not ok:
                         os.write(master_fd, b"\x03\n")
                         sys.stderr.write(f"\nSudo rejected: {err_msg}\n")
                         sys.stderr.flush()
                         break
+                    cached_sudo_secret = new_secret
 
-                    sys.stderr.write(
-                        f"[Antigravity Sudo Gateway]: Owner approved sudo on {target_label}. Executing command...\n"
-                    )
-                    sys.stderr.flush()
-                    cached_sudo_secret = (
-                        auth_res["sudo_password"] if "sudo_password" in auth_res else ""
-                    )
-
+                sudo_prompt_count += 1
                 os.write(master_fd, (cached_sudo_secret + "\n").encode("utf-8"))
             elif len(pending_buf) > keep_tail_len:
                 flush_part = pending_buf[:-keep_tail_len]

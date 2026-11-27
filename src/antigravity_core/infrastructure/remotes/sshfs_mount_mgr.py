@@ -801,6 +801,177 @@ class RemoteMountManager:
             raise RemoteMountError("FernetVault is not initialized.")
         return resolved_target, self._vault.decrypt_text(cred.encrypted_password), False
 
+    async def invalidate_and_reprompt_sudo_password(
+        self,
+        topic_id: int,
+        raw_target: str,
+        explicit_port: int,
+    ) -> tuple[str, str]:
+        """Deletes a rejected cached sudo password and asks the owner for the updated password."""
+        ssh_user, host_part, port, cred_key, candidate_targets = (
+            await self._resolve_ssh_target_details(raw_target, explicit_port)
+        )
+        resolved_target = f"{ssh_user}@{host_part}"
+        if self._cred_repo is not None:
+            await self._cred_repo.delete_credential(cred_key)
+            for cand in candidate_targets:
+                await self._cred_repo.delete_credential(f"{ssh_user}@{cand}:{port}")
+
+        entered_pass = await self._request_password_from_owner(topic_id, resolved_target)
+        if self._vault is not None and self._cred_repo is not None:
+            enc = self._vault.encrypt_text(entered_pass)
+            await self._cred_repo.upsert_credential(
+                credential_key=cred_key,
+                ssh_user=ssh_user,
+                host_target=host_part,
+                ssh_port=port,
+                encrypted_password=enc,
+                key_provisioned=True,
+            )
+        return resolved_target, entered_pass
+
+    async def probe_remote_tools(self, host: RemoteHost) -> dict[str, bool]:
+        """Checks whether rtk, rg, fd, tree, and code-review-graph are available on a remote host."""
+        self.write_ssh_config_entry(host)
+        probe_cmd = (
+            'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"; '
+            'for t in rtk rg tree code-review-graph; do '
+            'if command -v "$t" >/dev/null 2>&1; then echo "$t=1"; else echo "$t=0"; fi; done; '
+            'if command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1; then echo "fd=1"; else echo "fd=0"; fi'
+        )
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
+        proc = await asyncio.create_subprocess_exec(
+            "/usr/bin/ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            f"ConnectTimeout={self._cfg.remotes.ssh_connect_timeout_sec}",
+            host.alias,
+            probe_cmd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._internal_ssh_env(),
+            user=agent_uid,
+            group=agent_gid,
+        )
+        timeout_sec = float(self._cfg.remotes.ssh_connect_timeout_sec * 2)
+        stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+        result: dict[str, bool] = {
+            "rtk": False,
+            "rg": False,
+            "fd": False,
+            "tree": False,
+            "code-review-graph": False,
+        }
+        if proc.returncode != 0:
+            return result
+        for line in stdout_bytes.decode("utf-8", errors="replace").splitlines():
+            if "=" in line:
+                k, v = line.strip().split("=", 1)
+                if k in result:
+                    result[k] = v == "1"
+        return result
+
+    async def _lookup_saved_host_password(self, host: RemoteHost) -> str | None:
+        if self._cred_repo is None or self._vault is None:
+            return None
+        key_alias = f"{host.ssh_user}@{host.alias}:{host.ssh_port}"
+        key_ip = f"{host.ssh_user}@{host.hostname_or_ip}:{host.ssh_port}"
+        cred = await self._cred_repo.get_credential(key_alias)
+        if cred is None:
+            cred = await self._cred_repo.get_credential(key_ip)
+        if cred is None:
+            return None
+        return self._vault.decrypt_text(cred.encrypted_password)
+
+    async def _run_remote_install_script(
+        self,
+        host: RemoteHost,
+        remote_cmd: str,
+        stdin_bytes: bytes | None,
+    ) -> tuple[bool, str]:
+        self.write_ssh_config_entry(host)
+        agent_uid, agent_gid = agent_exec_identity(self._cfg.paths)
+        proc = await asyncio.create_subprocess_exec(
+            "/usr/bin/ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            f"ConnectTimeout={self._cfg.remotes.ssh_connect_timeout_sec}",
+            host.alias,
+            remote_cmd,
+            stdin=asyncio.subprocess.PIPE if stdin_bytes is not None else asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=self._internal_ssh_env(),
+            user=agent_uid,
+            group=agent_gid,
+        )
+        stdout_bytes, _ = await asyncio.wait_for(
+            proc.communicate(input=stdin_bytes),
+            timeout=300.0,
+        )
+        output_text = stdout_bytes.decode("utf-8", errors="replace").strip()
+        tail = output_text[-400:] if output_text else "(no output)"
+        return proc.returncode == 0, tail
+
+    async def install_remote_tool(
+        self, host: RemoteHost, tool_key: str
+    ) -> tuple[bool, str]:
+        """Installs selected developer tooling (rtk, cli_nav, crg, or all) onto a registered remote host."""
+        keys = ("rtk", "cli_nav", "crg") if tool_key == "all" else (tool_key,)
+        notes: list[str] = []
+        all_ok = True
+        for key in keys:
+            ok, msg = await self._install_single_remote_tool(host, key)
+            notes.append(f"{key}: {'OK' if ok else msg}")
+            if not ok:
+                all_ok = False
+        await self.sync_host_telemetry_and_rules(host)
+        return all_ok, "; ".join(notes)
+
+    async def _install_single_remote_tool(
+        self, host: RemoteHost, tool_key: str
+    ) -> tuple[bool, str]:
+        if tool_key == "rtk":
+            cmd = (
+                'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"; '
+                "curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh && "
+                "command -v rtk"
+            )
+            return await self._run_remote_install_script(host, cmd, None)
+
+        if tool_key == "crg":
+            cmd = (
+                'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"; '
+                "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi && "
+                'export PATH="$HOME/.local/bin:$PATH" && '
+                "uv tool install --upgrade code-review-graph && command -v code-review-graph"
+            )
+            return await self._run_remote_install_script(host, cmd, None)
+
+        if tool_key == "cli_nav":
+            pkg_script = (
+                "if command -v apt-get >/dev/null 2>&1; then "
+                "DEBIAN_FRONTEND=noninteractive apt-get update -y && "
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y ripgrep fd-find tree; "
+                "elif command -v dnf >/dev/null 2>&1; then dnf install -y ripgrep fd-find tree; "
+                "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --noconfirm ripgrep fd tree; "
+                "else echo 'Unsupported package manager' >&2; exit 1; fi"
+            )
+            if host.ssh_user == "root":
+                return await self._run_remote_install_script(host, pkg_script, None)
+            saved_pass = await self._lookup_saved_host_password(host)
+            if saved_pass is None:
+                return False, "No saved sudo password for this host."
+            sudo_cmd = f"sudo -S -p '' bash -c {shlex.quote(pkg_script)}"
+            return await self._run_remote_install_script(
+                host, sudo_cmd, (saved_pass + "\n").encode("utf-8")
+            )
+
+        raise RemoteMountError(f"Unknown remote tool key: '{tool_key}'")
+
     def parse_remote_file_spec(
         self, raw_path: str, workspace_dir: Path
     ) -> RemoteFileSpec | None:
@@ -1414,7 +1585,11 @@ class RemoteMountManager:
             "docker ps --format '{{.Names}} ({{.Image}}) [{{.Status}}]' 2>/dev/null | head -n 15 || true; "
             "pct list 2>/dev/null | head -n 15 || true; qm list 2>/dev/null | head -n 15 || true; "
             "sinfo -s 2>/dev/null | head -n 10 || true; "
-            'echo \'=== DEV TOOLS ===\'; PATH="$HOME/.local/bin:$PATH" command -v code-review-graph || echo \'code-review-graph: not installed\'; '
+            'echo \'=== DEV TOOLS ===\'; '
+            'PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH" sh -c \''
+            'for t in rtk rg fd fdfind tree code-review-graph; do '
+            'p="$(command -v "$t" 2>/dev/null || true)"; '
+            'if [ -n "$p" ]; then echo "$t: $p"; fi; done\'; '
             f"echo '=== KEY DIRECTORIES ({host.remote_root_path}) ==='; ls -1 {host.remote_root_path} 2>/dev/null | head -n 30; "
             "if [ -d /shared ]; then echo '=== /shared ==='; ls -1 /shared 2>/dev/null | head -n 25; fi"
         )

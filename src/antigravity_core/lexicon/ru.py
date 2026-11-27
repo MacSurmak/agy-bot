@@ -384,6 +384,30 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     cp_host_sudo_missing_badge="⚠️ Sudo-пароль не задан",
     btn_cp_reset_host_pass="🔄 Сбросить пароль: {label}",
     btn_cp_delete_host="🗑 Удалить сервер: {alias}",
+    btn_cp_host_tools="🛠 Софт: {alias}",
+    cp_host_tools_title="🛠 Предустановка софта на `{alias}`",
+    cp_host_tools_body=(
+        "Хост: `{target}`\n\n"
+        "• **rtk** (сжатие вывода CLI): {rtk}\n"
+        "• **rg** (ripgrep): {rg}\n"
+        "• **fd** (fd-find): {fd}\n"
+        "• **tree** (дерево каталогов): {tree}\n"
+        "• **code-review-graph** (граф кода): {crg}\n"
+        "{status_line}"
+    ),
+    btn_cp_host_inst_all="⚡ Установить всё",
+    btn_cp_host_inst_rtk="📦 Установить rtk",
+    btn_cp_host_inst_nav="🌳 Установить rg + fd + tree",
+    btn_cp_host_inst_crg="🕸 Установить code-review-graph",
+    btn_cp_host_sync_passport="🔄 Обновить паспорт хоста",
+    btn_cp_host_back_hosts="⬅️ Назад к серверам",
+    btn_cp_host_done_onboarding="✅ Завершить онбординг",
+    cp_toast_host_probing="Проверяю установленный софт...",
+    cp_toast_host_installing="Устанавливаю софт на сервер...",
+    cp_toast_host_sync_done="Паспорт хоста обновлён.",
+    cp_host_tools_install_ok="\n✅ **Готово:** {detail}",
+    cp_host_tools_install_fail="\n⚠️ **Ошибка установки:** {detail}",
+    cp_host_tools_onboarding_done="✅ **Онбординг хоста `{alias}` завершён.** Паспорт синхронизирован и готов для агента.",
     ws_select_model_group_prompt="🧠 **Выберите семейство моделей** (активна: `{current_model}`):",
     ws_select_model_variant_prompt="🧠 **Выберите вариант модели `{family}`:**",
     btn_ws_model_group_item="{mark}🧠 {family} ({count})",

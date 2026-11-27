@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+from collections.abc import Awaitable, Callable
 import os
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from antigravity_core.domain.enums import (
     SensorWakeMode,
     TopicKind,
 )
+from antigravity_core.domain.models import RemoteHost
 from antigravity_core.infrastructure.agy_runtime.environment_bootstrap import (
     AgyEnvironmentBootstrapper,
 )
@@ -62,6 +64,14 @@ class CoreIpcServer:
         self._mount_mgr = mount_mgr
         self._server: asyncio.AbstractServer | None = None
         self._active_user_msg_id_by_topic: dict[int, int] = {}
+        self._on_host_tools_onboarding: (
+            Callable[[int, RemoteHost], Awaitable[None]] | None
+        ) = None
+
+    def set_host_tools_onboarding_callback(
+        self, callback: Callable[[int, RemoteHost], Awaitable[None]]
+    ) -> None:
+        self._on_host_tools_onboarding = callback
 
     def set_active_user_message_id(
         self, topic_id: int, message_id: int | None
@@ -164,24 +174,8 @@ class CoreIpcServer:
             )
             return {"resolved_target": resolved_target}
 
-        if method == "authorize_pty_sudo":
-            target = str(params["target"]) if "target" in params else ""
-            port = int(params["port"]) if "port" in params else 22
-            cmd_str = str(params["command"]) if "command" in params else ""
-            resolved_target, sudo_pass, is_root = (
-                await self._mount_mgr.authorize_sudo_operation(
-                    topic_id=topic_id,
-                    raw_target=target,
-                    explicit_port=port,
-                    action_summary=f"Выполнение команды sudo на {target}",
-                    diff_or_cmd_preview=cmd_str,
-                )
-            )
-            return {
-                "resolved_target": resolved_target,
-                "sudo_password": sudo_pass,
-                "is_root": str(is_root),
-            }
+        if method in ("authorize_pty_sudo", "invalidate_and_reprompt_sudo"):
+            return await self._dispatch_pty_sudo(method, topic_id, params)
 
         if method == "stage_remote_file":
             topic = await self._topic_repo.get_topic_strict(topic_id)
@@ -476,6 +470,8 @@ class CoreIpcServer:
                 explicit_port=ssh_port,
                 jump_host=jump_host if jump_host is not None else "",
             )
+            if self._on_host_tools_onboarding is not None:
+                await self._on_host_tools_onboarding(topic_id, host)
             await self._mount_mgr.sync_host_telemetry_and_rules(host)
             all_hosts = await self._host_repo.list_hosts()
             self._bootstrapper.sync_global_agents_md_host_map(all_hosts)
@@ -528,3 +524,37 @@ class CoreIpcServer:
             }
 
         raise ValueError(f"Unsupported IPC method: '{method}'")
+
+    async def _dispatch_pty_sudo(
+        self, method: str, topic_id: int, params: dict[str, str | int | bool]
+    ) -> dict[str, str | int | bool | list[dict[str, str | int | bool | None]]]:
+        target = str(params["target"]) if "target" in params else ""
+        port = int(params["port"]) if "port" in params else 22
+        cmd_str = str(params["command"]) if "command" in params else ""
+        if method == "invalidate_and_reprompt_sudo":
+            resolved_target, sudo_pass = (
+                await self._mount_mgr.invalidate_and_reprompt_sudo_password(
+                    topic_id=topic_id,
+                    raw_target=target,
+                    explicit_port=port,
+                )
+            )
+            return {
+                "resolved_target": resolved_target,
+                "sudo_password": sudo_pass,
+                "is_root": "False",
+            }
+        resolved_target, sudo_pass, is_root = (
+            await self._mount_mgr.authorize_sudo_operation(
+                topic_id=topic_id,
+                raw_target=target,
+                explicit_port=port,
+                action_summary=f"Run sudo command on {target}",
+                diff_or_cmd_preview=cmd_str,
+            )
+        )
+        return {
+            "resolved_target": resolved_target,
+            "sudo_password": sudo_pass,
+            "is_root": str(is_root),
+        }

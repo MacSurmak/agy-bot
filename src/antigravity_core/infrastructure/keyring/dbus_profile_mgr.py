@@ -193,7 +193,13 @@ class KeyringProfileManager:
             k: v
             for k, v in os.environ.items()
             if not k.startswith(
-                ("DBUS_", "GNOME_KEYRING_", "XDG_DATA_HOME", "XDG_RUNTIME_DIR")
+                (
+                    "DBUS_",
+                    "GNOME_KEYRING_",
+                    "XDG_CONFIG_HOME",
+                    "XDG_DATA_HOME",
+                    "XDG_RUNTIME_DIR",
+                )
             )
         }
         base_env: dict[str, str] = {
@@ -202,6 +208,7 @@ class KeyringProfileManager:
             "HOME": str(acc_home),
             "USER": self._cfg.paths.agent_user,
             "LOGNAME": self._cfg.paths.agent_user,
+            "XDG_CONFIG_HOME": str(self._cfg.paths.agent_home_dir / ".config"),
             "XDG_DATA_HOME": str(xdg_dir),
             "XDG_RUNTIME_DIR": str(acc_runtime_dir),
             "DBUS_SESSION_BUS_ADDRESS": f"unix:path={socket_path}",

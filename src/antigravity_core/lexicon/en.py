@@ -377,6 +377,30 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     cp_host_sudo_missing_badge="⚠️ No Sudo Password",
     btn_cp_reset_host_pass="🔄 Reset Password: {label}",
     btn_cp_delete_host="🗑 Delete Server: {alias}",
+    btn_cp_host_tools="🛠 Tools: {alias}",
+    cp_host_tools_title="🛠 Host Tooling: `{alias}`",
+    cp_host_tools_body=(
+        "Host: `{target}`\n\n"
+        "• **rtk** (CLI output compression): {rtk}\n"
+        "• **rg** (ripgrep): {rg}\n"
+        "• **fd** (fd-find): {fd}\n"
+        "• **tree** (directory tree): {tree}\n"
+        "• **code-review-graph** (code graph): {crg}\n"
+        "{status_line}"
+    ),
+    btn_cp_host_inst_all="⚡ Install All",
+    btn_cp_host_inst_rtk="📦 Install rtk",
+    btn_cp_host_inst_nav="🌳 Install rg + fd + tree",
+    btn_cp_host_inst_crg="🕸 Install code-review-graph",
+    btn_cp_host_sync_passport="🔄 Sync Host Passport",
+    btn_cp_host_back_hosts="⬅️ Back to Servers",
+    btn_cp_host_done_onboarding="✅ Finish Onboarding",
+    cp_toast_host_probing="Probing installed tools...",
+    cp_toast_host_installing="Installing tooling on remote host...",
+    cp_toast_host_sync_done="Host passport synced.",
+    cp_host_tools_install_ok="\n✅ **Installed:** {detail}",
+    cp_host_tools_install_fail="\n⚠️ **Install failed:** {detail}",
+    cp_host_tools_onboarding_done="✅ **Host `{alias}` onboarding complete.** Passport synced for the agent.",
     ws_select_model_group_prompt="🧠 **Select Model Family** (active: `{current_model}`):",
     ws_select_model_variant_prompt="🧠 **Select Variant for `{family}`:**",
     btn_ws_model_group_item="{mark}🧠 {family} ({count})",

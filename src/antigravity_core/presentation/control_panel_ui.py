@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import secrets
 import shutil
@@ -109,6 +110,7 @@ class ControlPanelUI:
         self._access_repo = access_repo
         self._state: _ControlPanelInteractiveState | None = None
         self._last_cp_msg_id: int = 0
+        self._pending_host_onboarding: dict[str, asyncio.Future[None]] = {}
 
     async def _load_lexicon(self) -> UiLexicon:
         settings = await self._settings_repo.load_settings()
@@ -400,6 +402,10 @@ class ControlPanelUI:
 
         if data_str == "cp:remount_hosts":
             await self._render_hosts_and_credentials_menu(event, lex)
+            return
+
+        if data_str.startswith("cp:host_"):
+            await self._handle_host_tools_callback(event, lex, data_str)
             return
 
         if data_str.startswith("cp:del_cred:"):
@@ -786,7 +792,12 @@ class ControlPanelUI:
                 f"▸ **`{h.alias}`** (`{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}`{route_info})\n"
                 f"   └─ {key_badge} │ {sudo_badge}"
             )
-            row: list[Button] = []
+            row: list[Button] = [
+                Button.inline(
+                    lex.btn_cp_host_tools.format(alias=h.alias),
+                    f"cp:host_tools:{h.alias}".encode("utf-8"),
+                )
+            ]
             if matched_c is not None:
                 row.append(
                     Button.inline(
@@ -825,6 +836,183 @@ class ControlPanelUI:
 
         rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
         await self._safe_edit_event(event, "\n".join(lines), rows)
+
+    def _build_host_tools_panel(
+        self,
+        lex: UiLexicon,
+        host: RemoteHost,
+        status: dict[str, bool],
+        status_line: str,
+        onboarding_req_id: str | None,
+    ) -> tuple[str, list[list[Button]]]:
+        mark = lambda ok: "✅" if ok else "❌"
+        body = lex.cp_host_tools_body.format(
+            target=f"{host.ssh_user}@{host.hostname_or_ip}:{host.ssh_port}",
+            rtk=mark(status["rtk"]),
+            rg=mark(status["rg"]),
+            fd=mark(status["fd"]),
+            tree=mark(status["tree"]),
+            crg=mark(status["code-review-graph"]),
+            status_line=status_line,
+        )
+        text = (
+            format_wide_header_block(lex.cp_host_tools_title.format(alias=host.alias))
+            + "\n"
+            + body
+        )
+        prefix = (
+            f"cp:host_inst_ob:{onboarding_req_id}:{host.alias}"
+            if onboarding_req_id is not None
+            else f"cp:host_inst:{host.alias}"
+        )
+        rows: list[list[Button]] = [
+            [Button.inline(lex.btn_cp_host_inst_all, f"{prefix}:all".encode("utf-8"))],
+            [
+                Button.inline(
+                    lex.btn_cp_host_inst_rtk, f"{prefix}:rtk".encode("utf-8")
+                ),
+                Button.inline(
+                    lex.btn_cp_host_inst_crg, f"{prefix}:crg".encode("utf-8")
+                ),
+            ],
+            [
+                Button.inline(
+                    lex.btn_cp_host_inst_nav, f"{prefix}:cli_nav".encode("utf-8")
+                )
+            ],
+        ]
+        if onboarding_req_id is not None:
+            rows.append(
+                [
+                    Button.inline(
+                        lex.btn_cp_host_done_onboarding,
+                        f"cp:host_done:{onboarding_req_id}:{host.alias}".encode("utf-8"),
+                    )
+                ]
+            )
+        else:
+            rows.append(
+                [
+                    Button.inline(
+                        lex.btn_cp_host_sync_passport,
+                        f"cp:host_sync:{host.alias}".encode("utf-8"),
+                    )
+                ]
+            )
+            rows.append(
+                [Button.inline(lex.btn_cp_host_back_hosts, b"cp:remount_hosts")]
+            )
+        return text, rows
+
+    async def run_host_tools_onboarding_prompt(
+        self, topic_id: int, host: RemoteHost
+    ) -> None:
+        """Displays the interactive host software installer panel during register_remote_host onboarding."""
+        lex = await self._load_lexicon()
+        status = await self._mount_mgr.probe_remote_tools(host)
+        req_id = secrets.token_hex(6)
+        text, buttons = self._build_host_tools_panel(lex, host, status, "", req_id)
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[None] = loop.create_future()
+        self._pending_host_onboarding[req_id] = fut
+        await send_rich_or_standard_message(
+            client=self._client,
+            chat_id=self._cfg.telegram.forum_chat_id,
+            markdown_text=text,
+            fallback_text=text,
+            fallback_entities=None,
+            reply_to=topic_id,
+            top_msg_id=topic_id,
+            silent=False,
+            buttons=buttons,
+        )
+        try:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    fut,
+                    timeout=self._cfg.remotes.interactive_approval_timeout_sec,
+                )
+        finally:
+            self._pending_host_onboarding.pop(req_id, None)
+
+    async def _handle_host_tools_callback(
+        self,
+        event: events.CallbackQuery.Event,
+        lex: UiLexicon,
+        data_str: str,
+    ) -> None:
+        if data_str.startswith("cp:host_done:"):
+            _, _, req_id, alias = data_str.split(":", 3)
+            fut = self._pending_host_onboarding.pop(req_id, None)
+            if fut is not None and not fut.done():
+                fut.set_result(None)
+            await self._safe_edit_event(
+                event,
+                lex.cp_host_tools_onboarding_done.format(alias=alias),
+                None,
+            )
+            return
+
+        if data_str.startswith("cp:host_tools:"):
+            alias = data_str.split(":", 2)[2]
+            host = await self._host_repo.get_by_alias(alias)
+            if host is None:
+                await event.answer()
+                return
+            await event.answer(lex.cp_toast_host_probing)
+            status = await self._mount_mgr.probe_remote_tools(host)
+            text, buttons = self._build_host_tools_panel(lex, host, status, "", None)
+            await self._safe_edit_event(event, text, buttons)
+            return
+
+        if data_str.startswith("cp:host_sync:"):
+            alias = data_str.split(":", 2)[2]
+            host = await self._host_repo.get_by_alias(alias)
+            if host is None:
+                await event.answer()
+                return
+            await event.answer(lex.cp_toast_host_probing)
+            await self._mount_mgr.sync_host_telemetry_and_rules(host)
+            status = await self._mount_mgr.probe_remote_tools(host)
+            banner = lex.cp_host_tools_install_ok.format(detail=lex.cp_toast_host_sync_done)
+            text, buttons = self._build_host_tools_panel(lex, host, status, banner, None)
+            await self._safe_edit_event(event, text, buttons)
+            return
+
+        if data_str.startswith("cp:host_inst_ob:"):
+            _, _, req_id, alias, tool_key = data_str.split(":", 4)
+            await self._execute_host_tool_install(event, lex, alias, tool_key, req_id)
+            return
+
+        if data_str.startswith("cp:host_inst:"):
+            _, _, alias, tool_key = data_str.split(":", 3)
+            await self._execute_host_tool_install(event, lex, alias, tool_key, None)
+            return
+
+    async def _execute_host_tool_install(
+        self,
+        event: events.CallbackQuery.Event,
+        lex: UiLexicon,
+        alias: str,
+        tool_key: str,
+        onboarding_req_id: str | None,
+    ) -> None:
+        host = await self._host_repo.get_by_alias(alias)
+        if host is None:
+            await event.answer()
+            return
+        await event.answer(lex.cp_toast_host_installing)
+        ok, detail = await self._mount_mgr.install_remote_tool(host, tool_key)
+        status = await self._mount_mgr.probe_remote_tools(host)
+        banner = (
+            lex.cp_host_tools_install_ok.format(detail=detail)
+            if ok
+            else lex.cp_host_tools_install_fail.format(detail=detail)
+        )
+        text, buttons = self._build_host_tools_panel(
+            lex, host, status, banner, onboarding_req_id
+        )
+        await self._safe_edit_event(event, text, buttons)
 
     async def _render_settings_menu(
         self, event: events.CallbackQuery.Event, lex: UiLexicon

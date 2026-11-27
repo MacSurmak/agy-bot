@@ -259,6 +259,9 @@ async def run_service(static_config: StaticConfig) -> None:
         cred_repo=cred_repo,
         access_repo=access_repo,
     )
+    ipc_server.set_host_tools_onboarding_callback(
+        control_panel_ui.run_host_tools_onboarding_prompt
+    )
 
     batcher = MessageBatcher(
         paths=static_config.paths,
