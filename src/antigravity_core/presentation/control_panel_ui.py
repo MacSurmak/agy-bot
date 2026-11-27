@@ -5,6 +5,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Final
 from uuid import UUID
 
 from loguru import logger
@@ -38,9 +39,15 @@ from antigravity_core.infrastructure.keyring.dbus_profile_mgr import (
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
 from antigravity_core.lexicon import SUPPORTED_LANGUAGES, UiLexicon, get_lexicon
 from antigravity_core.presentation.formatters import (
+    MENU_BUBBLE_COLS,
     format_wide_header_block,
+    make_rich_width_bar,
     render_control_panel_dashboard,
 )
+
+_HOSTS_PAGE_SIZE: Final[int] = 6
+_HOST_BTN_COLS: Final[int] = 2
+_DEFAULT_SSH_PORT: Final[int] = 22
 from antigravity_core.presentation.tg_renderer import (
     edit_rich_or_standard_message,
     send_rich_or_standard_message,
@@ -401,7 +408,12 @@ class ControlPanelUI:
             return
 
         if data_str == "cp:remount_hosts":
-            await self._render_hosts_and_credentials_menu(event, lex)
+            await self._render_hosts_and_credentials_menu(event, lex, 0)
+            return
+
+        if data_str.startswith("cp:hosts_page:"):
+            page = int(data_str.split(":", 2)[2])
+            await self._render_hosts_and_credentials_menu(event, lex, page)
             return
 
         if data_str.startswith("cp:host_"):
@@ -412,7 +424,7 @@ class ControlPanelUI:
             _, _, cred_key = data_str.split(":", 2)
             await self._cred_repo.delete_credential(cred_key)
             await event.answer(lex.cp_toast_cred_reset.format(cred_key=cred_key))
-            await self._render_hosts_and_credentials_menu(event, lex)
+            await self._render_hosts_and_credentials_menu(event, lex, 0)
             return
 
         if data_str.startswith("cp:del_host:"):
@@ -430,7 +442,7 @@ class ControlPanelUI:
                 all_hosts = await self._host_repo.list_hosts()
                 self._bootstrapper.sync_global_agents_md_host_map(all_hosts)
             await event.answer(lex.cp_toast_host_deleted.format(alias=alias))
-            await self._render_hosts_and_credentials_menu(event, lex)
+            await self._render_hosts_and_credentials_menu(event, lex, 0)
             return
 
         if data_str == "cp:new_topic":
@@ -695,10 +707,15 @@ class ControlPanelUI:
         accounts = await self._account_repo.list_accounts()
         lines = [
             format_wide_header_block(lex.cp_accounts_hub_title),
+            "",
             lex.cp_accounts_hub_subtitle,
         ]
         if not accounts:
             lines.append(lex.cp_accounts_hub_empty_hint)
+        lines.append("")
+        lines.append(
+            make_rich_width_bar(f"Accounts: {len(accounts)}", MENU_BUBBLE_COLS)
+        )
         return "\n".join(lines), build_paginated_accounts_keyboard(lex, accounts, page)
 
     async def _render_accounts_hub(
@@ -737,13 +754,17 @@ class ControlPanelUI:
             format_wide_header_block(
                 lex.cp_acc_card_header.format(email_label=acc.display_email)
             ),
+            "",
             lex.cp_acc_card_profile_line.format(
                 slug=acc.display_email, role_label=role_label
             ),
             lex.cp_acc_card_status_line.format(
                 status_label=status_label, quota_line=quota_line
             ),
+            "",
+            make_rich_width_bar(f"Account │ {acc.display_email}", MENU_BUBBLE_COLS),
         ]
+
         await self._update_or_recreate_panel(
             event,
             "\n".join(lines),
@@ -751,89 +772,104 @@ class ControlPanelUI:
         )
 
     async def _render_hosts_and_credentials_menu(
-        self, event: events.CallbackQuery.Event, lex: UiLexicon
+        self, event: events.CallbackQuery.Event, lex: UiLexicon, page: int
     ) -> None:
         hosts = await self._host_repo.list_hosts()
         creds = await self._cred_repo.list_credentials()
         cred_map = {c.credential_key: c for c in creds}
-        processed_creds: set[str] = set()
 
-        lines = [
-            format_wide_header_block(lex.cp_hosts_menu_title),
-            lex.cp_hosts_menu_subtitle,
-        ]
-        rows: list[list[Button]] = []
-
-        if not hosts and not creds:
-            lines.append(lex.cp_hosts_menu_empty)
-
+        matched_cred_keys: set[str] = set()
         for h in hosts:
             k_alias = f"{h.ssh_user}@{h.alias}:{h.ssh_port}"
             k_ip = f"{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}"
-            matched_c = (
-                cred_map.get(k_alias) if k_alias in cred_map else cred_map.get(k_ip)
-            )
-            if matched_c is not None:
-                processed_creds.add(matched_c.credential_key)
+            if k_alias in cred_map:
+                matched_cred_keys.add(k_alias)
+            elif k_ip in cred_map:
+                matched_cred_keys.add(k_ip)
 
-            route_info = f" (via `{h.jump_host}`)" if h.jump_host else ""
-            key_badge = (
-                lex.cp_host_key_ok_badge
-                if (matched_c and matched_c.key_provisioned)
-                else lex.cp_host_key_authed_badge
-            )
-            sudo_badge = (
-                lex.cp_host_sudo_saved_badge
-                if matched_c
-                else lex.cp_host_sudo_missing_badge
-            )
+        orphan_creds = [c for c in creds if c.credential_key not in matched_cred_keys]
+        total = len(hosts)
+        max_page = max(0, (total - 1) // _HOSTS_PAGE_SIZE) if total > 0 else 0
+        curr_page = max(0, min(page, max_page))
+        start_idx = curr_page * _HOSTS_PAGE_SIZE
+        page_hosts = hosts[start_idx : start_idx + _HOSTS_PAGE_SIZE]
 
-            lines.append(
-                f"▸ **`{h.alias}`** (`{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}`{route_info})\n"
-                f"   └─ {key_badge} │ {sudo_badge}"
-            )
-            row: list[Button] = [
-                Button.inline(
-                    lex.btn_cp_host_tools.format(alias=h.alias),
-                    f"cp:host_tools:{h.alias}".encode("utf-8"),
+        lines: list[str] = [
+            format_wide_header_block(lex.cp_hosts_menu_title),
+            "",
+            lex.cp_hosts_menu_subtitle,
+            "",
+        ]
+        rows: list[list[Button]] = []
+
+        if not hosts and not orphan_creds:
+            lines.append(lex.cp_hosts_menu_empty)
+        elif page_hosts:
+            lines.append(lex.dashboard_hosts_table_header)
+            btn_buf: list[Button] = []
+            for h in page_hosts:
+                k_alias = f"{h.ssh_user}@{h.alias}:{h.ssh_port}"
+                k_ip = f"{h.ssh_user}@{h.hostname_or_ip}:{h.ssh_port}"
+                matched_c = (
+                    cred_map[k_alias]
+                    if k_alias in cred_map
+                    else (cred_map[k_ip] if k_ip in cred_map else None)
                 )
-            ]
-            if matched_c is not None:
-                row.append(
+                key_icon = "🟢" if (matched_c and matched_c.key_provisioned) else "🔑"
+                sudo_icon = "🔒" if matched_c is not None else "—"
+                port_s = f":{h.ssh_port}" if h.ssh_port != _DEFAULT_SSH_PORT else ""
+                lines.append(
+                    f"| `{h.alias}` | `{h.ssh_user}@{h.hostname_or_ip}{port_s}` | {key_icon} {sudo_icon} |"
+                )
+                btn_buf.append(
                     Button.inline(
-                        lex.btn_cp_reset_host_pass.format(label=h.alias),
-                        f"cp:del_cred:{matched_c.credential_key}".encode("utf-8"),
+                        f"{key_icon} {h.alias}",
+                        f"cp:host_view:{h.alias}".encode("utf-8"),
                     )
                 )
-            row.append(
-                Button.inline(
-                    lex.btn_cp_delete_host.format(alias=h.alias),
-                    f"cp:del_host:{h.alias}".encode("utf-8"),
-                )
-            )
-            rows.append(row)
+                if len(btn_buf) == _HOST_BTN_COLS:
+                    rows.append(btn_buf)
+                    btn_buf = []
+            if btn_buf:
+                rows.append(btn_buf)
 
-        for c in creds:
-            if c.credential_key in processed_creds:
-                continue
-            key_badge = (
-                lex.cp_host_key_ok_badge
-                if c.key_provisioned
-                else lex.cp_host_key_missing_badge
+        if total > _HOSTS_PAGE_SIZE:
+            nav_row: list[Button] = []
+            if curr_page > 0:
+                nav_row.append(
+                    Button.inline(
+                        "⬅️", f"cp:hosts_page:{curr_page - 1}".encode("ascii")
+                    )
+                )
+            nav_row.append(
+                Button.inline(f"{curr_page + 1}/{max_page + 1}", b"cp:auth_noop")
             )
-            lines.append(
-                f"▸ **`{c.credential_key}`**\n"
-                f"   └─ {key_badge} │ {lex.cp_host_sudo_saved_badge}"
-            )
+            if curr_page < max_page:
+                nav_row.append(
+                    Button.inline(
+                        "➡️", f"cp:hosts_page:{curr_page + 1}".encode("ascii")
+                    )
+                )
+            rows.append(nav_row)
+
+        for oc in orphan_creds:
+            lines.append(f"\n- ⚠️ `{oc.credential_key}` ({lex.cp_host_sudo_saved_badge})")
             rows.append(
                 [
                     Button.inline(
-                        lex.btn_cp_reset_host_pass.format(label=c.credential_key),
-                        f"cp:del_cred:{c.credential_key}".encode("utf-8"),
+                        f"🗑 {oc.credential_key}",
+                        f"cp:del_cred:{oc.credential_key}".encode("utf-8"),
                     )
                 ]
             )
 
+        lines.append("")
+        lines.append(
+            make_rich_width_bar(
+                f"Hosts: {total} │ Page {curr_page + 1}/{max_page + 1}",
+                MENU_BUBBLE_COLS,
+            )
+        )
         rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
         await self._safe_edit_event(event, "\n".join(lines), rows)
 
@@ -844,10 +880,12 @@ class ControlPanelUI:
         status: dict[str, bool],
         status_line: str,
         onboarding_req_id: str | None,
+        cred_key_to_reset: str | None,
     ) -> tuple[str, list[list[Button]]]:
         mark = lambda ok: "✅" if ok else "❌"
+        route_note = f" via {host.jump_host}" if host.jump_host else ""
         body = lex.cp_host_tools_body.format(
-            target=f"{host.ssh_user}@{host.hostname_or_ip}:{host.ssh_port}",
+            target=f"{host.ssh_user}@{host.hostname_or_ip}:{host.ssh_port}{route_note}",
             rtk=mark(status["rtk"]),
             rg=mark(status["rg"]),
             fd=mark(status["fd"]),
@@ -855,10 +893,16 @@ class ControlPanelUI:
             crg=mark(status["code-review-graph"]),
             status_line=status_line,
         )
+        width_bar = make_rich_width_bar(
+            f"Host │ {host.alias} ({host.ssh_user}@{host.hostname_or_ip})",
+            MENU_BUBBLE_COLS,
+        )
         text = (
             format_wide_header_block(lex.cp_host_tools_title.format(alias=host.alias))
-            + "\n"
+            + "\n\n"
             + body
+            + "\n\n"
+            + width_bar
         )
         prefix = (
             f"cp:host_inst_ob:{onboarding_req_id}:{host.alias}"
@@ -891,18 +935,39 @@ class ControlPanelUI:
                 ]
             )
         else:
+            mgmt_row: list[Button] = [
+                Button.inline(
+                    lex.btn_cp_host_sync_passport,
+                    f"cp:host_sync:{host.alias}".encode("utf-8"),
+                )
+            ]
+            if cred_key_to_reset is not None:
+                mgmt_row.append(
+                    Button.inline(
+                        lex.btn_cp_reset_host_pass.format(label=host.alias),
+                        f"cp:del_cred:{cred_key_to_reset}".encode("utf-8"),
+                    )
+                )
+            rows.append(mgmt_row)
             rows.append(
                 [
                     Button.inline(
-                        lex.btn_cp_host_sync_passport,
-                        f"cp:host_sync:{host.alias}".encode("utf-8"),
-                    )
+                        lex.btn_cp_delete_host.format(alias=host.alias),
+                        f"cp:del_host:{host.alias}".encode("utf-8"),
+                    ),
+                    Button.inline(lex.btn_cp_host_back_hosts, b"cp:remount_hosts"),
                 ]
             )
-            rows.append(
-                [Button.inline(lex.btn_cp_host_back_hosts, b"cp:remount_hosts")]
-            )
         return text, rows
+
+    async def _find_host_cred_key(self, host: RemoteHost) -> str | None:
+        key_alias = f"{host.ssh_user}@{host.alias}:{host.ssh_port}"
+        if await self._cred_repo.get_credential(key_alias) is not None:
+            return key_alias
+        key_ip = f"{host.ssh_user}@{host.hostname_or_ip}:{host.ssh_port}"
+        if await self._cred_repo.get_credential(key_ip) is not None:
+            return key_ip
+        return None
 
     async def run_host_tools_onboarding_prompt(
         self, topic_id: int, host: RemoteHost
@@ -911,7 +976,9 @@ class ControlPanelUI:
         lex = await self._load_lexicon()
         status = await self._mount_mgr.probe_remote_tools(host)
         req_id = secrets.token_hex(6)
-        text, buttons = self._build_host_tools_panel(lex, host, status, "", req_id)
+        text, buttons = self._build_host_tools_panel(
+            lex, host, status, "", req_id, None
+        )
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[None] = loop.create_future()
         self._pending_host_onboarding[req_id] = fut
@@ -953,7 +1020,7 @@ class ControlPanelUI:
             )
             return
 
-        if data_str.startswith("cp:host_tools:"):
+        if data_str.startswith(("cp:host_view:", "cp:host_tools:")):
             alias = data_str.split(":", 2)[2]
             host = await self._host_repo.get_by_alias(alias)
             if host is None:
@@ -961,7 +1028,10 @@ class ControlPanelUI:
                 return
             await event.answer(lex.cp_toast_host_probing)
             status = await self._mount_mgr.probe_remote_tools(host)
-            text, buttons = self._build_host_tools_panel(lex, host, status, "", None)
+            cred_key = await self._find_host_cred_key(host)
+            text, buttons = self._build_host_tools_panel(
+                lex, host, status, "", None, cred_key
+            )
             await self._safe_edit_event(event, text, buttons)
             return
 
@@ -974,8 +1044,13 @@ class ControlPanelUI:
             await event.answer(lex.cp_toast_host_probing)
             await self._mount_mgr.sync_host_telemetry_and_rules(host)
             status = await self._mount_mgr.probe_remote_tools(host)
-            banner = lex.cp_host_tools_install_ok.format(detail=lex.cp_toast_host_sync_done)
-            text, buttons = self._build_host_tools_panel(lex, host, status, banner, None)
+            cred_key = await self._find_host_cred_key(host)
+            banner = lex.cp_host_tools_install_ok.format(
+                detail=lex.cp_toast_host_sync_done
+            )
+            text, buttons = self._build_host_tools_panel(
+                lex, host, status, banner, None, cred_key
+            )
             await self._safe_edit_event(event, text, buttons)
             return
 
@@ -1009,8 +1084,11 @@ class ControlPanelUI:
             if ok
             else lex.cp_host_tools_install_fail.format(detail=detail)
         )
+        cred_key = (
+            await self._find_host_cred_key(host) if onboarding_req_id is None else None
+        )
         text, buttons = self._build_host_tools_panel(
-            lex, host, status, banner, onboarding_req_id
+            lex, host, status, banner, onboarding_req_id, cred_key
         )
         await self._safe_edit_event(event, text, buttons)
 
@@ -1031,13 +1109,20 @@ class ControlPanelUI:
             (lex.setting_label_default_model, settings.default_model),
             (lex.setting_label_default_mode, mode_display),
         ]
-        lines = [format_wide_header_block(lex.cp_settings_menu_header.strip())]
+        lines = [format_wide_header_block(lex.cp_settings_menu_header.strip()), ""]
         for label, val in items:
             lines.append(
                 lex.cp_settings_menu_item.format(
                     key="", value_json=val, description=label
                 )
             )
+        lines.append("")
+        lines.append(
+            make_rich_width_bar(
+                f"Settings │ {settings.ui_language} │ {settings.default_model}",
+                MENU_BUBBLE_COLS,
+            )
+        )
 
         btn_labels = [
             (lex.btn_cp_set_language, "ui_language"),

@@ -136,7 +136,7 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     btn_cp_refresh="🔄 Обновить дашборд",
     btn_cp_probe_quotas="📊 Обновить квоты",
     btn_cp_new_topic="➕ Создать топик",
-    btn_cp_auth_menu="🔑 Авторизовать / Добавить аккаунт",
+    btn_cp_auth_menu="🔑 Аккаунты Google",
     btn_cp_switch_default_acc="🔀 Сменить основной аккаунт",
     btn_cp_remount_hosts="🖥 Серверы и Пароли SSH",
     btn_cp_tasks_menu="⏰ Расписания и Таймеры",
@@ -222,8 +222,8 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     cp_tasks_menu_prompt="⏰ **Активные задачи планировщика ({count}):**\nНажмите на задачу для отмены:",
     cp_tasks_menu_updated="⏰ **Активные задачи планировщика ({count}):**",
     cp_toast_task_canceled="Задача отменена.",
-    cp_settings_menu_header="⚙️ **Настройки по умолчанию для новых топиков:**\n",
-    cp_settings_menu_item="• **{description}:** `{value_json}`",
+    cp_settings_menu_header="⚙️ Настройки по умолчанию",
+    cp_settings_menu_item="- **{description}:** `{value_json}`",
     cp_edit_setting_prompt=(
         "✏️ **Изменение параметра `{key}`**\n"
         'Отправьте новое значение (например: `"ru"`, `"en"`, `"gemini-4-argon-high"`, `900`, `1.8`).'
@@ -368,38 +368,40 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     cp_acc_status_needs_login="⚠️ Требуется вход",
     cp_acc_quota_line="\n📊 **Остаток квоты:** `{min_pct}%`",
     cp_acc_card_header="👤 Аккаунт: {email_label}",
-    cp_acc_card_profile_line="• **Профиль:** `{slug}` ({role_label})",
-    cp_acc_card_status_line="• **Статус:** {status_label}{quota_line}",
+    cp_acc_card_profile_line="- **Профиль:** `{slug}` ({role_label})",
+    cp_acc_card_status_line="- **Статус:** {status_label}{quota_line}",
     btn_cp_make_default_acc="⭐ Сделать основным",
     btn_cp_reauth_oauth="🔄 Переавторизовать (OAuth)",
     btn_cp_delete_acc="🗑 Удалить аккаунт",
     btn_cp_back_to_accounts="⬅️ Назад к аккаунтам",
-    cp_hosts_menu_title="🖥 Серверы и сохранённые пароли SSH / Sudo",
-    cp_hosts_menu_subtitle="Реестр всех известных серверов инфраструктуры:\n",
-    cp_hosts_menu_empty="• Серверов пока нет. Зарегистрируйте хост или обратитесь к `user@host`.",
+    cp_hosts_menu_title="🖥 Серверы инфраструктуры",
+    cp_hosts_menu_subtitle="Выберите сервер для управления ключами, паролем и предустановкой софта:",
+    cp_hosts_menu_empty="- Серверов пока нет. Зарегистрируйте хост или обратитесь к `user@host`.",
     cp_host_key_ok_badge="🟢 Ключ OK",
     cp_host_key_authed_badge="🔑 Авторизован",
     cp_host_key_missing_badge="⚠️ Нет ключа",
-    cp_host_sudo_saved_badge="🔒 Sudo-пароль сохранён",
-    cp_host_sudo_missing_badge="⚠️ Sudo-пароль не задан",
-    btn_cp_reset_host_pass="🔄 Сбросить пароль: {label}",
-    btn_cp_delete_host="🗑 Удалить сервер: {alias}",
+    cp_host_sudo_saved_badge="🔒 Sudo сохранён",
+    cp_host_sudo_missing_badge="⚠️ Без sudo",
+    btn_cp_reset_host_pass="🔑 Сбросить пароль",
+    btn_cp_delete_host="🗑 Удалить сервер",
     btn_cp_host_tools="🛠 Софт: {alias}",
-    cp_host_tools_title="🛠 Предустановка софта на `{alias}`",
+    cp_host_tools_title="🖥 Сервер: {alias}",
     cp_host_tools_body=(
-        "Хост: `{target}`\n\n"
-        "• **rtk** (сжатие вывода CLI): {rtk}\n"
-        "• **rg** (ripgrep): {rg}\n"
-        "• **fd** (fd-find): {fd}\n"
-        "• **tree** (дерево каталогов): {tree}\n"
-        "• **code-review-graph** (граф кода): {crg}\n"
+        "- **Адрес:** `{target}`\n\n"
+        "| Инструмент | Назначение | Статус |\n"
+        "| :--- | :--- | :---: |\n"
+        "| `rtk` | Сжатие вывода CLI | {rtk} |\n"
+        "| `rg` | Поиск по коду (ripgrep) | {rg} |\n"
+        "| `fd` | Поиск файлов (fd-find) | {fd} |\n"
+        "| `tree` | Дерево каталогов | {tree} |\n"
+        "| `code-review-graph` | Граф зависимостей | {crg} |"
         "{status_line}"
     ),
-    btn_cp_host_inst_all="⚡ Установить всё",
-    btn_cp_host_inst_rtk="📦 Установить rtk",
-    btn_cp_host_inst_nav="🌳 Установить rg + fd + tree",
-    btn_cp_host_inst_crg="🕸 Установить code-review-graph",
-    btn_cp_host_sync_passport="🔄 Обновить паспорт хоста",
+    btn_cp_host_inst_all="⚡ Установить весь софт",
+    btn_cp_host_inst_rtk="📦 rtk",
+    btn_cp_host_inst_nav="🌳 rg + fd + tree",
+    btn_cp_host_inst_crg="🕸 code-review-graph",
+    btn_cp_host_sync_passport="🔄 Паспорт",
     btn_cp_host_back_hosts="⬅️ Назад к серверам",
     btn_cp_host_done_onboarding="✅ Завершить онбординг",
     cp_toast_host_probing="Проверяю установленный софт...",

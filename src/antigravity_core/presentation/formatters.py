@@ -196,10 +196,13 @@ def render_topic_header_card(
         sudo_str=sudo_str,
         worker_str=worker_str,
     )
-    card_lines = rendered.splitlines()
-    if card_lines:
-        card_lines[0] = pad_rich_width(card_lines[0], _UNIFORM_BUBBLE_COLS)
-    return "\n".join(card_lines)
+    if supports_native_rich_output():
+        width_bar = make_rich_width_bar(
+            f"Topic #{topic.topic_id} │ {topic.model_slug} │ {account.display_email}",
+            MENU_BUBBLE_COLS,
+        )
+        return f"{rendered.rstrip()}\n\n{width_bar}"
+    return rendered
 
 
 def render_new_session_divider(lex: UiLexicon, topic: ForumTopic) -> str:
@@ -515,6 +518,16 @@ def build_final_execution_trace_pages(
 _COMPACT_BAR_WIDTH: Final[int] = 8
 _DEFAULT_SSH_PORT: Final[int] = 22
 _UNIFORM_BUBBLE_COLS: Final[int] = 86
+MENU_BUBBLE_COLS: Final[int] = 68
+_ANSWER_BUBBLE_COLS: Final[int] = 78
+_SHORT_ANSWER_THRESHOLD_CHARS: Final[int] = 260
+
+
+def make_rich_width_bar(label: str, target_cols: int) -> str:
+    """Renders a 1-line monospaced bar that keeps Telegram Desktop bubbles wide without breaking mobile layout."""
+    clean = " ".join(label.replace("**", "").replace("`", "").splitlines()).strip()
+    pad_count = max(0, target_cols - len(clean))
+    return f"```text\n{clean}{' ' * pad_count}\n```"
 
 
 def pad_rich_width(line: str, target_cols: int) -> str:
@@ -647,18 +660,41 @@ def build_final_trace_rich_html_pages(
     )
 
 
+def _should_use_wide_answer_bubble(body_markdown: str, chunk_count: int) -> bool:
+    if chunk_count > 1 or len(body_markdown.strip()) >= _SHORT_ANSWER_THRESHOLD_CHARS:
+        return True
+    structured_markers = ("\n#", "\n- ", "\n1. ", "| ---", "```")
+    return any(marker in body_markdown for marker in structured_markers)
+
+
 def split_rich_markdown_chunks(
     body_markdown: str,
     footer_bar_text: str,
     max_chars: int,
 ) -> list[str]:
-    """Splits native RichMessage Markdown below Telegram Show More cutoff without stripping GFM/LaTeX."""
-    footer_block = f"\n\n---\n*{footer_bar_text.strip()}*"
-    budget = max(1000, max_chars - len(footer_block) - 120)
+    """Splits native RichMessage Markdown below Telegram Show More cutoff with uniform wide bubbles for long answers."""
+    clean_footer = footer_bar_text.strip()
+    wide_footer_block = f"\n\n{make_rich_width_bar(clean_footer, _ANSWER_BUBBLE_COLS)}"
+    compact_footer_block = f"\n\n---\n*{clean_footer}*"
+    budget = max(1000, max_chars - len(wide_footer_block) - 120)
     chunks = split_markdown_preserving_blocks(body_markdown, budget)
     if not chunks:
-        return [footer_block.lstrip()]
-    chunks[-1] = f"{chunks[-1]}{footer_block}"
+        return [compact_footer_block.lstrip()]
+
+    use_wide = _should_use_wide_answer_bubble(body_markdown, len(chunks))
+    if not use_wide:
+        chunks[-1] = f"{chunks[-1]}{compact_footer_block}"
+        return chunks
+
+    total = len(chunks)
+    for idx in range(total - 1):
+        if "```" not in chunks[idx] and "| ---" not in chunks[idx]:
+            part_bar = make_rich_width_bar(
+                f"📄 {idx + 1} / {total}", _ANSWER_BUBBLE_COLS
+            )
+            chunks[idx] = f"{chunks[idx]}\n\n{part_bar}"
+
+    chunks[-1] = f"{chunks[-1]}{wide_footer_block}"
     return chunks
 
 
@@ -683,7 +719,7 @@ def render_turn_footer(
     )
     clean_stats = stats_single_line.replace("**", "").replace("`", "").strip()
     lines = [
-        pad_rich_width(clean_stats, _UNIFORM_BUBBLE_COLS)
+        clean_stats
         if supports_native_rich_output()
         else make_wide_single_line_bar(stats_single_line)
     ]
@@ -1086,7 +1122,7 @@ def _format_compact_quota_cell(
     raw_rst = str(b_val["reset_time"]) if "reset_time" in b_val else ""
     rst = (
         f" (↻ {raw_rst})"
-        if raw_rst and not raw_rst.startswith("20")
+        if raw_rst and not raw_rst.startswith(("19", "20"))
         else _format_reset_countdown(raw_rst, lex)
     )
     return f"`{_render_mini_bar(pct, _COMPACT_BAR_WIDTH)} {pct}%`{rst}"
@@ -1197,8 +1233,6 @@ def render_control_panel_dashboard(
     hdr_lines = lex.dashboard_header.format(
         warm_count=warm_count, running_count=running_count
     ).splitlines()
-    if hdr_lines:
-        hdr_lines[0] = pad_rich_width(hdr_lines[0], _UNIFORM_BUBBLE_COLS)
     lines: list[str] = hdr_lines
     accounts_by_slug = {a.slug: a.display_email for a in accounts}
     for snap in pool_snapshots:
@@ -1264,6 +1298,14 @@ def render_control_panel_dashboard(
             quota_auto_switch_threshold_pct=settings.quota_auto_switch_threshold_pct,
         )
     )
+    if supports_native_rich_output():
+        lines.append(
+            "\n"
+            + make_rich_width_bar(
+                f"Antigravity Core │ Workers: {warm_count} │ Hosts: {len(hosts)} │ Tasks: {len(tasks)}",
+                MENU_BUBBLE_COLS,
+            )
+        )
     return "\n".join(lines)
 
 
@@ -1323,7 +1365,7 @@ def _format_dynamic_bucket_entry(
     raw_rst = str(b_val["reset_time"]) if "reset_time" in b_val else ""
     rst = (
         f" (↻ {raw_rst})"
-        if raw_rst and not raw_rst.startswith("20")
+        if raw_rst and not raw_rst.startswith(("19", "20"))
         else _format_reset_countdown(raw_rst, lex)
     )
     bar_str = f"`{_render_mini_bar(pct, 8)} {pct}%`{rst}"

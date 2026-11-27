@@ -130,7 +130,7 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     btn_cp_refresh="🔄 Refresh Dashboard",
     btn_cp_probe_quotas="📊 Probe Quotas",
     btn_cp_new_topic="➕ Create Topic",
-    btn_cp_auth_menu="🔑 Add / Auth Account",
+    btn_cp_auth_menu="🔑 Google Accounts",
     btn_cp_switch_default_acc="🔀 Switch Default Account",
     btn_cp_remount_hosts="🖥 Servers & SSH Passwords",
     btn_cp_tasks_menu="⏰ Scheduled Tasks",
@@ -215,8 +215,8 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     cp_tasks_menu_prompt="⏰ **Active Scheduled Tasks ({count}):**\nClick a task below to cancel it:",
     cp_tasks_menu_updated="⏰ **Active Scheduled Tasks ({count}):**",
     cp_toast_task_canceled="Task canceled.",
-    cp_settings_menu_header="⚙️ **Default Settings for New Topics:**\n",
-    cp_settings_menu_item="• **{description}:** `{value_json}`",
+    cp_settings_menu_header="⚙️ Default Settings",
+    cp_settings_menu_item="- **{description}:** `{value_json}`",
     cp_edit_setting_prompt=(
         "✏️ **Update Setting `{key}`**\n"
         'Reply with the new JSON value (e.g. `"ru"`, `"en"`, `"gemini-4-argon-high"`, `900`, `1.8`).'
@@ -361,38 +361,40 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     cp_acc_status_needs_login="⚠️ Sign-In Required",
     cp_acc_quota_line="\n📊 **Remaining Quota:** `{min_pct}%`",
     cp_acc_card_header="👤 Account: {email_label}",
-    cp_acc_card_profile_line="• **Profile:** `{slug}` ({role_label})",
-    cp_acc_card_status_line="• **Status:** {status_label}{quota_line}",
+    cp_acc_card_profile_line="- **Profile:** `{slug}` ({role_label})",
+    cp_acc_card_status_line="- **Status:** {status_label}{quota_line}",
     btn_cp_make_default_acc="⭐ Set as Default",
     btn_cp_reauth_oauth="🔄 Re-Authenticate (OAuth)",
     btn_cp_delete_acc="🗑 Delete Account",
     btn_cp_back_to_accounts="⬅️ Back to Accounts",
-    cp_hosts_menu_title="🖥 Servers & Saved SSH / Sudo Passwords",
-    cp_hosts_menu_subtitle="Registry of all known infrastructure servers:\n",
-    cp_hosts_menu_empty="• No servers registered yet. Onboard a host or connect to `user@host`.",
+    cp_hosts_menu_title="🖥 Infrastructure Servers",
+    cp_hosts_menu_subtitle="Select a server to manage SSH credentials and install tooling:",
+    cp_hosts_menu_empty="- No servers registered yet. Onboard a host or connect to `user@host`.",
     cp_host_key_ok_badge="🟢 Key OK",
     cp_host_key_authed_badge="🔑 Authorized",
     cp_host_key_missing_badge="⚠️ No Key",
-    cp_host_sudo_saved_badge="🔒 Sudo Password Saved",
-    cp_host_sudo_missing_badge="⚠️ No Sudo Password",
-    btn_cp_reset_host_pass="🔄 Reset Password: {label}",
-    btn_cp_delete_host="🗑 Delete Server: {alias}",
+    cp_host_sudo_saved_badge="🔒 Sudo Saved",
+    cp_host_sudo_missing_badge="⚠️ No Sudo",
+    btn_cp_reset_host_pass="🔑 Reset Password",
+    btn_cp_delete_host="🗑 Delete Server",
     btn_cp_host_tools="🛠 Tools: {alias}",
-    cp_host_tools_title="🛠 Host Tooling: `{alias}`",
+    cp_host_tools_title="🖥 Server: {alias}",
     cp_host_tools_body=(
-        "Host: `{target}`\n\n"
-        "• **rtk** (CLI output compression): {rtk}\n"
-        "• **rg** (ripgrep): {rg}\n"
-        "• **fd** (fd-find): {fd}\n"
-        "• **tree** (directory tree): {tree}\n"
-        "• **code-review-graph** (code graph): {crg}\n"
+        "- **Target:** `{target}`\n\n"
+        "| Tool | Purpose | Status |\n"
+        "| :--- | :--- | :---: |\n"
+        "| `rtk` | CLI output compression | {rtk} |\n"
+        "| `rg` | Code search (ripgrep) | {rg} |\n"
+        "| `fd` | File search (fd-find) | {fd} |\n"
+        "| `tree` | Directory tree | {tree} |\n"
+        "| `code-review-graph` | Dependency graph | {crg} |"
         "{status_line}"
     ),
-    btn_cp_host_inst_all="⚡ Install All",
-    btn_cp_host_inst_rtk="📦 Install rtk",
-    btn_cp_host_inst_nav="🌳 Install rg + fd + tree",
-    btn_cp_host_inst_crg="🕸 Install code-review-graph",
-    btn_cp_host_sync_passport="🔄 Sync Host Passport",
+    btn_cp_host_inst_all="⚡ Install All Tools",
+    btn_cp_host_inst_rtk="📦 rtk",
+    btn_cp_host_inst_nav="🌳 rg + fd + tree",
+    btn_cp_host_inst_crg="🕸 code-review-graph",
+    btn_cp_host_sync_passport="🔄 Sync Passport",
     btn_cp_host_back_hosts="⬅️ Back to Servers",
     btn_cp_host_done_onboarding="✅ Finish Onboarding",
     cp_toast_host_probing="Probing installed tools...",
