@@ -403,6 +403,18 @@ EN_LEXICON: Final[UiLexicon] = UiLexicon(
     cp_host_tools_install_ok="\n✅ **Installed:** {detail}",
     cp_host_tools_install_fail="\n⚠️ **Install failed:** {detail}",
     cp_host_tools_onboarding_done="✅ **Host `{alias}` onboarding complete.** Passport synced for the agent.",
+    btn_cp_open_topic="💬 Open Topic",
+    cp_topic_created_link_msg="✅ Created new topic: **{title}**",
+    btn_ws_ssh_key_only="🔑 Key-Only Host (Show SSH Key)",
+    btn_ws_ssh_key_ready="✅ Key Added, Continue",
+    ws_ssh_key_only_card=(
+        "🔑 **Authorize this bot SSH public key on `{target}`:**\n\n"
+        "```bash\n"
+        'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "{pub_key}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys\n'
+        "```\n\n"
+        "Click below once authorized:"
+    ),
+    ws_ssh_key_ready_ack="🔑 Verifying key-based SSH login to `{target}`...",
     ws_select_model_group_prompt="🧠 **Select Model Family** (active: `{current_model}`):",
     ws_select_model_variant_prompt="🧠 **Select Variant for `{family}`:**",
     btn_ws_model_group_item="{mark}🧠 {family} ({count})",

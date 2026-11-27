@@ -39,9 +39,7 @@ from antigravity_core.infrastructure.keyring.dbus_profile_mgr import (
 from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
 from antigravity_core.lexicon import SUPPORTED_LANGUAGES, UiLexicon, get_lexicon
 from antigravity_core.presentation.formatters import (
-    MENU_BUBBLE_COLS,
     format_wide_header_block,
-    make_rich_width_bar,
     render_control_panel_dashboard,
 )
 
@@ -682,6 +680,18 @@ class ControlPanelUI:
             final_title = lex.ws_auto_topic_title.format(topic_id=topic.topic_id)
             await self._topic_lifecycle.rename_topic(topic.topic_id, final_title)
             await self._workspace_ui_init_new_topic(topic.topic_id, assigned_dir)
+            internal_chat_id = str(abs(self._cfg.telegram.forum_chat_id)).removeprefix(
+                "100"
+            )
+            topic_url = f"https://t.me/c/{internal_chat_id}/{topic.topic_id}"
+            cp_topic_id = self._cfg.telegram.control_panel_topic_id
+            sent_link = await self._client.send_message(
+                entity=self._cfg.telegram.forum_chat_id,
+                message=lex.cp_topic_created_link_msg.format(title=final_title),
+                reply_to=cp_topic_id,
+                buttons=[[Button.url(lex.btn_cp_open_topic, topic_url)]],
+            )
+            self._last_cp_msg_id = max(self._last_cp_msg_id, sent_link.id)
             await event.answer(
                 lex.cp_new_topic_created.format(
                     title=final_title, topic_id=topic.topic_id
@@ -712,10 +722,6 @@ class ControlPanelUI:
         ]
         if not accounts:
             lines.append(lex.cp_accounts_hub_empty_hint)
-        lines.append("")
-        lines.append(
-            make_rich_width_bar(f"Accounts: {len(accounts)}", MENU_BUBBLE_COLS)
-        )
         return "\n".join(lines), build_paginated_accounts_keyboard(lex, accounts, page)
 
     async def _render_accounts_hub(
@@ -761,8 +767,6 @@ class ControlPanelUI:
             lex.cp_acc_card_status_line.format(
                 status_label=status_label, quota_line=quota_line
             ),
-            "",
-            make_rich_width_bar(f"Account │ {acc.display_email}", MENU_BUBBLE_COLS),
         ]
 
         await self._update_or_recreate_panel(
@@ -863,13 +867,6 @@ class ControlPanelUI:
                 ]
             )
 
-        lines.append("")
-        lines.append(
-            make_rich_width_bar(
-                f"Hosts: {total} │ Page {curr_page + 1}/{max_page + 1}",
-                MENU_BUBBLE_COLS,
-            )
-        )
         rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
         await self._safe_edit_event(event, "\n".join(lines), rows)
 
@@ -893,16 +890,10 @@ class ControlPanelUI:
             crg=mark(status["code-review-graph"]),
             status_line=status_line,
         )
-        width_bar = make_rich_width_bar(
-            f"Host │ {host.alias} ({host.ssh_user}@{host.hostname_or_ip})",
-            MENU_BUBBLE_COLS,
-        )
         text = (
             format_wide_header_block(lex.cp_host_tools_title.format(alias=host.alias))
             + "\n\n"
             + body
-            + "\n\n"
-            + width_bar
         )
         prefix = (
             f"cp:host_inst_ob:{onboarding_req_id}:{host.alias}"
@@ -1116,14 +1107,6 @@ class ControlPanelUI:
                     key="", value_json=val, description=label
                 )
             )
-        lines.append("")
-        lines.append(
-            make_rich_width_bar(
-                f"Settings │ {settings.ui_language} │ {settings.default_model}",
-                MENU_BUBBLE_COLS,
-            )
-        )
-
         btn_labels = [
             (lex.btn_cp_set_language, "ui_language"),
             (lex.btn_cp_set_model, "default_model"),

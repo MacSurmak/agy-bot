@@ -32,6 +32,8 @@ from antigravity_core.infrastructure.process_ownership import (
 )
 
 _AI_NOTES_MARKER: Final[str] = "<!-- AI_NOTES_START -->"
+KEY_ONLY_SENTINEL: Final[str] = "__AGY_KEY_ONLY_READY__"
+
 MAX_REMOTE_STAGE_FILE_BYTES: Final[int] = 2_097_152
 _LS_LA_MIN_COLUMNS: Final[int] = 9
 
@@ -697,6 +699,16 @@ class RemoteMountManager:
             entered_pass = await self._request_password_from_owner(
                 topic_id, resolved_target
             )
+            if entered_pass == KEY_ONLY_SENTINEL:
+                retry_ok, retry_err = await self._test_batch_key_auth(
+                    resolved_target, port, clean_jump
+                )
+                if not retry_ok:
+                    raise RemoteMountError(
+                        f"Key-only SSH verification failed for '{resolved_target}': {retry_err}"
+                    )
+                return resolved_target, cred
+
             if self._vault is not None and self._cred_repo is not None:
                 enc = self._vault.encrypt_text(entered_pass)
                 cred = await self._cred_repo.upsert_credential(
@@ -954,7 +966,7 @@ class RemoteMountManager:
         if tool_key == "cli_nav":
             pkg_script = (
                 "if command -v apt-get >/dev/null 2>&1; then "
-                "DEBIAN_FRONTEND=noninteractive apt-get update -y && "
+                "DEBIAN_FRONTEND=noninteractive apt-get update -y || true; "
                 "DEBIAN_FRONTEND=noninteractive apt-get install -y ripgrep fd-find tree; "
                 "elif command -v dnf >/dev/null 2>&1; then dnf install -y ripgrep fd-find tree; "
                 "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --noconfirm ripgrep fd tree; "

@@ -196,12 +196,6 @@ def render_topic_header_card(
         sudo_str=sudo_str,
         worker_str=worker_str,
     )
-    if supports_native_rich_output():
-        width_bar = make_rich_width_bar(
-            f"Topic #{topic.topic_id} │ {topic.model_slug} │ {account.display_email}",
-            MENU_BUBBLE_COLS,
-        )
-        return f"{rendered.rstrip()}\n\n{width_bar}"
     return rendered
 
 
@@ -660,41 +654,18 @@ def build_final_trace_rich_html_pages(
     )
 
 
-def _should_use_wide_answer_bubble(body_markdown: str, chunk_count: int) -> bool:
-    if chunk_count > 1 or len(body_markdown.strip()) >= _SHORT_ANSWER_THRESHOLD_CHARS:
-        return True
-    structured_markers = ("\n#", "\n- ", "\n1. ", "| ---", "```")
-    return any(marker in body_markdown for marker in structured_markers)
-
-
 def split_rich_markdown_chunks(
     body_markdown: str,
     footer_bar_text: str,
     max_chars: int,
 ) -> list[str]:
-    """Splits native RichMessage Markdown below Telegram Show More cutoff with uniform wide bubbles for long answers."""
-    clean_footer = footer_bar_text.strip()
-    wide_footer_block = f"\n\n{make_rich_width_bar(clean_footer, _ANSWER_BUBBLE_COLS)}"
-    compact_footer_block = f"\n\n---\n*{clean_footer}*"
-    budget = max(1000, max_chars - len(wide_footer_block) - 120)
+    """Splits native RichMessage Markdown below Telegram Show More cutoff without stripping GFM/LaTeX."""
+    footer_block = f"\n\n---\n*{footer_bar_text.strip()}*"
+    budget = max(1000, max_chars - len(footer_block) - 120)
     chunks = split_markdown_preserving_blocks(body_markdown, budget)
     if not chunks:
-        return [compact_footer_block.lstrip()]
-
-    use_wide = _should_use_wide_answer_bubble(body_markdown, len(chunks))
-    if not use_wide:
-        chunks[-1] = f"{chunks[-1]}{compact_footer_block}"
-        return chunks
-
-    total = len(chunks)
-    for idx in range(total - 1):
-        if "```" not in chunks[idx] and "| ---" not in chunks[idx]:
-            part_bar = make_rich_width_bar(
-                f"📄 {idx + 1} / {total}", _ANSWER_BUBBLE_COLS
-            )
-            chunks[idx] = f"{chunks[idx]}\n\n{part_bar}"
-
-    chunks[-1] = f"{chunks[-1]}{wide_footer_block}"
+        return [footer_block.lstrip()]
+    chunks[-1] = f"{chunks[-1]}{footer_block}"
     return chunks
 
 
@@ -1298,14 +1269,6 @@ def render_control_panel_dashboard(
             quota_auto_switch_threshold_pct=settings.quota_auto_switch_threshold_pct,
         )
     )
-    if supports_native_rich_output():
-        lines.append(
-            "\n"
-            + make_rich_width_bar(
-                f"Antigravity Core │ Workers: {warm_count} │ Hosts: {len(hosts)} │ Tasks: {len(tasks)}",
-                MENU_BUBBLE_COLS,
-            )
-        )
     return "\n".join(lines)
 
 

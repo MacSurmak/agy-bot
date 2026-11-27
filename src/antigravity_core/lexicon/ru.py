@@ -410,6 +410,18 @@ RU_LEXICON: Final[UiLexicon] = UiLexicon(
     cp_host_tools_install_ok="\n✅ **Готово:** {detail}",
     cp_host_tools_install_fail="\n⚠️ **Ошибка установки:** {detail}",
     cp_host_tools_onboarding_done="✅ **Онбординг хоста `{alias}` завершён.** Паспорт синхронизирован и готов для агента.",
+    btn_cp_open_topic="💬 Открыть топик",
+    cp_topic_created_link_msg="✅ Создан новый диалог: **{title}**",
+    btn_ws_ssh_key_only="🔑 Только по ключу (показать SSH-ключ)",
+    btn_ws_ssh_key_ready="✅ Ключ добавлен, продолжить",
+    ws_ssh_key_only_card=(
+        "🔑 **Добавьте публичный SSH-ключ на `{target}`:**\n\n"
+        "```bash\n"
+        'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "{pub_key}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys\n'
+        "```\n\n"
+        "После добавления нажмите кнопку ниже:"
+    ),
+    ws_ssh_key_ready_ack="🔑 Проверяю подключение по SSH-ключу к `{target}`...",
     ws_select_model_group_prompt="🧠 **Выберите семейство моделей** (активна: `{current_model}`):",
     ws_select_model_variant_prompt="🧠 **Выберите вариант модели `{family}`:**",
     btn_ws_model_group_item="{mark}🧠 {family} ({count})",

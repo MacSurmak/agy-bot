@@ -312,6 +312,12 @@ class UiLexicon:
     cp_host_tools_install_ok: str
     cp_host_tools_install_fail: str
     cp_host_tools_onboarding_done: str
+    btn_cp_open_topic: str
+    cp_topic_created_link_msg: str
+    btn_ws_ssh_key_only: str
+    btn_ws_ssh_key_ready: str
+    ws_ssh_key_only_card: str
+    ws_ssh_key_ready_ack: str
 
     # Two-level Model Group Picker & In-Place Navigation
     ws_select_model_group_prompt: str

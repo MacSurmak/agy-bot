@@ -139,7 +139,7 @@ class AgyEnvironmentBootstrapper:
             "- `send_file_to_telegram`\n"
             "- `schedule_task`, `list_scheduled_tasks`, `cancel_scheduled_task`\n"
             "- `create_sensor`, `list_sensors`, `cancel_sensor`\n"
-            "- `create_workspace_topic`, `rename_current_topic` (call on turn 1 of a new topic with a concise 3-5 word title in the user's language)\n"
+            "- `create_workspace_topic`, `rename_current_topic` (call at the end of the first substantive turn once context is clear; put the primary subject/object keyword FIRST in '<Subject>: <short action>' format, 2-4 words, e.g. 'Immich: import audit', 'b650mt: rtk setup', avoiding generic leading words like 'Audit' or 'Check')\n"
         )
         self._write_root_readonly_file(root_agents, content)
         if duplicate_config_agents.exists() or duplicate_config_agents.is_symlink():

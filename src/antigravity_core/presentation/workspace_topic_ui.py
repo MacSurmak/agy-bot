@@ -11,7 +11,7 @@ from typing import Final
 from loguru import logger
 from telethon import TelegramClient, events
 from telethon.errors import MessageNotModifiedError, RPCError
-from telethon.tl.custom import Message
+from telethon.tl.custom import Button, Message
 from telethon.tl.types import TypeMessageEntity
 
 from antigravity_core.application.topic_lifecycle import TopicLifecycleService
@@ -33,7 +33,10 @@ from antigravity_core.infrastructure.database.repositories import (
     TopicRepository,
 )
 from antigravity_core.infrastructure.process_ownership import as_agent_identity
-from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import RemoteMountManager
+from antigravity_core.infrastructure.remotes.sshfs_mount_mgr import (
+    KEY_ONLY_SENTINEL,
+    RemoteMountManager,
+)
 from antigravity_core.lexicon import UiLexicon, get_lexicon
 from antigravity_core.presentation.formatters import (
     build_final_execution_trace_pages,
@@ -309,6 +312,14 @@ class WorkspaceTopicUI:
             entity=self._cfg.telegram.forum_chat_id,
             message=lex.ssh_password_prompt_card.format(target=target_label),
             reply_to=topic_id,
+            buttons=[
+                [
+                    Button.inline(
+                        lex.btn_ws_ssh_key_only,
+                        f"ws:ssh_keyonly:{topic_id}".encode("ascii"),
+                    )
+                ]
+            ],
         )
         self._password_prompt_msgs[topic_id] = (target_label, sent.id)
         self._relocate_trace_topics.add(topic_id)
@@ -1419,6 +1430,39 @@ class WorkspaceTopicUI:
                     action_summary=summary_lbl, target=target_lbl
                 )
             await event.edit(status_text, buttons=None)
+            return True
+
+        if action == "ssh_keyonly":
+            pub_key = await self._mount_mgr.ensure_local_ssh_keypair()
+            target_lbl = (
+                self._password_prompt_msgs[topic_id][0]
+                if topic_id in self._password_prompt_msgs
+                else "remote"
+            )
+            await event.edit(
+                lex.ws_ssh_key_only_card.format(target=target_lbl, pub_key=pub_key),
+                buttons=[
+                    [
+                        Button.inline(
+                            lex.btn_ws_ssh_key_ready,
+                            f"ws:ssh_keyready:{topic_id}".encode("ascii"),
+                        )
+                    ]
+                ],
+            )
+            return True
+
+        if action == "ssh_keyready":
+            target_lbl = (
+                self._password_prompt_msgs.pop(topic_id)[0]
+                if topic_id in self._password_prompt_msgs
+                else "remote"
+            )
+            self._mount_mgr.submit_password_from_telegram(topic_id, KEY_ONLY_SENTINEL)
+            await event.edit(
+                lex.ws_ssh_key_ready_ack.format(target=target_lbl),
+                buttons=None,
+            )
             return True
         return False
 
