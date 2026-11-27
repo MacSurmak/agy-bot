@@ -17,7 +17,7 @@ from telethon.tl.types import (
 from telethon.tl.types.messages import StickerSet
 
 TOPIC_EMOJI_CONFIG_PATH: Final[Path] = Path(
-    "/etc/antigravity-core/topic_emoji_packs.json"
+    "/home/agy-agent/.gemini/topic_emoji_packs.json"
 )
 USER_EMOJI_SESSION_FILENAME: Final[str] = "user_emoji.session"
 _VARIATION_SELECTOR_16: Final[str] = "\ufe0f"
