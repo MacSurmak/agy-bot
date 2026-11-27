@@ -198,7 +198,10 @@ def render_topic_header_card(
         worker_str=worker_str,
     )
     if supports_native_rich_output():
-        return f"{RICH_SPACER_MENU}\n\n{rendered.rstrip()}\n\n---\n*📂 {short_ws}*"
+        return (
+            f"{rendered.rstrip()}\n{RICH_SPACER_MENU}\n\n---\n"
+            f"*📂 {short_ws} | 🛡 {topic.execution_mode.value}*"
+        )
     return rendered
 
 
@@ -514,12 +517,12 @@ _COMPACT_BAR_WIDTH: Final[int] = 8
 _DEFAULT_SSH_PORT: Final[int] = 22
 RICH_SPACER_ANSWER_FULL: Final[str] = (
     "<table><tr>"
-    + "".join("<td>" + ("\u2800" * 12) + "</td>" for _ in range(10))
+    + "".join("<td>" + ("\u2800" * 7) + "</td>" for _ in range(12))
     + "</tr></table>"
 )
 RICH_SPACER_MENU: Final[str] = (
     "<table><tr>"
-    + "".join("<td>" + ("\u2800" * 6) + "</td>" for _ in range(8))
+    + "".join("<td>" + ("\u2800" * 4) + "</td>" for _ in range(10))
     + "</tr></table>"
 )
 
@@ -532,13 +535,20 @@ def _render_html_header(header_line: str) -> str:
 def _format_trace_blocks_as_html_pages(
     lex: UiLexicon,
     header_line: str,
+    footer_line: str,
     blocks: list[str],
     max_html_chars: int,
 ) -> list[str]:
     """Paginates collapsible <details> trace blocks into Rich HTML messages below Telegram Show More cutoff."""
     if not blocks:
         return [
-            f"{RICH_SPACER_MENU}\n{_render_html_header(header_line)}\n<hr><p><i>⏳ ...</i></p>"
+            "\n".join(
+                [
+                    _render_html_header(header_line),
+                    RICH_SPACER_MENU,
+                    f"<hr><p><i>{html.escape(footer_line)}</i></p>",
+                ]
+            )
         ]
 
     pieces: list[str] = []
@@ -581,21 +591,19 @@ def _format_trace_blocks_as_html_pages(
     for idx, page_pieces in enumerate(raw_pages, start=1):
         if total_pages == 1:
             hdr_text = header_line
-            footer_html = f"<hr><p><i>⚙ {len(page_pieces)}</i></p>"
+            page_footer = footer_line
         else:
             hdr_text = lex.trace_active_page_suffix.format(
                 header=header_line, page_num=idx
             )
-            footer_html = (
-                f"<hr><p><i>📄 {idx} / {total_pages} · ⚙ {len(page_pieces)}</i></p>"
-            )
+            page_footer = f"📄 {idx}/{total_pages} | {footer_line}"
         rendered.append(
             "\n".join(
                 [
-                    RICH_SPACER_MENU,
                     _render_html_header(hdr_text),
                     *page_pieces,
-                    footer_html,
+                    RICH_SPACER_MENU,
+                    f"<hr><p><i>{html.escape(page_footer)}</i></p>",
                 ]
             )
         )
@@ -610,11 +618,8 @@ def build_live_progress_rich_html_pages(
     model_slug: str,
     account_slug: str,
 ) -> list[str]:
-    header = lex.live_progress_header.format(
-        model_slug=model_slug,
-        account_slug=account_slug,
-        elapsed_sec=elapsed_sec,
-    )
+    short_header = lex.live_progress_header.split("(")[0].strip()
+    footer_line = f"⏱ {elapsed_sec:.1f}с | 🧠 {model_slug} | 👤 {account_slug}"
     all_blocks = _build_all_untruncated_blocks(
         lex=lex,
         limits=limits,
@@ -625,7 +630,7 @@ def build_live_progress_rich_html_pages(
         is_final=False,
     )
     return _format_trace_blocks_as_html_pages(
-        lex, header, all_blocks, _MAX_RICH_HTML_PAGE_CHARS
+        lex, short_header, footer_line, all_blocks, _MAX_RICH_HTML_PAGE_CHARS
     )
 
 
@@ -638,11 +643,11 @@ def build_final_trace_rich_html_pages(
 ) -> list[str]:
     if not result.thinking_text and not result.tool_calls and not result.subagents:
         return []
-    header = lex.trace_completed_header.format(
-        model_slug=model_slug,
-        account_slug=account_slug,
-        elapsed_sec=result.turn_delta_duration_sec,
-        steps_count=len(result.tool_calls),
+    short_header = lex.trace_completed_header.split("(")[0].strip()
+    footer_line = (
+        f"⏱ {result.turn_delta_duration_sec:.1f}с | "
+        f"⚙ шагов: {len(result.tool_calls)} | "
+        f"🧠 {model_slug} | 👤 {account_slug}"
     )
     all_blocks = _build_all_untruncated_blocks(
         lex=lex,
@@ -654,7 +659,7 @@ def build_final_trace_rich_html_pages(
         is_final=True,
     )
     return _format_trace_blocks_as_html_pages(
-        lex, header, all_blocks, _MAX_RICH_HTML_PAGE_CHARS
+        lex, short_header, footer_line, all_blocks, _MAX_RICH_HTML_PAGE_CHARS
     )
 
 
@@ -675,9 +680,9 @@ def split_rich_markdown_chunks(
     total = len(chunks)
     for idx in range(total - 1):
         chunks[idx] = (
-            f"{RICH_SPACER_ANSWER_FULL}\n\n{chunks[idx]}\n\n---\n*📄 {idx + 1} / {total}*"
+            f"{chunks[idx]}\n{RICH_SPACER_ANSWER_FULL}\n\n---\n*📄 {idx + 1}/{total}*"
         )
-    chunks[-1] = f"{RICH_SPACER_ANSWER_FULL}\n\n{chunks[-1]}\n\n---\n*{clean_footer}*"
+    chunks[-1] = f"{chunks[-1]}\n{RICH_SPACER_ANSWER_FULL}\n\n---\n*{clean_footer}*"
     return chunks
 
 
@@ -1215,24 +1220,19 @@ def render_control_panel_dashboard(
     online_hosts = sum(1 for h in hosts if h.alias in mount_statuses and mount_statuses[h.alias])
     active_sensors = sensors if sensors is not None else []
 
-    lines: list[str] = []
-    if supports_native_rich_output():
-        lines.extend([RICH_SPACER_MENU, ""])
-    lines.extend(
-        [
-            lex.dashboard_header.format(
-                warm_count=warm_count, running_count=running_count
-            ),
-            "",
-            "| Воркеры | Серверы | Задачи | Сенсоры |"
-            if settings.ui_language == "ru"
-            else "| Workers | Servers | Tasks | Sensors |",
-            "| :--- | :---: | :---: | :---: |",
-            f"| `{warm_count}` RAM · `{running_count}` раб. | 🟢 `{online_hosts}/{len(hosts)}` | `{len(tasks)}` | `{len(active_sensors)}` |"
-            if settings.ui_language == "ru"
-            else f"| `{warm_count}` RAM · `{running_count}` busy | 🟢 `{online_hosts}/{len(hosts)}` | `{len(tasks)}` | `{len(active_sensors)}` |",
-        ]
-    )
+    lines: list[str] = [
+        lex.dashboard_header.format(
+            warm_count=warm_count, running_count=running_count
+        ),
+        "",
+        "| Воркеры | Серверы | Задачи | Сенсоры |"
+        if settings.ui_language == "ru"
+        else "| Workers | Servers | Tasks | Sensors |",
+        "| :--- | :---: | :---: | :---: |",
+        f"| `{warm_count}` RAM · `{running_count}` раб. | 🟢 `{online_hosts}/{len(hosts)}` | `{len(tasks)}` | `{len(active_sensors)}` |"
+        if settings.ui_language == "ru"
+        else f"| `{warm_count}` RAM · `{running_count}` busy | 🟢 `{online_hosts}/{len(hosts)}` | `{len(tasks)}` | `{len(active_sensors)}` |",
+    ]
     accounts_by_slug = {a.slug: a.display_email for a in accounts}
     warm_snaps = [s for s in pool_snapshots if s.is_warm]
     if warm_snaps:
@@ -1292,16 +1292,12 @@ def render_control_panel_dashboard(
                 )
             )
 
-    footer_summary = lex.dashboard_settings_summary.format(
-        ui_language=settings.ui_language,
-        default_model=settings.default_model,
-        default_execution_mode=settings.default_execution_mode.value,
-        worker_idle_ttl_sec=settings.worker_idle_ttl_sec,
-        debounce_window_sec=settings.debounce_window_sec,
-        quota_auto_switch_threshold_pct=settings.quota_auto_switch_threshold_pct,
-    ).strip()
+    footer_summary = (
+        f"🌐 {settings.ui_language} | 🧠 {settings.default_model} | "
+        f"🛡 {settings.default_execution_mode.value}"
+    )
     if supports_native_rich_output():
-        lines.append(f"\n---\n*{footer_summary}*")
+        lines.append(f"{RICH_SPACER_MENU}\n\n---\n*{footer_summary}*")
     else:
         lines.append(f"\n{footer_summary}")
     return "\n".join(lines)

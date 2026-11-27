@@ -719,15 +719,15 @@ class ControlPanelUI:
     ) -> tuple[str, list[list[Button]]]:
         accounts = await self._account_repo.list_accounts()
         lines = [
-            RICH_SPACER_MENU,
-            "",
             format_wide_header_block(lex.cp_accounts_hub_title),
             "",
             lex.cp_accounts_hub_subtitle,
         ]
         if not accounts:
             lines.append(lex.cp_accounts_hub_empty_hint)
-        lines.append(f"\n---\n*Google AI Pro · {len(accounts)}*")
+        lines.append(
+            f"{RICH_SPACER_MENU}\n\n---\n*👤 Аккаунтов: {len(accounts)} | Google AI Pro*"
+        )
         return "\n".join(lines), build_paginated_accounts_keyboard(lex, accounts, page)
 
     async def _render_accounts_hub(
@@ -763,8 +763,6 @@ class ControlPanelUI:
             else ""
         )
         lines = [
-            RICH_SPACER_MENU,
-            "",
             format_wide_header_block(
                 lex.cp_acc_card_header.format(email_label=acc.display_email)
             ),
@@ -775,7 +773,7 @@ class ControlPanelUI:
             lex.cp_acc_card_status_line.format(
                 status_label=status_label, quota_line=quota_line
             ),
-            f"\n---\n*{acc.display_email}*",
+            f"{RICH_SPACER_MENU}\n\n---\n*👤 {acc.display_email} | Google AI Pro*",
         ]
 
         await self._update_or_recreate_panel(
@@ -808,8 +806,6 @@ class ControlPanelUI:
         page_hosts = hosts[start_idx : start_idx + _HOSTS_PAGE_SIZE]
 
         lines: list[str] = [
-            RICH_SPACER_MENU,
-            "",
             format_wide_header_block(lex.cp_hosts_menu_title),
             "",
             lex.cp_hosts_menu_subtitle,
@@ -879,7 +875,7 @@ class ControlPanelUI:
             )
 
         lines.append(
-            f"\n---\n*Серверы: {total} · Стр. {curr_page + 1}/{max_page + 1}*"
+            f"{RICH_SPACER_MENU}\n\n---\n*🖥 Серверов: {total} | 📄 {curr_page + 1}/{max_page + 1}*"
         )
         rows.append([Button.inline(lex.btn_cp_back_to_dashboard, b"cp:refresh")])
         await self._safe_edit_event(event, "\n".join(lines), rows)
@@ -905,11 +901,10 @@ class ControlPanelUI:
             status_line=status_line,
         )
         text = (
-            f"{RICH_SPACER_MENU}\n\n"
-            + format_wide_header_block(lex.cp_host_tools_title.format(alias=host.alias))
+            format_wide_header_block(lex.cp_host_tools_title.format(alias=host.alias))
             + "\n\n"
             + body
-            + f"\n\n---\n*hosts/infra-{host.alias}.md*"
+            + f"\n{RICH_SPACER_MENU}\n\n---\n*📄 hosts/infra-{host.alias}.md*"
         )
         prefix = (
             f"cp:host_inst_ob:{onboarding_req_id}:{host.alias}"
@@ -1117,8 +1112,6 @@ class ControlPanelUI:
             (lex.setting_label_default_mode, mode_display),
         ]
         lines = [
-            RICH_SPACER_MENU,
-            "",
             format_wide_header_block(lex.cp_settings_menu_header.strip()),
             "",
         ]
@@ -1128,7 +1121,11 @@ class ControlPanelUI:
                     key="", value_json=val, description=label
                 )
             )
-        lines.append(f"\n---\n*{settings.ui_language} · {settings.default_model}*")
+        lines.append(
+            f"{RICH_SPACER_MENU}\n\n---\n"
+            f"*🌐 {settings.ui_language} | 🧠 {settings.default_model} | "
+            f"🛡 {settings.default_execution_mode.value}*"
+        )
         btn_labels = [
             (lex.btn_cp_set_language, "ui_language"),
             (lex.btn_cp_set_model, "default_model"),
