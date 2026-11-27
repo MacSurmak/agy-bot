@@ -38,7 +38,7 @@ if [[ ! -x "${AGY_BIN}" ]]; then
     exit 1
 fi
 
-echo "==> [1/2] Ensuring native RTK binary (/usr/local/bin/rtk) is installed..."
+echo "==> [1/3] Ensuring native RTK binary (/usr/local/bin/rtk) is installed..."
 if [[ ! -x /usr/local/bin/rtk ]]; then
     curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
     if [[ -x /root/.local/bin/rtk ]]; then
@@ -49,10 +49,29 @@ if [[ ! -x /usr/local/bin/rtk ]]; then
 fi
 echo "    rtk: $(/usr/local/bin/rtk --version 2>/dev/null || echo 'installed')"
 
-echo "==> [2/2] Reconciling desired Antigravity CLI plugins for ${AGENT_USER}..."
+echo "==> [2/3] Configuring RTK policy and native Antigravity plugin for ${AGENT_USER}..."
+install -d -m 0700 -o "${AGENT_USER}" -g "${AGENT_USER}" "/home/${AGENT_USER}/.config"
+install -d -m 0755 -o root -g "${AGENT_USER}" "/home/${AGENT_USER}/.config/rtk"
+cat << 'EOF' > "/home/${AGENT_USER}/.config/rtk/config.toml"
+[hooks]
+exclude_commands = ["ssh"]
+EOF
+chown root:"${AGENT_USER}" "/home/${AGENT_USER}/.config/rtk/config.toml"
+chmod 0644 "/home/${AGENT_USER}/.config/rtk/config.toml"
+
+if [[ ! -f "/home/${AGENT_USER}/.gemini/config/plugins/rtk/plugin.json" || "${UPDATE_PLUGINS}" -eq 1 ]]; then
+    echo "    Installing native RTK Antigravity plugin..."
+    su -s /bin/bash - "${AGENT_USER}" -c "/usr/local/bin/rtk init -g --agent antigravity"
+else
+    echo "    Native RTK Antigravity plugin already installed (skip; pass --update-plugins to refresh)."
+fi
+
+echo "==> [3/3] Reconciling desired Antigravity CLI plugins for ${AGENT_USER}..."
 declare -A DESIRED_PLUGINS=(
     ["superpowers"]="https://github.com/obra/superpowers"
-    ["ponytail"]="https://github.com/DietrichGebert/ponytail"
+)
+declare -A PRESERVED_NATIVE_PLUGINS=(
+    ["rtk"]=1
 )
 
 declare -A INSTALLED_PLUGINS=()
@@ -61,7 +80,7 @@ while IFS= read -r line; do
     if [[ "${line}" =~ ^-\ ([a-zA-Z0-9._-]+)\ \( ]]; then
         pname="${BASH_REMATCH[1]}"
         INSTALLED_PLUGINS["${pname}"]=1
-        if [[ -z "${DESIRED_PLUGINS[${pname}]+x}" ]]; then
+        if [[ -z "${DESIRED_PLUGINS[${pname}]+x}" && -z "${PRESERVED_NATIVE_PLUGINS[${pname}]+x}" ]]; then
             echo "    Removing undeclared plugin: ${pname}"
             su -s /bin/bash - "${AGENT_USER}" -c "${AGY_BIN} plugin uninstall ${pname}" \
                 || su -s /bin/bash - "${AGENT_USER}" -c "${AGY_BIN} plugin disable ${pname}"

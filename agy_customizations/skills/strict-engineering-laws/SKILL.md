@@ -1,14 +1,14 @@
 ---
 name: strict-engineering-laws
-description: "Use when writing, refactoring, or auditing code to enforce Fail-Fast, zero defaults/fallbacks, static typing, SSOT, and devtool gates. Do NOT use for prose."
+description: "Use when writing, refactoring, or auditing code to enforce Fail-Fast, zero defaults/fallbacks, static typing, SSOT, and strict static checks. Do NOT use for prose."
 metadata:
-  author: MacSurmak
+  author: MacSurmak <macsurmak.m02@gmail.com>
   tags:
     - engineering
     - code-quality
     - typing
     - fail-fast
-    - devtool
+    - static-analysis
 ---
 
 # Strict Engineering Laws & Code Invariants
@@ -20,7 +20,7 @@ Defines non-negotiable code quality invariants enforced whenever writing, editin
 ## Prerequisites
 
 - Read target source files in full before proposing or applying edits; never patch blindly.
-- Check whether `devtool`, `ruff`, or `pyright` is available in the target repository before claiming verification.
+- Check which static checkers (`ruff`, `pyright`, `pytest`, or `devtool` if present) are available in the target environment before claiming verification.
 
 ## Instructions
 
@@ -58,8 +58,12 @@ Defines non-negotiable code quality invariants enforced whenever writing, editin
 ## Verification Gate
 
 Before concluding any code change:
-1. If `devtool` is installed in the repository, run `devtool check` (and `devtool tree --stdout` before exploring) and resolve every Ruff, AST, cross-file contract, and Pyright diagnostic.
-2. Otherwise run the repository's native static checks (`ruff check`, `pyright`, `pytest`) and report the exact exit code and output.
+1. Run strict static linting and type checking across all modified files:
+   - Python: `ruff check --select E,F,B,C901,PLC0415,PLR0912,PLR0915,PLR2004,RUF` and `pyright`, plus `pytest` if tests exist.
+   - Shell: `bash -n` (and `shellcheck` if installed).
+   - If `devtool` is installed in the target repository, also run `devtool check` and resolve every diagnostic.
+2. Confirm zero imports inside functions (`PLC0415`), zero hardcoded secrets or magic literals, zero stubs (`pass`/`...`/`TODO`/`FIXME`), and zero linter suppression pragmas (`# noqa`, `# type: ignore`).
+3. Report the exact commands run, exit codes, and verified results; never claim verification without running the checks.
 
 ## Examples
 

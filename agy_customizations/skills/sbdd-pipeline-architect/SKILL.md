@@ -2,7 +2,7 @@
 name: sbdd-pipeline-architect
 description: "Use when working on sbdd_pipeline (Nextflow DSL2, Slurm, SQLite 3NF, Uni-Dock, GROMACS, AMBER tLEaP, /shared/sbdd_pipeline). Do NOT use for unrelated code."
 metadata:
-  author: MacSurmak
+  author: MacSurmak <macsurmak.m02@gmail.com>
   tags:
     - sbdd
     - nextflow

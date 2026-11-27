@@ -37,32 +37,6 @@ _PATH_ARG_KEYS: Final[tuple[str, ...]] = (
 )
 _AGENT_ROOT: Final[Path] = Path(pwd.getpwuid(os.geteuid()).pw_dir).resolve()
 
-_FORBIDDEN_BOT_INTERNAL_PATHS: Final[tuple[str, ...]] = (
-    "/etc/antigravity-core",
-    "/var/lib/antigravity",
-    "/opt/antigravity/app",
-)
-
-_ALLOWED_LOCAL_WRITE_ROOTS: Final[tuple[Path, ...]] = (
-    (_AGENT_ROOT / "workspaces").resolve(),
-    (_AGENT_ROOT / "inbox").resolve(),
-    (_AGENT_ROOT / "projects").resolve(),
-    (_AGENT_ROOT / "hosts").resolve(),
-    (_AGENT_ROOT / ".gemini" / "config" / "skills").resolve(),
-    Path("/tmp"),
-)
-
-_ALLOWED_LOCAL_READ_ONLY_SEGMENTS: Final[tuple[str, ...]] = (
-    "/.gemini/antigravity-cli/mcp/",
-    "/.system_generated/tasks/",
-    "/.system_generated/steps/",
-    "/.gemini/config/skills/",
-    "/.gemini/config/plugins/",
-    "/.gemini/AGENTS.md",
-    "/hosts/",
-    "/projects/",
-)
-
 _SAFE_FD_REDIRECT_RE: Final[re.Pattern[str]] = re.compile(
     r"(?:\b\d*>&\d+\b|\b\d*>>?\s*/dev/null\b|&>>?\s*/dev/null\b)"
 )
@@ -140,22 +114,8 @@ def _extract_file_path(args: dict[str, str]) -> str:
     return ""
 
 
-def _violates_bot_internals_or_topic_isolation(
-    text_or_path: str, is_readonly_file_tool: bool
-) -> str | None:
-    """Blocks access to the bot's own source code, secrets, logs, and other topics' directories."""
-    if is_readonly_file_tool and any(
-        seg in text_or_path for seg in _ALLOWED_LOCAL_READ_ONLY_SEGMENTS
-    ):
-        return None
-
-    for forbidden in _FORBIDDEN_BOT_INTERNAL_PATHS:
-        if forbidden in text_or_path:
-            return (
-                f"SANDBOX POLICY VIOLATION: Access to bot internal path '{forbidden}' is strictly forbidden. "
-                "Never inspect or modify the orchestrator bot's own source code, logs, or secrets."
-            )
-
+def _violates_topic_isolation(text_or_path: str) -> str | None:
+    """Blocks cross-topic file access between sibling Telegram topic workspaces."""
     current_topic = (
         os.environ["AGY_CURRENT_TOPIC_ID"].strip()
         if "AGY_CURRENT_TOPIC_ID" in os.environ
@@ -284,9 +244,9 @@ def _handle_pre_run_command(str_args: dict[str, str]) -> None:
             cmd_line = str_args[key]
             break
 
-    violation = _violates_bot_internals_or_topic_isolation(cmd_line, False)
+    violation = _violates_topic_isolation(cmd_line)
     if violation is not None:
-        _log_hook_decision("run_command", "deny_internal", cmd_line)
+        _log_hook_decision("run_command", "deny_topic_isolation", cmd_line)
         sys.stdout.write(json.dumps({"decision": "deny", "reason": violation}) + "\n")
         return
 
@@ -364,36 +324,10 @@ def _handle_pre_file_tool(tool_name: str, str_args: dict[str, str]) -> None:
         sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
         return
 
-    resolved_path = Path(target_path).expanduser().resolve()
-    resolved_local = str(resolved_path)
-    is_readonly = tool_name not in _WRITE_TOOLS
-    violation = _violates_bot_internals_or_topic_isolation(resolved_local, is_readonly)
+    resolved_local = str(Path(target_path).expanduser().resolve())
+    violation = _violates_topic_isolation(resolved_local)
     if violation is not None:
         sys.stdout.write(json.dumps({"decision": "deny", "reason": violation}) + "\n")
-        return
-
-    is_allowed_write = any(
-        resolved_path.is_relative_to(root) for root in _ALLOWED_LOCAL_WRITE_ROOTS
-    )
-    is_allowed_ro = is_readonly and any(
-        seg in resolved_local or seg in target_path
-        for seg in _ALLOWED_LOCAL_READ_ONLY_SEGMENTS
-    )
-    if not is_allowed_write and not is_allowed_ro:
-        sys.stdout.write(
-            json.dumps(
-                {
-                    "decision": "deny",
-                    "reason": (
-                        f"LOCAL LXC SANDBOX RESTRICTION: Access to '{resolved_local}' inside the LXC workstation is forbidden. "
-                        f"You may only access your topic workspace ({_AGENT_ROOT}/workspaces/...), "
-                        f"inbox ({_AGENT_ROOT}/inbox/...), {_AGENT_ROOT}/projects/..., host passports ({_AGENT_ROOT}/hosts/...), or /tmp. "
-                        "To access files on a remote machine, use '/ssh:user@<alias>:/abs/path'."
-                    ),
-                }
-            )
-            + "\n"
-        )
         return
 
     sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")

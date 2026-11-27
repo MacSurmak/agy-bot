@@ -40,6 +40,7 @@ apt-get install -y \
     rsync \
     ripgrep \
     fd-find \
+    tree \
     jq \
     sqlite3
 
@@ -75,9 +76,15 @@ fi
 
 UV_BIN="$(command -v uv || echo /usr/local/bin/uv)"
 export UV_PYTHON_INSTALL_DIR="/opt/antigravity/python"
-install -d -m 0755 -o root -g root /opt/antigravity /opt/antigravity/python /opt/antigravity/bin
+export UV_TOOL_DIR="/opt/antigravity/tools"
+export UV_TOOL_BIN_DIR="/usr/local/bin"
+install -d -m 0755 -o root -g root /opt/antigravity /opt/antigravity/python /opt/antigravity/bin /opt/antigravity/tools
 "${UV_BIN}" python install 3.14
 "${UV_BIN}" venv --python 3.14 --clear /opt/antigravity/venv
+"${UV_BIN}" tool install --python 3.14 --upgrade ruff
+"${UV_BIN}" tool install --python 3.14 --upgrade pyright
+"${UV_BIN}" tool install --python 3.14 --upgrade code-review-graph
+chmod -R a+rX /opt/antigravity/python /opt/antigravity/tools
 
 echo "==> [4/6] Installing Google Antigravity CLI (agy)..."
 if ! command -v agy >/dev/null 2>&1 && [[ ! -x /usr/local/bin/agy ]]; then

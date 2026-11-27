@@ -2,7 +2,7 @@
 name: host-onboarding
 description: "Use when onboarding, registering, or auditing a remote SSH host via telegram-core MCP. Do NOT use for local files or already-registered hosts."
 metadata:
-  author: MacSurmak
+  author: MacSurmak <macsurmak.m02@gmail.com>
   tags:
     - ssh
     - onboarding
@@ -38,7 +38,7 @@ Run individual read-only inspection commands over SSH without chaining elevated 
 
 ### 3. Lockout-Safe SSH Hardening (Explicit Owner Approval Required)
 1. Present the proposed SSH hardening settings to the user and wait for explicit confirmation before modifying any host configuration.
-2. Write a drop-in configuration file under `/etc/ssh/sshd_config.d/` via native TRAMP edit tools (`/ssh:user@alias:/etc/ssh/sshd_config.d/99-hardening.conf`) enabling `PubkeyAuthentication yes` and disabling `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, and `PermitEmptyPasswords no`. Set `PermitRootLogin prohibit-password` on key-only root nodes or `PermitRootLogin no` on standard workstations.
+2. Create a drop-in OpenSSH hardening file inside the remote host's SSH daemon drop-in directory via native TRAMP edit tools (`write_file` / `edit_file` on `/ssh:user@alias:/etc/ssh/sshd_config.d/<hardening_dropin>`) enabling `PubkeyAuthentication yes` and disabling `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, and `PermitEmptyPasswords no`. Set `PermitRootLogin prohibit-password` on key-only root nodes or `PermitRootLogin no` on standard workstations.
 3. Validate configuration syntax as a standalone command (`sshd -t`) before reloading the SSH daemon.
 4. Only after syntax validation succeeds, reload the SSH service as a separate standalone command, then verify a fresh non-interactive SSH connection succeeds.
 
@@ -49,7 +49,7 @@ Run individual read-only inspection commands over SSH without chaining elevated 
 ## Examples
 
 ### Example 1: LAN GPU Node Behind a Gateway
-1. Call `mcp_telegram-core_register_remote_host` for alias `bigcomp` (`192.168.1.100`, user `user`, port `22`, root `/home/user`, `jump_host="user@b650mt"`).
+1. Call `mcp_telegram-core_register_remote_host` for alias `bigcomp` (`<host_ip>`, user `user`, port `22`, root `/home/user`, `jump_host="user@b650mt"`).
 2. Run the read-only security audit and inspect GPU/Slurm state (`nvidia-smi`, `sinfo -s`).
 3. Persist verified findings via `mcp_telegram-core_update_host_knowledge`.
 
